@@ -98,6 +98,45 @@ def test_admin_create_and_mobile_layout(tmp_path):
             wahle_row = page.locator('.mandatory-row:has-text("Wahle")')
             assert wahle_row.locator("select").input_value() == "1"
             page.click("#cancelModal")
+
+            page.click("#menuButton")
+            page.click('#workspaceNav button[data-section="settings"]')
+            page.wait_for_selector("#recruitAttendanceLink")
+            attendance_url = page.locator("#recruitAttendanceLink").input_value()
+            assert attendance_url.startswith(base + "/recruit-attendance/")
+
+            attendance_context = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
+            attendance_page = attendance_context.new_page()
+            attendance_page.goto(attendance_url, wait_until="networkidle")
+            attendance_page.fill('input[name="displayName"]', "Door Volunteer")
+            attendance_page.click("#attendanceUnlockForm button")
+            attendance_page.wait_for_selector("#attendanceAdd")
+            assert attendance_page.locator("#attendanceSave").count() == 0
+            attendance_page.click("#attendanceAdd")
+            attendance_page.fill('#attendanceAddForm input[name="name"]', "Mobile Recruit")
+            attendance_page.click("#attendanceAddForm button.primary")
+            recruit_card = attendance_page.locator('.attendance-recruit-card:has-text("Mobile Recruit")')
+            recruit_card.wait_for()
+            recruit_card.locator(".attendance-phone").fill("70123456")
+            recruit_card.locator(".attendance-dob").fill("2004-03-02")
+            recruit_card.locator(".attendance-present").check()
+            attendance_page.wait_for_function("document.querySelector('#attendanceSyncStatus')?.textContent.includes('All changes saved')")
+            recruit_card = attendance_page.locator('.attendance-recruit-card:has-text("Mobile Recruit")')
+            assert recruit_card.locator(".attendance-arrival").input_value()
+            attendance_page.locator(".attendance-summary h1").click()
+
+            page.click("#menuButton")
+            page.click('#workspaceNav button[data-section="attendance"]')
+            page.click('.tabs button[data-tab="recruits"]')
+            admin_row = page.locator('#attendanceTable tbody tr:has-text("Mobile Recruit")')
+            admin_row.wait_for()
+            assert page.locator("#saveAttendance").count() == 0
+            admin_row.locator(".phone-input").fill("70999999")
+            page.wait_for_timeout(900)
+            assert admin_row.locator(".row-sync").inner_text() == "Saved"
+            attendance_page.wait_for_function("document.querySelector('.attendance-recruit-card .attendance-phone')?.value === '70999999'")
+            assert attendance_page.evaluate("document.documentElement.scrollWidth") == attendance_page.evaluate("window.innerWidth")
+            attendance_context.close()
             browser.close()
     finally:
         server.terminate()

@@ -20,6 +20,7 @@ const state = {
   dirty: false,
   pollTimer: null,
   lastProtectionPoll: 0,
+  recruitAttendanceSaves: new Map(),
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -75,11 +76,15 @@ function setDirty(value) {
 }
 
 function guardDirty() {
+  if (state.recruitAttendanceSaves.size) {
+    toast("Wait for the current recruit changes to finish saving.", "error");
+    return false;
+  }
   return !state.dirty || confirm("You have unsaved changes. Discard them and continue?");
 }
 
 window.addEventListener("beforeunload", (event) => {
-  if (!state.dirty) return;
+  if (!state.dirty && !state.recruitAttendanceSaves.size) return;
   event.preventDefault();
   event.returnValue = "";
 });
@@ -234,6 +239,9 @@ async function openJourney(id, section = "dashboard") {
     if (["dashboard", "monitoring"].includes(state.section)) {
       try { await renderSection(true); } catch { /* a visible refresh remains available */ }
     }
+    if (state.section === "attendance" && state.attendanceTab === "recruits") {
+      try { await syncAdminRecruitAttendance(); } catch { /* keep the confirmed data already shown */ }
+    }
     if (state.section === "settings" && Date.now() - state.lastProtectionPoll > 15000) {
       try { await refreshProtectionPanel(); } catch { /* keep the last visible status */ }
     }
@@ -360,13 +368,13 @@ function drawAttendance() {
   const rows = Object.values(state.attendanceDraft || {}).filter((item) => item.active).sort((a, b) => isRecruit
     ? a.name.localeCompare(b.name)
     : evaluatorAttendanceSort(a, b));
-  host.innerHTML = `${sectionHeading("Confirmed roster", "Attendance", "Edits stay on this device until Save attendance is pressed.", `<button class="button ghost" id="attendanceRefresh">Reload confirmed</button>`)}
+  host.innerHTML = `${sectionHeading("Confirmed roster", "Attendance", isRecruit ? "Recruit changes save automatically and sync across devices." : "Evaluator edits stay on this device until Save attendance is pressed.", `<button class="button ghost" id="attendanceRefresh">${isRecruit ? "Sync now" : "Reload confirmed"}</button>`)}
     <div class="tabs"><button data-tab="recruits" class="${isRecruit ? "active" : ""}">Recruits</button><button data-tab="evaluators" class="${!isRecruit ? "active" : ""}">Evaluators</button></div>
     <div class="panel attendance-panel"><div class="panel-header"><div class="toolbar">${isRecruit ? `<input id="attendanceSearch" class="search-input" placeholder="Search by name or phone"><button class="button secondary" id="addPerson">+ Add recruit</button><button class="button ghost" id="importPeople">Import Excel/CSV</button><button class="button ghost" id="bulkPhotos">Bulk photos</button>` : `<div class="evaluator-quick-toggle"><input id="attendanceSearch" class="search-input" autocomplete="off" placeholder="Type evaluator name and press Enter" aria-label="Toggle evaluator attendance"><div id="attendanceSuggestions" class="search-suggestions" role="listbox"></div></div><button class="button secondary" id="addPerson">+ Add evaluator not listed</button>`}</div><span id="attendanceCount" class="subtle">${rows.filter((row) => row.present).length} present</span></div>
       ${isRecruit ? "" : `<p class="formula-note">Type a name and press Enter to toggle that evaluator Present/Absent. Ambiguous searches never change attendance.</p>`}
       <div id="attendanceTable"></div>
     </div>
-    <div class="sticky-save"><span id="unsavedLabel" class="subtle">No unsaved changes</span><button class="button ghost" id="discardAttendance" disabled>Discard</button><button class="button primary" id="saveAttendance" disabled>Save attendance</button></div>`;
+    ${isRecruit ? `<div class="sticky-save auto-save-status"><span id="recruitSyncSummary" class="subtle">All recruit changes saved · checking for updates every 5 seconds</span></div>` : `<div class="sticky-save"><span id="unsavedLabel" class="subtle">No unsaved changes</span><button class="button ghost" id="discardAttendance" disabled>Discard</button><button class="button primary" id="saveAttendance" disabled>Save attendance</button></div>`}`;
   renderAttendanceTable(rows);
   $$(".tabs button", host).forEach((button) => button.onclick = () => {
     if (!guardDirty()) return;
@@ -374,7 +382,7 @@ function drawAttendance() {
     makeAttendanceDraft();
     drawAttendance();
   });
-  $("#attendanceRefresh").onclick = renderAttendance;
+  $("#attendanceRefresh").onclick = isRecruit ? () => syncAdminRecruitAttendance(true) : renderAttendance;
   if (isRecruit) {
     $("#attendanceSearch").oninput = (event) => {
       const query = event.target.value.toLowerCase();
@@ -386,8 +394,10 @@ function drawAttendance() {
     $("#importPeople").onclick = () => importDialog(state.attendanceTab);
     $("#bulkPhotos").onclick = bulkPhotosDialog;
   }
-  $("#discardAttendance").onclick = () => { makeAttendanceDraft(); drawAttendance(); };
-  $("#saveAttendance").onclick = saveAttendance;
+  if (!isRecruit) {
+    $("#discardAttendance").onclick = () => { makeAttendanceDraft(); drawAttendance(); };
+    $("#saveAttendance").onclick = saveAttendance;
+  }
 }
 
 function evaluatorAttendanceRows() {
@@ -453,14 +463,14 @@ function renderAttendanceTable(rows) {
   const isRecruit = state.attendanceTab === "recruits";
   const target = $("#attendanceTable");
   const headers = isRecruit
-    ? "<th>Photo</th><th>Name</th><th>Phone number</th><th>Date of birth</th><th>Present</th><th>Arrival time (Beirut)</th><th>Photo action</th><th>Remove</th>"
+    ? "<th>Photo</th><th>Name</th><th>Phone number</th><th>Date of birth</th><th>Present</th><th>Arrival time (Beirut)</th><th>Photo action</th><th>Sync</th><th>Remove</th>"
     : "<th>Name</th><th>Present</th><th>Role</th><th>Mandatory room</th><th>Remove</th>";
   const body = rows.map((item) => {
     const photoUrl = `/api/admin/journeys/${state.journey.id}/recruits/${item.id}/photo`;
     const photo = item.hasPhoto
       ? `<button type="button" class="photo-zoom-trigger" data-photo-viewer data-photo-url="${photoUrl}" data-photo-name="${h(item.name)}"><img class="avatar" src="${photoUrl}" alt="${h(item.name)}"></button>`
       : `<span class="avatar placeholder">${h(item.name[0])}</span>`;
-    if (isRecruit) return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td>${photo}</td><td><strong>${h(item.name)}</strong></td><td><input class="table-input phone-input" inputmode="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></td><td><input class="table-input dob-input" type="date" value="${h(item.dateOfBirth || "")}" aria-label="${h(item.name)} date of birth"></td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><input class="table-input arrival-input" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></td><td><button class="button ghost small photo-button">${item.hasPhoto ? "Replace" : "Upload"}</button></td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
+    if (isRecruit) return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td>${photo}</td><td><strong>${h(item.name)}</strong></td><td><input class="table-input phone-input" inputmode="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></td><td><input class="table-input dob-input" type="date" value="${h(item.dateOfBirth || "")}" aria-label="${h(item.name)} date of birth"></td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><input class="table-input arrival-input" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></td><td><button class="button ghost small photo-button">${item.hasPhoto ? "Replace" : "Upload"}</button></td><td><span class="row-sync saved" data-sync-id="${item.id}">Saved</span></td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
     return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td><strong>${h(item.name)}</strong>${item.mandatoryRoom && !item.present ? `<small class="danger-text"> Required evaluator is absent</small>` : ""}</td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><span class="role-badge ${item.role}">${h(item.role)}</span></td><td>${item.mandatoryRoom ? `Room ${item.mandatoryRoom}` : "—"}</td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
   }).join("");
   target.innerHTML = `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
@@ -468,6 +478,7 @@ function renderAttendanceTable(rows) {
     const item = state.attendanceDraft[row.dataset.id];
     $(".delete-person", row).onclick = async () => {
       if (state.dirty) return toast("Save or discard the current attendance edits before deleting someone.", "error");
+      if (isRecruit && state.recruitAttendanceSaves.size) return toast("Wait for the current recruit changes to finish saving.", "error");
       if (!confirm(`Delete ${item.name} from this Journee? Existing historical evaluations will be preserved.`)) return;
       try {
         const result = await api(`/api/admin/journeys/${state.journey.id}/${isRecruit ? "recruits" : "evaluators"}/${item.id}`, mutation("DELETE"));
@@ -482,17 +493,127 @@ function renderAttendanceTable(rows) {
         input.disabled = !item.present;
         if (item.present && !input.value) input.value = nowBeirutInput();
         item.arrivalTime = item.present && input.value ? new Date(input.value).toISOString() : null;
+        row.classList.toggle("inactive", !item.present);
+        queueAdminRecruitSave(item, { present: item.present, arrival_time: item.arrivalTime });
+      } else {
+        markAttendanceDirty();
+        refreshEvaluatorAttendanceTable();
       }
-      markAttendanceDirty();
-      if (!isRecruit) refreshEvaluatorAttendanceTable();
     };
     if (isRecruit) {
-      $(".phone-input", row).oninput = (event) => { item.phoneNumber = event.target.value; markAttendanceDirty(); };
-      $(".dob-input", row).onchange = (event) => { item.dateOfBirth = event.target.value || null; markAttendanceDirty(); };
-      $(".arrival-input", row).onchange = (event) => { item.arrivalTime = event.target.value ? new Date(event.target.value).toISOString() : null; markAttendanceDirty(); };
+      $(".phone-input", row).oninput = (event) => { item.phoneNumber = event.target.value; queueAdminRecruitSave(item, { phone_number: item.phoneNumber || null }, 550); };
+      $(".dob-input", row).onchange = (event) => { item.dateOfBirth = event.target.value || null; queueAdminRecruitSave(item, { date_of_birth: item.dateOfBirth }); };
+      $(".arrival-input", row).onchange = (event) => { item.arrivalTime = event.target.value ? new Date(event.target.value).toISOString() : null; queueAdminRecruitSave(item, { arrival_time: item.arrivalTime }); };
       $(".photo-button", row).onclick = () => uploadSinglePhoto(item.id);
     }
   });
+}
+
+function adminRecruitSyncLabel(recruitId, text, kind = "saving") {
+  const rowStatus = $(`[data-sync-id="${recruitId}"]`);
+  if (rowStatus) {
+    rowStatus.textContent = text;
+    rowStatus.className = `row-sync ${kind}`;
+  }
+  const summary = $("#recruitSyncSummary");
+  if (summary) summary.textContent = state.recruitAttendanceSaves.size
+    ? `Saving ${state.recruitAttendanceSaves.size} recruit change${state.recruitAttendanceSaves.size === 1 ? "" : "s"}…`
+    : "All recruit changes saved · checking for updates every 5 seconds";
+}
+
+function queueAdminRecruitSave(item, changes, delay = 0) {
+  let entry = state.recruitAttendanceSaves.get(item.id);
+  if (!entry) {
+    entry = { changes: {}, timer: null, inFlight: false, retries: 0 };
+    state.recruitAttendanceSaves.set(item.id, entry);
+  }
+  Object.assign(entry.changes, changes);
+  entry.retries = 0;
+  clearTimeout(entry.timer);
+  adminRecruitSyncLabel(item.id, delay ? "Typing…" : "Saving…");
+  entry.timer = setTimeout(() => runAdminRecruitSave(item.id), delay);
+  const count = Object.values(state.attendanceDraft || {}).filter((value) => value.active && value.present).length;
+  if ($("#attendanceCount")) $("#attendanceCount").textContent = `${count} present`;
+}
+
+function applyPendingRecruitChanges(item, changes) {
+  if ("present" in changes) item.present = changes.present;
+  if ("arrival_time" in changes) item.arrivalTime = changes.arrival_time;
+  if ("phone_number" in changes) item.phoneNumber = changes.phone_number || "";
+  if ("date_of_birth" in changes) item.dateOfBirth = changes.date_of_birth;
+}
+
+async function runAdminRecruitSave(recruitId) {
+  const entry = state.recruitAttendanceSaves.get(recruitId);
+  const item = state.attendanceDraft?.[recruitId];
+  if (!entry || !item || entry.inFlight || !Object.keys(entry.changes).length) return;
+  entry.inFlight = true;
+  const sent = entry.changes;
+  entry.changes = {};
+  adminRecruitSyncLabel(recruitId, "Saving…");
+  try {
+    const saved = await api(`/api/admin/journeys/${state.journey.id}/recruits/${recruitId}/attendance`, mutation("PATCH", { base_version: item.version, ...sent }));
+    item.version = saved.version;
+    const stored = state.journey.recruits.find((value) => value.id === recruitId);
+    if (stored) Object.assign(stored, saved);
+    entry.retries = 0;
+    adminRecruitSyncLabel(recruitId, "Saved", "saved");
+  } catch (error) {
+    entry.changes = { ...sent, ...entry.changes };
+    if (error.status === 409 && entry.retries < 3) {
+      entry.retries += 1;
+      try {
+        const latest = await api(`/api/admin/journeys/${state.journey.id}`);
+        const serverItem = latest.recruits.find((value) => value.id === recruitId && value.active);
+        if (!serverItem) throw new Error("This recruit was removed on another device.");
+        const pending = { ...entry.changes };
+        Object.assign(item, serverItem);
+        applyPendingRecruitChanges(item, pending);
+        state.journey = latest;
+        adminRecruitSyncLabel(recruitId, "Syncing…");
+      } catch (refreshError) {
+        entry.retries = 3;
+        toast(refreshError.message, "error");
+      }
+    } else {
+      entry.retries += 1;
+      adminRecruitSyncLabel(recruitId, "Retrying…", "error");
+      if (entry.retries === 1) toast(`${item.name}: ${error.message}`, "error");
+    }
+  } finally {
+    entry.inFlight = false;
+    if (Object.keys(entry.changes).length && entry.retries < 3) {
+      clearTimeout(entry.timer);
+      entry.timer = setTimeout(() => runAdminRecruitSave(recruitId), entry.retries ? 350 : 0);
+    } else if (!Object.keys(entry.changes).length) {
+      state.recruitAttendanceSaves.delete(recruitId);
+      adminRecruitSyncLabel(recruitId, "Saved", "saved");
+    } else {
+      adminRecruitSyncLabel(recruitId, "Needs attention", "error");
+    }
+  }
+}
+
+async function syncAdminRecruitAttendance(force = false) {
+  if (!state.journey || state.section !== "attendance" || state.attendanceTab !== "recruits") return;
+  if (state.recruitAttendanceSaves.size) {
+    if (force) toast("Waiting for the current recruit changes to finish saving.");
+    return;
+  }
+  const focused = document.activeElement?.closest?.("#attendanceTable input");
+  if (focused && !force) return;
+  if (focused) focused.blur();
+  const latest = await api(`/api/admin/journeys/${state.journey.id}`);
+  const oldSignature = (state.journey.recruits || []).map((item) => `${item.id}:${item.version}:${item.active}`).sort().join("|");
+  const newSignature = (latest.recruits || []).map((item) => `${item.id}:${item.version}:${item.active}`).sort().join("|");
+  state.journey = latest;
+  if (oldSignature !== newSignature) {
+    makeAttendanceDraft();
+    drawAttendance();
+    toast("Recruit attendance updated from another device.");
+  } else if ($("#recruitSyncSummary")) {
+    $("#recruitSyncSummary").textContent = "All recruit changes saved · synced just now";
+  }
 }
 
 function markAttendanceDirty() {
@@ -905,7 +1026,7 @@ function profileHtml(profile) {
   return `<div class="panel"><div class="profile-header">${profile.photoUrl ? `<button type="button" class="photo-zoom-trigger profile-photo-trigger" data-photo-viewer data-photo-url="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · Born ${h(profile.recruit.dateOfBirth || "Not recorded")} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${h(arrival)} <span>Asia/Beirut · use when grading punctuality</span></p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
     <div class="panel"><div class="panel-header"><div><h2>Dimension performance</h2><p class="muted">These six grades, plus the general assessment, determine the overall /20. Select a dimension to inspect every criterion and evaluator grade.</p></div></div><div class="profile-performance"><div class="radar-wrap">${dimensionRadar(result)}</div><div class="profile-dimension-grid">${dimensionOrder.map((code) => { const item = result.dimensions?.[code] || { score: 0, rank: "—", complete: false }; return `<button type="button" class="profile-activity dimension-card" data-dimension="${code}" aria-label="View ${h(dimensionNames[code])} criterion grading"><small>${h(dimensionNames[code])}</small><strong>${fmt(item.score)} /1</strong><small>Rank ${item.rank ?? "—"} · ${item.complete ? "Complete" : "Incomplete"}</small><span class="dimension-card-action">View criteria →</span></button>`; }).join("")}</div></div></div>
     <div class="panel"><h2>Activity performance</h2><p class="muted">Activity scores and ranks are retained for operational analysis.</p><div class="profile-performance"><div class="radar-wrap">${activityRadar(result)}</div><div class="profile-activity-grid">${state.journey.activities.map((activity) => { const item = result.activities[activity.code] || { score: 0, rank: "—", submitted: 0, expected: 0 }; return `<div class="profile-activity"><small>${h(activity.name)}</small><strong>${fmt(item.score)} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.submitted}/${item.expected}</small></div>`; }).join("")}</div></div></div>
-    <div class="two-column"><div class="panel"><h2>General assessment</h2><p class="muted">The average of these three grades contributes one /1 component. Changes stay local until Save profile.</p><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="discardProfile">Discard</button><button class="button primary">Save profile</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p><p class="formula-note">(Six dimensions + General) × 20 / 7</p><p class="muted">A missing co-evaluator does not dilute available grades. A dimension with incomplete expected input stays flagged, and a fully missing component contributes zero.</p></div></div>
+    <div class="two-column"><div class="panel"><h2>General assessment</h2><p class="muted">The average of these three grades contributes one /1 component. Changes stay local until Save profile.</p><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5" placeholder="Add private administrative notes about this recruit">${h(profile.assessment.notes)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="discardProfile">Discard</button><button class="button primary">Save profile</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p><p class="formula-note">(Six dimensions + General) × 20 / 7</p><p class="muted">A missing co-evaluator does not dilute available grades. A dimension with incomplete expected input stays flagged, and a fully missing component contributes zero.</p></div></div>
     <div class="panel"><h2>Evaluator breakdown</h2>${Object.entries(profile.evaluations).map(([code, entries]) => `<h3 style="margin-top:16px">${h(statusLabel(code))}</h3>${entries.length ? `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Score</th><th>Status</th><th>Comment</th><th>Details</th></tr></thead><tbody>${entries.map((entry) => `<tr><td>${h(entry.evaluatorName)}</td><td>${h(entry.evaluatorRole)}</td><td>${entry.submission ? fmt(entry.submission.score) : "—"}</td><td>${entry.submission ? h(statusLabel(entry.submission.status)) : "Missing"}</td><td>${h(entry.submission?.comments || "")}</td><td>${entry.submission ? `<button type="button" class="button ghost small submission-detail" data-id="${entry.submission.id}">View</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No published evaluator assignment.</p>`}`).join("")}</div>
     <div class="panel"><h2>Profile audit history</h2>${profile.history.length ? `<div class="audit-list">${profile.history.map(auditItem).join("")}</div>` : `<p class="muted">No profile changes yet.</p>`}</div>`;
 }
@@ -974,7 +1095,7 @@ function wireProfile(profile) {
     const data = new FormData(form);
     const value = (key) => data.get(key) === "" ? null : Number(data.get(key));
     try {
-      await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment"), base_version: profile.assessment.version }));
+      await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment"), notes: data.get("notes"), base_version: profile.assessment.version }));
       state.dirty = false; toast("Recruit profile saved."); await renderProfiles();
     } catch (error) { toast(error.message, "error"); }
   };
@@ -1069,9 +1190,10 @@ async function renderSettings() {
   ]);
   state.lastProtectionPoll = Date.now();
   const evalUrl = `${location.origin}/evaluate`;
+  const attendanceUrl = state.journey.recruitAttendancePath ? `${location.origin}${state.journey.recruitAttendancePath}` : "";
   host.innerHTML = `${sectionHeading("Configuration", "Settings, audit & export", "Manage event metadata, evaluator access, archives, and complete data extracts.")}
     <div class="two-column"><div class="panel"><h2>Journee metadata</h2><form id="settingsForm" class="stack"><label>Name<input name="name" value="${h(state.journey.name)}" required></label><label>Date<input name="date" type="date" value="${h(state.journey.eventDate)}" required></label><label>Status<select name="status">${["draft", "ready", "active", "completed", "archived"].map((value) => `<option value="${value}" ${value === state.journey.status ? "selected" : ""}>${h(statusLabel(value))}</option>`).join("")}</select></label><button class="button primary">Save settings</button></form></div>
-    <div class="panel"><h2>Permanent evaluator link & QR</h2><p class="muted">This link never changes. It automatically opens the single Journee whose status is Active.</p><input readonly value="${h(evalUrl)}" id="evalLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyLink">Copy link</button></div><img src="/api/admin/journeys/${state.journey.id}/evaluator-qr.png" alt="Permanent evaluator link QR code" style="width:180px;max-width:100%;border:1px solid var(--line);border-radius:12px"></div></div>
+    <div class="panel"><h2>Access links & QR codes</h2><div class="access-link-block"><h3>Evaluator link</h3><p class="muted">This permanent link automatically opens the single Journee whose status is Active.</p><input readonly value="${h(evalUrl)}" id="evalLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyLink">Copy evaluator link</button></div><img src="/api/admin/journeys/${state.journey.id}/evaluator-qr.png" alt="Permanent evaluator link QR code"></div><div class="access-link-block"><h3>Recruit attendance link</h3><p class="muted">Share only with the person recording recruit attendance. It permits recruit roster changes while this Journee is Draft, Ready, or Active, and closes automatically afterward.</p><input readonly value="${h(attendanceUrl)}" id="recruitAttendanceLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyRecruitAttendanceLink" ${attendanceUrl ? "" : "disabled"}>Copy attendance link</button><button class="button ghost" id="rotateRecruitAttendanceLink">Rotate link</button></div>${attendanceUrl ? `<img src="/api/admin/journeys/${state.journey.id}/recruit-attendance-qr.png" alt="Recruit attendance link QR code">` : `<div class="warning-box">Attendance access is not configured for this Journee.</div>`}</div></div></div>
     <div id="protectionPanel">${protectionPanel(protection)}</div>
     <div class="panel"><div class="panel-header"><div><h2>Exports</h2><p class="muted">Excel includes rosters, rooms, assignments, raw answers, scores, rankings, comments, and audit.</p></div></div><div class="inline-actions"><a class="button primary" href="/api/admin/journeys/${state.journey.id}/export.xlsx">Full Excel workbook</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/results.csv">Results CSV</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/photos.zip">Photo ZIP</a><button class="button secondary" id="duplicateCurrent">Duplicate Journee</button></div></div>
     <div class="panel"><div class="panel-header"><h2>Audit history</h2><span class="subtle">${auditEvents.length} most recent events</span></div>${auditEvents.length ? `<div class="audit-list">${auditEvents.map(auditItem).join("")}</div>` : `<p class="muted">No audit events.</p>`}</div>
@@ -1086,6 +1208,15 @@ async function renderSettings() {
     } catch (error) { toast(error.message, "error"); }
   };
   $("#copyLink").onclick = async () => { await navigator.clipboard.writeText(evalUrl); toast("Evaluator link copied."); };
+  $("#copyRecruitAttendanceLink").onclick = async () => { await navigator.clipboard.writeText(attendanceUrl); toast("Recruit attendance link copied."); };
+  $("#rotateRecruitAttendanceLink").onclick = async () => {
+    if (!confirm("Rotate the recruit attendance link? The old link and any active attendance sessions will stop working immediately.")) return;
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/rotate-recruit-attendance-link`, mutation("POST"));
+      toast("Recruit attendance link rotated.");
+      await renderSettings();
+    } catch (error) { toast(error.message, "error"); }
+  };
   bindProtectionControls(protection);
   $("#duplicateCurrent").onclick = () => duplicateJourney(state.journey.id);
   $("#archiveCurrent").onclick = () => archiveCurrent();

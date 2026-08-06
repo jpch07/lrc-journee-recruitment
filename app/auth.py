@@ -14,11 +14,17 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
-from .models import AdminSession, EvaluatorSession, IdempotencyRecord
+from .models import (
+    AdminSession,
+    EvaluatorSession,
+    IdempotencyRecord,
+    RecruitAttendanceSession,
+)
 
 
 ADMIN_COOKIE = "lrc_journee_admin"
 EVALUATOR_COOKIE = "lrc_journee_evaluator"
+RECRUIT_ATTENDANCE_COOKIE = "lrc_journee_recruit_attendance"
 _password_hasher = PasswordHasher()
 _login_attempts: dict[str, list[float]] = {}
 
@@ -99,6 +105,25 @@ def create_evaluator_session(
     return session
 
 
+def create_recruit_attendance_session(
+    db: Session,
+    response: Response,
+    journey_id: str,
+    actor_name: str,
+) -> RecruitAttendanceSession:
+    token = secrets.token_urlsafe(40)
+    session = RecruitAttendanceSession(
+        token_hash=_token_hash(token),
+        journey_id=journey_id,
+        actor_name=actor_name,
+        csrf_token=secrets.token_urlsafe(32),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.session_hours),
+    )
+    db.add(session)
+    _set_cookie(response, RECRUIT_ATTENDANCE_COOKIE, token)
+    return session
+
+
 @dataclass(frozen=True)
 class AdminContext:
     actor_name: str
@@ -110,6 +135,14 @@ class AdminContext:
 class EvaluatorContext:
     journey_id: str
     evaluator_id: str
+    csrf_token: str
+    token_hash: str
+
+
+@dataclass(frozen=True)
+class RecruitAttendanceContext:
+    journey_id: str
+    actor_name: str
     csrf_token: str
     token_hash: str
 
@@ -134,6 +167,24 @@ def require_evaluator(request: Request, db: Session = Depends(get_db)) -> Evalua
     return EvaluatorContext(session.journey_id, session.evaluator_id, session.csrf_token, session.token_hash)
 
 
+def require_recruit_attendance(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RecruitAttendanceContext:
+    token = request.cookies.get(RECRUIT_ATTENDANCE_COOKIE, "")
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Recruit attendance session required.")
+    session = db.get(RecruitAttendanceSession, _token_hash(token))
+    if not session or _aware(session.expires_at) <= datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Recruit attendance session expired.")
+    return RecruitAttendanceContext(
+        session.journey_id,
+        session.actor_name,
+        session.csrf_token,
+        session.token_hash,
+    )
+
+
 def require_csrf(request: Request, expected: str) -> None:
     supplied = request.headers.get("X-CSRF-Token", "")
     if not supplied or not secrets.compare_digest(supplied, expected):
@@ -150,8 +201,22 @@ def logout_evaluator(db: Session, response: Response, context: EvaluatorContext)
     response.delete_cookie(EVALUATOR_COOKIE, path="/")
 
 
+def logout_recruit_attendance(
+    db: Session,
+    response: Response,
+    context: RecruitAttendanceContext,
+) -> None:
+    db.execute(
+        delete(RecruitAttendanceSession).where(
+            RecruitAttendanceSession.token_hash == context.token_hash
+        )
+    )
+    response.delete_cookie(RECRUIT_ATTENDANCE_COOKIE, path="/")
+
+
 def clear_expired_sessions(db: Session) -> None:
     now = datetime.now(timezone.utc)
     db.execute(delete(AdminSession).where(AdminSession.expires_at < now))
     db.execute(delete(EvaluatorSession).where(EvaluatorSession.expires_at < now))
+    db.execute(delete(RecruitAttendanceSession).where(RecruitAttendanceSession.expires_at < now))
     db.execute(delete(IdempotencyRecord).where(IdempotencyRecord.created_at < now - timedelta(days=7)))

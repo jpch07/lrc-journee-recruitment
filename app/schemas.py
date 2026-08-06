@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class AdminLoginRequest(BaseModel):
@@ -66,6 +66,20 @@ class RecruitAttendanceRequest(BaseModel):
     items: list[RecruitAttendanceItem]
 
 
+class RecruitAttendancePatchRequest(BaseModel):
+    base_version: int = Field(ge=1)
+    present: bool | None = None
+    arrival_time: datetime | None = None
+    phone_number: str | None = Field(default=None, max_length=40)
+    date_of_birth: date | None = None
+
+    @model_validator(mode="after")
+    def require_change(self):
+        if not (self.model_fields_set - {"base_version"}):
+            raise ValueError("At least one attendance field is required.")
+        return self
+
+
 class EvaluatorAttendanceRequest(BaseModel):
     items: list[EvaluatorAttendanceItem]
 
@@ -126,11 +140,24 @@ class GeneralAssessmentRequest(BaseModel):
     respect: float | None = None
     seriousness: float | None = None
     comment: str = Field(default="", max_length=5000)
+    notes: str = Field(default="", max_length=10000)
     base_version: int | None = None
 
 
 class EvaluatorSessionRequest(BaseModel):
     evaluator_id: str
+
+
+class RecruitAttendanceSessionRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=120)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str) -> str:
+        value = " ".join(value.split())
+        if not value:
+            raise ValueError("Display name is required.")
+        return value
 
 
 class EvaluationPayload(BaseModel):

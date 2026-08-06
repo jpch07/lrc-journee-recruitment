@@ -46,6 +46,8 @@ from .models import (
     Journey,
     MandatoryRoomEvaluator,
     Recruit,
+    RecruitAttendanceAccess,
+    RecruitAttendanceSession,
     RoomPlan,
     RoomPlanEvaluator,
     RoomPlanRecruit,
@@ -79,6 +81,7 @@ from .schemas import (
     MandatoryRoomRequest,
     PreviewRequest,
     RecruitAttendanceRequest,
+    RecruitAttendancePatchRequest,
     RecruitCreateRequest,
     RoomCountRequest,
     RoomPlanEditRequest,
@@ -104,6 +107,7 @@ from .services import (
     serialize_evaluator,
     serialize_journey,
     serialize_recruit,
+    update_recruit_attendance_fields,
 )
 from .utils import audit, dumps, loads
 
@@ -525,6 +529,29 @@ def evaluator_qr(
     )
 
 
+@router.get("/journeys/{journey_id}/recruit-attendance-qr.png")
+def recruit_attendance_qr(
+    journey_id: str,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    access = db.get(RecruitAttendanceAccess, journey.id)
+    if not access:
+        raise HTTPException(status_code=404, detail="Recruit attendance link is not configured.")
+    url = str(request.base_url).rstrip("/") + f"/recruit-attendance/{access.token}"
+    image = qrcode.make(url)
+    output = io.BytesIO()
+    image.save(output, format="PNG")
+    return Response(
+        content=output.getvalue(),
+        media_type="image/png",
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
 def _append_sheet(workbook: Workbook, name: str, headers: list[str], rows: list[list]) -> None:
     sheet = workbook.create_sheet(title=name[:31])
     sheet.append(headers)
@@ -648,8 +675,8 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
     _append_sheet(
         workbook,
         "General assessments",
-        ["Recruit", "Punctuality /1", "Respect /1", "Seriousness /1", "Comment", "Version"],
-        [[recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", float(item.punctuality) if item.punctuality is not None else "", float(item.respect) if item.respect is not None else "", float(item.seriousness) if item.seriousness is not None else "", item.comment, item.version] for item in assessments],
+        ["Recruit", "Punctuality /1", "Respect /1", "Seriousness /1", "Comment", "Notes", "Version"],
+        [[recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", float(item.punctuality) if item.punctuality is not None else "", float(item.respect) if item.respect is not None else "", float(item.seriousness) if item.seriousness is not None else "", item.comment, item.notes, item.version] for item in assessments],
     )
     events = list(db.scalars(select(AuditEvent).where(AuditEvent.journey_id == journey.id).order_by(AuditEvent.created_at)))
     _append_sheet(
@@ -910,6 +937,39 @@ def rotate_public_link(
     return {"publicToken": journey.public_token, "evaluatorPath": f"/j/{journey.public_token}"}
 
 
+@router.post("/journeys/{journey_id}/rotate-recruit-attendance-link")
+def rotate_recruit_attendance_link(
+    journey_id: str,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    access = db.get(RecruitAttendanceAccess, journey.id)
+    if not access:
+        access = RecruitAttendanceAccess(journey_id=journey.id, token=secrets.token_urlsafe(32))
+        db.add(access)
+    else:
+        access.token = secrets.token_urlsafe(32)
+        access.rotated_at = utcnow()
+    db.execute(
+        delete(RecruitAttendanceSession).where(RecruitAttendanceSession.journey_id == journey.id)
+    )
+    journey.version += 1
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="journey.recruit_attendance_link_rotated",
+        entity_type="journey",
+        entity_id=journey.id,
+    )
+    _commit(db)
+    return {"recruitAttendancePath": f"/recruit-attendance/{access.token}"}
+
+
 @router.get("/journeys/{journey_id}/dashboard")
 def dashboard(
     journey_id: str,
@@ -932,7 +992,10 @@ def dashboard(
                 warnings.extend(
                     f"{RUBRICS[state.code].name}: {message}"
                     for message in loads(round_record.warnings_json, [])
-                    if "reuses the published Skills" not in message
+                    if message not in {
+                        "Shared Skills & Simulation assignment.",
+                        "Simulation reuses the published Skills assignment.",
+                    }
                 )
     active_monitoring = monitoring_snapshot(db, journey, journey.current_activity) if journey.current_activity else None
     return {
@@ -1038,6 +1101,36 @@ def save_recruit_attendance(
     audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name, action="attendance.recruits_saved", entity_type="attendance", after=changed)
     _commit(db)
     return {"ok": True, "items": [serialize_recruit(get_recruit_or_404(db, journey.id, item.id)) for item in payload.items]}
+
+
+@router.patch("/journeys/{journey_id}/recruits/{recruit_id}/attendance")
+def auto_save_recruit_attendance(
+    journey_id: str,
+    recruit_id: str,
+    payload: RecruitAttendancePatchRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    changes = payload.model_dump(exclude={"base_version"}, exclude_unset=True)
+    before, recruit = update_recruit_attendance_fields(
+        db, journey.id, recruit_id, payload.base_version, changes
+    )
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="attendance.recruit_auto_saved",
+        entity_type="recruit",
+        entity_id=recruit.id,
+        before=before,
+        after=serialize_recruit(recruit),
+    )
+    _commit(db)
+    return serialize_recruit(recruit)
 
 
 @router.put("/journeys/{journey_id}/attendance/evaluators")
@@ -2001,6 +2094,7 @@ def recruit_profile(
             "respect": float(assessment.respect) if assessment and assessment.respect is not None else None,
             "seriousness": float(assessment.seriousness) if assessment and assessment.seriousness is not None else None,
             "comment": assessment.comment if assessment else "",
+            "notes": assessment.notes if assessment else "",
             "version": assessment.version if assessment else 0,
         },
         "evaluations": details,
@@ -2038,6 +2132,7 @@ def update_recruit_profile(
         "respect": assessment.respect if assessment else None,
         "seriousness": assessment.seriousness if assessment else None,
         "comment": assessment.comment if assessment else "",
+        "notes": assessment.notes if assessment else "",
     }
     values: dict[str, Decimal | None] = {}
     for key, value in (
@@ -2058,6 +2153,7 @@ def update_recruit_profile(
     assessment.respect = values["respect"]
     assessment.seriousness = values["seriousness"]
     assessment.comment = payload.comment.strip()
+    assessment.notes = payload.notes.strip()
     audit(
         db,
         journey_id=journey.id,
@@ -2067,7 +2163,7 @@ def update_recruit_profile(
         entity_type="recruit",
         entity_id=recruit.id,
         before=before,
-        after={**values, "comment": assessment.comment},
+        after={**values, "comment": assessment.comment, "notes": assessment.notes},
     )
     _commit(db)
     return {"ok": True, "version": assessment.version}
