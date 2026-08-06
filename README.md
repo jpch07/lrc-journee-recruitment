@@ -70,6 +70,9 @@ use that fallback in a shared or production environment.
 - `LRC_JOURNEE_ADMIN_PASSWORD_HASH`: Argon2 hash for the shared admin password.
 - `LRC_JOURNEE_SESSION_SECRET`: at least 32 random bytes/characters.
 - `LRC_JOURNEE_COOKIE_SECURE=true`: required on HTTPS production.
+- `LRC_GITHUB_ACTIONS_TOKEN`: private token allowed to dispatch and cancel Actions workflows in
+  `jpch07/lrc-journee-recruitment`. It is used only by authenticated admin event-day controls and
+  is never returned to the browser.
 
 Generate an Argon2 password hash locally:
 
@@ -104,9 +107,9 @@ Blueprint and supply the two `sync: false` secrets when prompted. Render generat
 secret itself. Confirm the free instance plan before creating the service.
 
 The service uses external PostgreSQL for all confirmed data, so a Render restart or replacement
-does not lose Journees, photos, assignments, or evaluations. The free service can sleep while idle;
-open it before an event or manually run the `Event-day health monitor` GitHub workflow for two,
-four, or six hours.
+does not lose Journees, photos, assignments, or evaluations. From a Journee's Settings & audit
+page, choose 6 or 12 hours and press `Start Journee protection`. The authenticated server starts
+the redundant GitHub monitors; no manual Actions setup is required on event day.
 
 ## Hugging Face deployment (optional)
 

@@ -21,6 +21,9 @@ class Settings:
     session_hours: int
     environment: str
     test_tools_enabled: bool
+    github_actions_token: str = ""
+    github_repository: str = "jpch07/lrc-journee-recruitment"
+    github_workflow: str = "event-day-watchdog.yml"
     timezone: str = "Asia/Beirut"
 
     @property
@@ -73,6 +76,9 @@ def load_settings() -> Settings:
         session_hours=int(os.getenv("LRC_JOURNEE_SESSION_HOURS", "12")),
         environment=os.getenv("LRC_JOURNEE_ENV", "development"),
         test_tools_enabled=_bool_env("LRC_JOURNEE_TEST_TOOLS", False),
+        github_actions_token=os.getenv("LRC_GITHUB_ACTIONS_TOKEN", ""),
+        github_repository=os.getenv("LRC_GITHUB_REPOSITORY", "jpch07/lrc-journee-recruitment"),
+        github_workflow=os.getenv("LRC_GITHUB_WORKFLOW", "event-day-watchdog.yml"),
     )
 
 
