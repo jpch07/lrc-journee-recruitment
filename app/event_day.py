@@ -84,7 +84,7 @@ def find_monitor_run(activation_id: str) -> dict[str, Any] | None:
 def cancel_monitor(run_id: str) -> None:
     try:
         response = httpx.post(
-            f"https://api.github.com/repos/{settings.github_repository}/actions/runs/{run_id}/cancel",
+            f"https://api.github.com/repos/{settings.github_repository}/actions/runs/{run_id}/force-cancel",
             headers=_headers(),
             timeout=20,
         )

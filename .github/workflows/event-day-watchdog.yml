@@ -63,7 +63,7 @@ jobs:
 
   primary_2:
     needs: primary_1
-    if: ${{ always() && needs.primary_1.result != 'cancelled' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 190
     steps:
@@ -76,7 +76,7 @@ jobs:
 
   secondary_2:
     needs: secondary_1
-    if: ${{ always() && needs.secondary_1.result != 'cancelled' }}
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 190
     steps:
@@ -89,7 +89,7 @@ jobs:
 
   primary_3:
     needs: primary_2
-    if: ${{ always() && inputs.duration_hours == '12' && needs.primary_2.result != 'cancelled' }}
+    if: ${{ !cancelled() && inputs.duration_hours == '12' }}
     runs-on: ubuntu-latest
     timeout-minutes: 190
     steps:
@@ -102,7 +102,7 @@ jobs:
 
   secondary_3:
     needs: secondary_2
-    if: ${{ always() && inputs.duration_hours == '12' && needs.secondary_2.result != 'cancelled' }}
+    if: ${{ !cancelled() && inputs.duration_hours == '12' }}
     runs-on: ubuntu-latest
     timeout-minutes: 190
     steps:
@@ -115,7 +115,7 @@ jobs:
 
   primary_4:
     needs: primary_3
-    if: ${{ always() && inputs.duration_hours == '12' && needs.primary_3.result != 'cancelled' }}
+    if: ${{ !cancelled() && inputs.duration_hours == '12' }}
     runs-on: ubuntu-latest
     timeout-minutes: 190
     steps:
@@ -128,7 +128,7 @@ jobs:
 
   secondary_4:
     needs: secondary_3
-    if: ${{ always() && inputs.duration_hours == '12' && needs.secondary_3.result != 'cancelled' }}
+    if: ${{ !cancelled() && inputs.duration_hours == '12' }}
     runs-on: ubuntu-latest
     timeout-minutes: 190
     steps:
