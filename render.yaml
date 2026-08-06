@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: lrc-journee-recruitment
+    runtime: docker
+    plan: free
+    region: virginia
+    repo: https://github.com/jpch07/lrc-journee-recruitment
+    branch: main
+    autoDeployTrigger: checksPass
+    healthCheckPath: /health/ready
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: LRC_DATABASE_URL
+        sync: false
+      - key: LRC_JOURNEE_ADMIN_PASSWORD_HASH
+        sync: false
+      - key: LRC_JOURNEE_SESSION_SECRET
+        generateValue: true
+      - key: LRC_JOURNEE_ENV
+        value: production
+      - key: LRC_JOURNEE_COOKIE_SECURE
+        value: "true"
+      - key: LRC_JOURNEE_TEST_TOOLS
+        value: "false"
+      - key: LRC_JOURNEE_SESSION_HOURS
+        value: "12"

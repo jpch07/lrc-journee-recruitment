@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from huggingface_hub import HfApi
+from huggingface_hub import HfApi, get_token
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,7 +15,7 @@ def main() -> None:
     parser.add_argument("--repo-id", default="lrc203/journee-recruitment")
     parser.add_argument("--private", action="store_true")
     args = parser.parse_args()
-    token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN")
+    token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_HUB_TOKEN") or get_token()
     if not token:
         raise SystemExit("Set HF_TOKEN before deployment.")
     api = HfApi(token=token)

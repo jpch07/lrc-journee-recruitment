@@ -2,8 +2,6 @@ name: Deploy Hugging Face Space
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 concurrency:
   group: lrc-journee-production

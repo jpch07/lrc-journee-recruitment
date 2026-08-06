@@ -96,9 +96,21 @@ pairing constraints, optimistic concurrency, evaluator isolation, idempotent sub
 complete Sport workflow. The browser test launches the real application and verifies the mobile
 layout. CI runs both test groups and a Docker build.
 
-## Hugging Face deployment
+## Render deployment (free production runtime)
 
-Create a separate Docker Space (recommended name: `lrc203/journee-recruitment`), copy the
+The production service is described by `render.yaml`. Connect this GitHub repository as a Render
+Blueprint and supply the two `sync: false` secrets when prompted. Render generates the session
+secret itself. Confirm the free instance plan before creating the service.
+
+The service uses external PostgreSQL for all confirmed data, so a Render restart or replacement
+does not lose Journees, photos, assignments, or evaluations. The free service can sleep while idle;
+open it before an event or manually run the `Event-day health monitor` GitHub workflow for two,
+four, or six hours.
+
+## Hugging Face deployment (optional)
+
+If the Hugging Face account supports Docker Spaces, create a separate Space (recommended name:
+`lrc203/journee-recruitment`), copy the
 secrets above into its Settings, then run:
 
 ```powershell
