@@ -14,9 +14,27 @@ class Base(DeclarativeBase):
 
 
 IS_SQLITE = settings.database_url.startswith("sqlite")
-engine_options: dict = {"pool_pre_ping": True}
-if IS_SQLITE:
-    engine_options["connect_args"] = {"check_same_thread": False}
+
+
+def build_engine_options(database_url: str) -> dict:
+    """Return connection options that are safe for SQLite and PostgreSQL pools.
+
+    PostgreSQL's search path must be established as part of the connection
+    handshake. Executing ``SET search_path`` from a SQLAlchemy connect event can
+    run inside an implicit transaction that the dialect subsequently rolls
+    back, leaving some pooled connections pointed at the public schema.
+    """
+    options: dict = {"pool_pre_ping": True}
+    if database_url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+    else:
+        options["connect_args"] = {
+            "options": "-csearch_path=journee_recruitment,public",
+        }
+    return options
+
+
+engine_options = build_engine_options(settings.database_url)
 
 engine = create_engine(settings.database_url, **engine_options)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False, autoflush=False)
@@ -29,11 +47,6 @@ if IS_SQLITE:
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
-else:
-    @event.listens_for(engine, "connect")
-    def _postgres_search_path(dbapi_connection, _connection_record):
-        with dbapi_connection.cursor() as cursor:
-            cursor.execute("set search_path to journee_recruitment, public")
 
 
 def initialize_database() -> None:
