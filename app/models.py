@@ -256,6 +256,7 @@ class GeneralAssessment(Base):
     respect: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     seriousness: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -276,6 +277,26 @@ class EvaluatorSession(Base):
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
     evaluator_id: Mapped[str] = mapped_column(ForeignKey("evaluators.id", ondelete="CASCADE"), nullable=False)
+    csrf_token: Mapped[str] = mapped_column(String(80), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class RecruitAttendanceAccess(Base):
+    __tablename__ = "recruit_attendance_access"
+
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), primary_key=True)
+    token: Mapped[str] = mapped_column(String(80), nullable=False, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    rotated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class RecruitAttendanceSession(Base):
+    __tablename__ = "recruit_attendance_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    actor_name: Mapped[str] = mapped_column(String(200), nullable=False)
     csrf_token: Mapped[str] = mapped_column(String(80), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

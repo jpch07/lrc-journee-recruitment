@@ -24,6 +24,83 @@ def admin_headers(csrf):
     return {"X-CSRF-Token": csrf}
 
 
+def test_profile_notes_are_saved_audited_and_exported(client):
+    csrf = admin_login(client)
+    journey = client.post(
+        "/api/admin/journeys",
+        headers=admin_headers(csrf),
+        json={"name": "Notes Journee", "event_date": "2026-08-11", "room_count": 1},
+    ).json()
+    recruit = client.post(
+        f"/api/admin/journeys/{journey['id']}/recruits",
+        headers=admin_headers(csrf),
+        json={"name": "Recruit Notes"},
+    ).json()
+
+    profile_url = f"/api/admin/journeys/{journey['id']}/recruits/{recruit['id']}/profile"
+    profile = client.get(profile_url).json()
+    assert profile["assessment"]["notes"] == ""
+
+    response = client.put(
+        profile_url,
+        headers=admin_headers(csrf),
+        json={
+            "punctuality": 0.8,
+            "respect": 0.9,
+            "seriousness": 1.0,
+            "comment": "General comment",
+            "notes": "Private follow-up note",
+            "base_version": 0,
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    profile = client.get(profile_url).json()
+    assert profile["assessment"]["notes"] == "Private follow-up note"
+    assert profile["history"][0]["after"]["notes"] == "Private follow-up note"
+
+    exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
+    workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
+    rows = list(workbook["General assessments"].iter_rows(values_only=True))
+    assert "Notes" in rows[0]
+    assert rows[1][rows[0].index("Notes")] == "Private follow-up note"
+    workbook.close()
+
+
+def test_shared_skills_simulation_assignment_is_not_a_warning(client):
+    csrf = admin_login(client)
+    with SessionLocal() as db:
+        journey = create_journey(db, "Shared Pairing", date(2026, 8, 12), 1, "Test Admin")
+        db.flush()
+        simulation_round = AssignmentRound(
+            journey_id=journey.id,
+            activity_code="simulation",
+            version=1,
+            status="published",
+            seed="shared-seed",
+            warnings_json=dumps(["Shared Skills & Simulation assignment."]),
+            created_by="Test Admin",
+        )
+        db.add(simulation_round)
+        db.flush()
+        state = db.scalar(
+            select(ActivityState).where(
+                ActivityState.journey_id == journey.id,
+                ActivityState.code == "simulation",
+            )
+        )
+        state.assignment_round_id = simulation_round.id
+        journey_id = journey.id
+        db.commit()
+
+    dashboard = client.get(f"/api/admin/journeys/{journey_id}/dashboard")
+    assert dashboard.status_code == 200, dashboard.text
+    assert dashboard.json()["warnings"] == []
+    assignment = client.get(f"/api/admin/journeys/{journey_id}/assignments/simulation")
+    assert assignment.status_code == 200, assignment.text
+    assert assignment.json()["warnings"] == []
+
+
 def test_complete_sport_workflow_and_isolation(client):
     csrf = admin_login(client)
     response = client.post(

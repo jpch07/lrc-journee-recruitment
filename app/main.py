@@ -10,6 +10,7 @@ from .config import STATIC_DIR, settings
 from .db import SessionLocal, initialize_database
 from .routes_admin import router as admin_router
 from .routes_evaluator import router as evaluator_router
+from .routes_attendance import router as attendance_router
 from .rubric import validate_rubrics
 
 
@@ -30,6 +31,7 @@ app = FastAPI(
 )
 app.include_router(admin_router)
 app.include_router(evaluator_router)
+app.include_router(attendance_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -44,9 +46,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0006_evaluator_master_directory":
+            if revision != "0008_general_assessment_notes":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0006_evaluator_master_directory'."
+                    f"Database migration is {revision!r}, expected '0008_general_assessment_notes'."
                 )
         return {"status": "ready"}
     except Exception as exc:
@@ -74,3 +76,9 @@ def evaluator_app(token: str):
 @app.get("/evaluate", include_in_schema=False)
 def current_evaluator_app():
     return FileResponse(STATIC_DIR / "evaluator.html")
+
+
+@app.get("/recruit-attendance/{token}", include_in_schema=False)
+def recruit_attendance_app(token: str):
+    del token
+    return FileResponse(STATIC_DIR / "recruit_attendance.html")

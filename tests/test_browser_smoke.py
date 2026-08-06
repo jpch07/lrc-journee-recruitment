@@ -7,6 +7,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     evaluator = (static / "evaluator.html").read_text(encoding="utf-8")
     admin_js = (static / "admin.js").read_text(encoding="utf-8")
     evaluator_js = (static / "evaluator.js").read_text(encoding="utf-8")
+    attendance = (static / "recruit_attendance.html").read_text(encoding="utf-8")
+    attendance_js = (static / "recruit_attendance.js").read_text(encoding="utf-8")
     assert "Journee library" in admin
     assert "Rooms & assignments" in admin
     assert "Save attendance" in admin_js
@@ -22,6 +24,10 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "sport-feedback" not in evaluator_js
     assert "Provisional Sport score" not in evaluator_js
     assert "criterion.weight" not in evaluator_js
+    assert "Recruit attendance" in attendance
+    assert "queueRecruitSave" in attendance_js
+    assert "attendanceSave" not in attendance_js
+    assert "checking for updates every 5 seconds" in attendance_js
     assert "data-photo-viewer" in evaluator_js
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator

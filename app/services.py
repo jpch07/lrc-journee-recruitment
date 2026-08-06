@@ -29,6 +29,7 @@ from .models import (
     Journey,
     MandatoryRoomEvaluator,
     Recruit,
+    RecruitAttendanceAccess,
     RoomPlan,
     RoomPlanEvaluator,
     RoomPlanRecruit,
@@ -119,6 +120,7 @@ def create_journey(db: Session, name: str, event_date, room_count: int, actor_na
     )
     db.add(journey)
     db.flush()
+    db.add(RecruitAttendanceAccess(journey_id=journey.id, token=secrets.token_urlsafe(32)))
     for code in ACTIVITY_ORDER:
         db.add(ActivityState(journey_id=journey.id, code=code))
     db.add(
@@ -176,6 +178,10 @@ def serialize_journey(db: Session, journey: Journey, *, include_token: bool = Fa
     if include_token:
         result["publicToken"] = journey.public_token
         result["evaluatorPath"] = "/evaluate"
+        attendance_access = db.get(RecruitAttendanceAccess, journey.id)
+        result["recruitAttendancePath"] = (
+            f"/recruit-attendance/{attendance_access.token}" if attendance_access else None
+        )
     return result
 
 
@@ -202,6 +208,56 @@ def serialize_evaluator(evaluator: Evaluator) -> dict:
         "active": evaluator.active,
         "version": evaluator.version,
     }
+
+
+def update_recruit_attendance_fields(
+    db: Session,
+    journey_id: str,
+    recruit_id: str,
+    base_version: int,
+    changes: dict,
+) -> tuple[dict, Recruit]:
+    recruit = db.get(Recruit, recruit_id)
+    if not recruit or recruit.journey_id != journey_id or not recruit.active:
+        raise HTTPException(status_code=404, detail="Recruit not found.")
+    before = serialize_recruit(recruit)
+    values: dict = {}
+    if "present" in changes:
+        values["present"] = bool(changes["present"])
+    if "arrival_time" in changes:
+        values["arrival_time"] = changes["arrival_time"]
+    if "phone_number" in changes:
+        values["phone_number"] = (changes["phone_number"] or "").strip() or None
+    if "date_of_birth" in changes:
+        values["date_of_birth"] = changes["date_of_birth"]
+    effective_present = values.get("present", recruit.present)
+    if not effective_present:
+        values["arrival_time"] = None
+    elif values.get("arrival_time") is None and "arrival_time" in values:
+        raise HTTPException(status_code=422, detail="A present recruit must have a time of arrival.")
+    values["version"] = Recruit.version + 1
+    values["updated_at"] = utcnow()
+    result = db.execute(
+        update(Recruit)
+        .where(
+            Recruit.id == recruit_id,
+            Recruit.journey_id == journey_id,
+            Recruit.active.is_(True),
+            Recruit.version == base_version,
+        )
+        .values(**values)
+    )
+    if result.rowcount != 1:
+        db.expire_all()
+        current = db.get(Recruit, recruit_id)
+        if not current or current.journey_id != journey_id or not current.active:
+            raise HTTPException(status_code=404, detail="Recruit not found.")
+        raise HTTPException(
+            status_code=409,
+            detail=f"{current.name} was changed on another device. Retrying with the latest version is required.",
+        )
+    db.expire_all()
+    return before, get_recruit_or_404(db, journey_id, recruit_id)
 
 
 def process_photo(data: bytes) -> tuple[bytes, str]:
@@ -497,6 +553,14 @@ def assignment_round_payload(db: Session, round_record: AssignmentRound) -> dict
     assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
     recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == round_record.journey_id))}
     evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == round_record.journey_id))}
+    warnings = [
+        message
+        for message in loads(round_record.warnings_json, [])
+        if message not in {
+            "Shared Skills & Simulation assignment.",
+            "Simulation reuses the published Skills assignment.",
+        }
+    ]
     return {
         "id": round_record.id,
         "activityCode": round_record.activity_code,
@@ -504,7 +568,7 @@ def assignment_round_payload(db: Session, round_record: AssignmentRound) -> dict
         "version": round_record.version,
         "status": round_record.status,
         "seed": round_record.seed,
-        "warnings": loads(round_record.warnings_json, []),
+        "warnings": warnings,
         "reusedFromId": round_record.reused_from_id,
         "assignments": [
             {
@@ -610,7 +674,7 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
             version=simulation_version,
             status="published",
             seed=round_record.seed,
-            warnings_json=dumps(["Shared Skills & Simulation assignment."]),
+            warnings_json="[]",
             reused_from_id=round_record.id,
             created_by=actor_name,
             published_at=round_record.published_at,
