@@ -2,7 +2,7 @@
 
 ## Runtime
 
-One FastAPI/Uvicorn Docker container serves JSON APIs and two static JavaScript applications. The
+One FastAPI/Uvicorn Docker container on a free Render web service serves JSON APIs and two static JavaScript applications. The
 admin and evaluator interfaces use separate HttpOnly session cookies, CSRF tokens, and API
 namespaces. PostgreSQL uses the dedicated `journee_recruitment` search path; SQLite is only a local
 fallback. Alembic startup migrations are serialized with a PostgreSQL advisory lock.
@@ -59,7 +59,7 @@ on unrounded values; color thresholds also use unrounded values.
 
 ## Production durability
 
-All confirmed records and compressed WebP photos are in external PostgreSQL. The Docker Space may
+All confirmed records and compressed WebP photos are in external PostgreSQL. The web-service container may
 restart or lose its filesystem without losing operational data. `/health/live` checks the process;
 `/health/ready` verifies connectivity and the expected Alembic revision. See the event-day runbook
 for wake-up, backup, monitoring, incident, and export procedures.

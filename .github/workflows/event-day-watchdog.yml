@@ -32,10 +32,12 @@ jobs:
           for ((i=1; i<=attempts; i++)); do
             echo "Health check $i/$attempts"
             curl --fail --show-error --silent --max-time 90 \
-              --retry 3 --retry-delay 10 --retry-all-errors \
+              --retry 5 --retry-delay 10 --retry-all-errors \
               "${APP_URL%/}/health/live"
+            echo " live: ok"
             curl --fail --show-error --silent --max-time 90 \
-              --retry 3 --retry-delay 10 --retry-all-errors \
+              --retry 5 --retry-delay 10 --retry-all-errors \
               "${APP_URL%/}/health/ready"
+            echo " ready: ok"
             if [ "$i" -lt "$attempts" ]; then sleep 300; fi
           done

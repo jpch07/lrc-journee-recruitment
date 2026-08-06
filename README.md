@@ -17,9 +17,10 @@ Digital administration and evaluator system for Lebanese Red Cross recruitment J
 - Fixed 2026 dimension-weighted rubric, live monitoring, six-dimension profiles/rankings, activity statistics, comments, and exports.
 - Versioned submissions, audit events, private recruit photos, and browser/server drafts.
 
-The admin application is served at `/admin`. Every Journee receives a random evaluator URL at
-`/evaluate` and a matching permanent QR code automatically resolve the single Active Journee. PostgreSQL is authoritative in production; no Google Sheets
-connection or persistent Space filesystem is used.
+The production application is at `https://lrc-journee-recruitment.onrender.com`. The admin
+application is served at `/admin`. The permanent evaluator URL at `/evaluate` and its QR code
+automatically resolve the single Active Journee. PostgreSQL is authoritative in production; no Google Sheets
+connection or persistent container filesystem is used.
 
 ## Local run
 
@@ -77,10 +78,10 @@ python scripts/hash_password.py
 ```
 
 Production PostgreSQL tables are created in the `journee_recruitment` schema. The app never
-uses the Hugging Face container filesystem as authoritative storage.
+uses the web-service container filesystem as authoritative storage.
 
 All database revisions run through Alembic at startup. PostgreSQL deployment holds an advisory
-lock while migrating, preventing two Space processes from racing the same schema.
+lock while migrating, preventing two deployment processes from racing the same schema.
 
 ## Tests
 

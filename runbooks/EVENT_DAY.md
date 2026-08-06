@@ -3,16 +3,17 @@
 ## Before the Journee
 
 1. Verify the external PostgreSQL backup completed and that a recent restore test exists.
-2. Open the production Space early enough to wake it from sleep, then run:
+2. Open the production service early enough to wake it from sleep, then run:
 
    ```powershell
-   python scripts/check_health.py https://lrc203-journee-recruitment.hf.space
+   python scripts/check_health.py https://lrc-journee-recruitment.onrender.com
    ```
 
 3. Confirm `/health/live` and `/health/ready` both return `200`.
 4. Open the Journee, set the room count in Rooms & Assignments, then verify the roster, evaluator roles, and mandatory room placements.
 5. Confirm attendance on a second admin device and test the evaluator QR with a fictional evaluator if available.
-6. Keep the existing external watchdog checking both endpoints every five minutes during the event.
+6. In GitHub Actions, manually run `Event-day health monitor` for the expected event duration. It
+   checks both endpoints every five minutes and keeps the free instance awake.
 
 ## During the Journee
 
@@ -28,7 +29,7 @@
 - If evaluator connectivity is intermittent, completed fields remain in local browser storage and server drafts retry after interaction.
 - Do not publish a new assignment merely to refresh evaluator screens. Use Refresh; clients poll every five seconds.
 - If an evaluator/recruit becomes unavailable, save corrected attendance, generate a replacement preview, review warnings, and publish it.
-- If the Space restarts, confirmed data remains in PostgreSQL. Re-run both health checks before continuing.
+- If Render restarts, confirmed data remains in PostgreSQL. Re-run both health checks before continuing.
 - Use the current Google Sheets process only as the agreed pilot fallback; do not enter real data into two authoritative systems after cutover.
 
 ## After the Journee
