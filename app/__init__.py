@@ -1,0 +1,2 @@
+"""LRC Journee Recruitment application."""
+

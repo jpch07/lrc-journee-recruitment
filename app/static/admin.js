@@ -1,0 +1,896 @@
+import { api, escapeHtml as h, fmt, localDateTime, statusLabel, toast, uid } from "/static/common.js";
+
+const state = {
+  csrf: "",
+  adminName: "",
+  testToolsEnabled: false,
+  simulatorActivated: false,
+  journeys: [],
+  journey: null,
+  section: "dashboard",
+  attendanceTab: "recruits",
+  attendanceDraft: null,
+  assignmentActivity: "sport",
+  monitoringActivity: "sport",
+  monitoringMode: "recruits",
+  resultsActivity: "overall",
+  roomPlan: null,
+  assignmentRound: null,
+  profileId: null,
+  dirty: false,
+  pollTimer: null,
+};
+
+const $ = (selector, root = document) => root.querySelector(selector);
+const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const host = $("#sectionHost");
+const modal = $("#modal");
+const photoViewer = $("#photoViewer");
+
+const dimensionOrder = ["willingness", "adaptability", "respect", "intelligence", "application", "physical_ability"];
+const dimensionNames = {
+  willingness: "Willingness",
+  respect: "Respect",
+  adaptability: "Adaptability",
+  intelligence: "Intelligence",
+  application: "Application",
+  physical_ability: "Physical Ability",
+};
+
+function showPhotoViewer(url, name) {
+  $("#photoViewerImage").src = url;
+  $("#photoViewerImage").alt = name;
+  $("#photoViewerCaption").textContent = name;
+  photoViewer.showModal();
+}
+
+document.addEventListener("click", (event) => {
+  const trigger = event.target.closest("[data-photo-viewer]");
+  if (!trigger) return;
+  event.preventDefault();
+  event.stopPropagation();
+  showPhotoViewer(trigger.dataset.photoUrl, trigger.dataset.photoName || "Recruit photo");
+});
+$(".photo-viewer-close").onclick = () => photoViewer.close();
+photoViewer.onclick = (event) => { if (event.target === photoViewer) photoViewer.close(); };
+
+function mutation(method = "POST", body, extraHeaders = {}) {
+  return { method, body, headers: { "X-CSRF-Token": state.csrf, ...extraHeaders } };
+}
+
+function showLogin() {
+  $("#loginView").classList.remove("hidden");
+  $("#appView").classList.add("hidden");
+}
+
+function showApp() {
+  $("#loginView").classList.add("hidden");
+  $("#appView").classList.remove("hidden");
+  $("#adminName").textContent = state.adminName;
+}
+
+function setDirty(value) {
+  state.dirty = value;
+}
+
+function guardDirty() {
+  return !state.dirty || confirm("You have unsaved changes. Discard them and continue?");
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (!state.dirty) return;
+  event.preventDefault();
+  event.returnValue = "";
+});
+
+function openModal(content, { wide = false } = {}) {
+  $("#modalBody").innerHTML = content;
+  modal.classList.toggle("wide", wide);
+  modal.showModal();
+}
+
+function closeModal() {
+  modal.close();
+  modal.classList.remove("wide");
+  $("#modalBody").innerHTML = "";
+}
+
+modal.addEventListener("click", (event) => {
+  if (event.target === modal) closeModal();
+});
+
+async function initialize() {
+  try {
+    const session = await api("/api/admin/session");
+    state.csrf = session.csrfToken;
+    state.adminName = session.displayName;
+    state.testToolsEnabled = Boolean(session.testToolsEnabled);
+    showApp();
+    await loadLibrary();
+  } catch {
+    showLogin();
+  }
+}
+
+$("#loginForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = new FormData(event.currentTarget);
+  $("#loginError").textContent = "";
+  try {
+    const result = await api("/api/admin/login", {
+      method: "POST",
+      body: { display_name: form.get("displayName"), password: form.get("password") },
+    });
+    state.csrf = result.csrfToken;
+    state.adminName = result.displayName;
+    state.testToolsEnabled = Boolean(result.testToolsEnabled);
+    showApp();
+    await loadLibrary();
+  } catch (error) {
+    $("#loginError").textContent = error.message;
+  }
+});
+
+$("#logoutButton").addEventListener("click", async () => {
+  if (!guardDirty()) return;
+  await api("/api/admin/logout", mutation());
+  state.journey = null;
+  showLogin();
+});
+
+$("#libraryButton").addEventListener("click", returnToLibrary);
+$("#backToLibrary").addEventListener("click", returnToLibrary);
+$("#menuButton").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
+$("#showArchived").addEventListener("change", loadLibrary);
+$("#createJourneyButton").addEventListener("click", createJourneyDialog);
+
+async function loadLibrary() {
+  clearInterval(state.pollTimer);
+  const include = $("#showArchived").checked;
+  state.journeys = await api(`/api/admin/journeys?include_archived=${include}`);
+  $("#libraryView").classList.remove("hidden");
+  $("#workspaceView").classList.add("hidden");
+  $("#journeyCrumb").textContent = "Journee library";
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const grid = $("#journeyGrid");
+  if (!state.journeys.length) {
+    grid.innerHTML = `<div class="empty-state"><h2>No Journees yet</h2><p class="muted">Create your first event workspace to begin.</p><button class="button primary" id="emptyCreate">Create Journee</button></div>`;
+    $("#emptyCreate").onclick = createJourneyDialog;
+    return;
+  }
+  grid.innerHTML = state.journeys.map((journey) => `
+    <article class="journey-card" data-id="${journey.id}">
+      <div>
+        <span class="status-pill ${journey.status}">${h(statusLabel(journey.status))}</span>
+        <h2 style="margin-top:12px">${h(journey.name)}</h2>
+        <div class="meta-row"><span>${h(journey.eventDate)}</span><span>${journey.roomCount} room${journey.roomCount === 1 ? "" : "s"}</span></div>
+      </div>
+      <div class="counts"><div><strong>${journey.presentRecruitCount}/${journey.recruitCount}</strong><small>Recruits present</small></div><div><strong>${journey.presentEvaluatorCount}/${journey.evaluatorCount}</strong><small>Evaluators present</small></div></div>
+      <div class="inline-actions"><button class="button primary open-journey">Open</button><button class="button ghost small duplicate-journey">Duplicate</button>${journey.status !== "archived" ? `<button class="button ghost small archive-journey">Archive</button>` : ""}<button class="button danger small delete-journey">Delete</button></div>
+    </article>`).join("");
+  $$(".open-journey", grid).forEach((button) => button.onclick = () => openJourney(button.closest("article").dataset.id));
+  $$(".duplicate-journey", grid).forEach((button) => button.onclick = () => duplicateJourney(button.closest("article").dataset.id));
+  $$(".archive-journey", grid).forEach((button) => button.onclick = () => archiveJourney(button.closest("article").dataset.id));
+  $$(".delete-journey", grid).forEach((button) => button.onclick = () => deleteJourney(button.closest("article").dataset.id));
+}
+
+async function deleteJourney(id) {
+  const journey = state.journeys.find((item) => item.id === id);
+  if (!confirm(`Permanently delete ${journey.name} and all of its attendance, assignments, evaluations, photos, and audit history? This cannot be undone.`)) return;
+  try { await api(`/api/admin/journeys/${id}`, mutation("DELETE")); toast("Journee permanently deleted."); await loadLibrary(); }
+  catch (error) { toast(error.message, "error"); }
+}
+
+function createJourneyDialog() {
+  openModal(`<form id="createJourneyForm"><p class="eyebrow">New workspace</p><h2>Create a Journee</h2><div class="stack"><label>Name<input name="name" required maxlength="200" placeholder="Journee 1"></label><label>Date<input name="date" type="date" required value="${new Date().toISOString().slice(0, 10)}"></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Create and open</button></div></form>`);
+  $("#cancelModal").onclick = closeModal;
+  $("#createJourneyForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      const journey = await api("/api/admin/journeys", mutation("POST", { name: form.get("name"), event_date: form.get("date") }));
+      closeModal();
+      toast("Journee created.");
+      await openJourney(journey.id);
+    } catch (error) { toast(error.message, "error"); }
+  };
+}
+
+async function duplicateJourney(id) {
+  try {
+    const journey = await api(`/api/admin/journeys/${id}/duplicate`, mutation());
+    toast(`${journey.name} created.`);
+    await loadLibrary();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function archiveJourney(id) {
+  if (!confirm("Archive this Journee? Its evaluator link will stop accepting sessions.")) return;
+  const journey = state.journeys.find((item) => item.id === id);
+  try {
+    await api(`/api/admin/journeys/${id}`, mutation("PATCH", { status: "archived", base_version: journey.version }));
+    toast("Journee archived.");
+    await loadLibrary();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function openJourney(id, section = "dashboard") {
+  if (!guardDirty()) return;
+  clearInterval(state.pollTimer);
+  if (!state.journey || state.journey.id !== id) state.profileId = null;
+  state.journey = await api(`/api/admin/journeys/${id}`);
+  state.section = section;
+  state.dirty = false;
+  $("#libraryView").classList.add("hidden");
+  $("#workspaceView").classList.remove("hidden");
+  $("#journeyCrumb").textContent = state.journey.name;
+  await renderSection();
+  state.pollTimer = setInterval(async () => {
+    if (document.hidden || state.dirty || !state.journey) return;
+    if (["dashboard", "monitoring"].includes(state.section)) {
+      try { await renderSection(true); } catch { /* a visible refresh remains available */ }
+    }
+  }, 5000);
+}
+
+async function refreshJourney() {
+  if (!state.journey) return;
+  state.journey = await api(`/api/admin/journeys/${state.journey.id}`);
+  $("#journeyCrumb").textContent = state.journey.name;
+}
+
+async function returnToLibrary() {
+  if (!guardDirty()) return;
+  state.journey = null;
+  state.dirty = false;
+  await loadLibrary();
+}
+
+$("#workspaceNav").addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-section]");
+  if (!button || !guardDirty()) return;
+  state.section = button.dataset.section;
+  state.dirty = false;
+  $("#sidebar").classList.remove("open");
+  await renderSection();
+});
+
+async function renderSection(background = false) {
+  if (!state.journey) return;
+  $$("#workspaceNav button").forEach((button) => button.classList.toggle("active", button.dataset.section === state.section));
+  if (!background) host.innerHTML = `<div class="loading-card">Loading ${h(state.section)}…</div>`;
+  try {
+    if (state.section === "dashboard") await renderDashboard();
+    if (state.section === "attendance") await renderAttendance();
+    if (state.section === "assignments") await renderAssignments();
+    if (state.section === "monitoring") await renderMonitoring();
+    if (state.section === "results") await renderResults();
+    if (state.section === "profiles") await renderProfiles();
+    if (state.section === "settings") await renderSettings();
+  } catch (error) {
+    if (!background) host.innerHTML = `<div class="warning-box critical"><strong>Could not load this page.</strong><br>${h(error.message)}</div>`;
+  }
+}
+
+function sectionHeading(eyebrow, title, subtitle, actions = "") {
+  return `<div class="section-heading"><div><p class="eyebrow">${h(eyebrow)}</p><h1>${h(title)}</h1><p class="muted">${h(subtitle)}</p></div><div class="heading-actions">${actions}</div></div>`;
+}
+
+async function renderDashboard() {
+  const data = await api(`/api/admin/journeys/${state.journey.id}/dashboard`);
+  const presentRecruits = data.journey.presentRecruitCount;
+  const presentEvaluators = data.journey.presentEvaluatorCount;
+  const expectedSubmissions = data.activeMonitoring ? data.activeMonitoring.recruits.reduce((sum, item) => sum + item.expected, 0) : 0;
+  const receivedSubmissions = data.activeMonitoring ? data.activeMonitoring.recruits.reduce((sum, item) => sum + item.submitted, 0) : 0;
+  host.innerHTML = `${sectionHeading("Live operations", data.journey.name, `${data.journey.eventDate} · Updates every five seconds`, `<button class="button ghost" id="refreshDashboard">Refresh</button>`)}
+    <div class="metric-grid">
+      <div class="metric-card"><small>Present recruits</small><strong>${presentRecruits}</strong><span class="subtle"> of ${data.journey.recruitCount}</span></div>
+      <div class="metric-card"><small>Present evaluators</small><strong>${presentEvaluators}</strong><span class="subtle"> of ${data.journey.evaluatorCount}</span></div>
+      <div class="metric-card"><small>Evaluator roles</small><div class="split"><span><strong>${data.overallEvaluators}</strong><small>Overall</small></span><span><strong>${data.dossardEvaluators}</strong><small>Dossard</small></span></div></div>
+      <div class="metric-card"><small>Active activity</small><strong style="font-size:1.15rem">${data.journey.currentActivity ? h(statusLabel(data.journey.currentActivity)) : "None"}</strong><span class="subtle">${data.roomPlan ? `${data.roomPlan.rooms.length} rooms published` : "No room plan"}</span></div>
+    </div>
+    ${data.activeMonitoring ? `<div class="panel"><div class="panel-header"><div><h2>Live submission progress</h2><p class="muted">${receivedSubmissions} of ${expectedSubmissions} expected evaluations received.</p></div><button class="button ghost small" id="goMonitoring">Open monitor</button></div><div class="progress"><span style="width:${expectedSubmissions ? receivedSubmissions / expectedSubmissions * 100 : 0}%"></span></div></div>` : ""}
+    ${data.warnings.length ? `<div class="panel"><h2>Unresolved warnings</h2>${data.warnings.map((warning) => `<div class="warning-box">${h(warning)}</div>`).join("")}</div>` : ""}
+    <div class="panel"><div class="panel-header"><div><h2>Activity lifecycle</h2><p class="muted">Published assignments and operational state.</p></div></div><div class="activity-strip">${data.activities.map((activity) => `<div class="activity-mini"><strong>${h(activity.name)}</strong><span class="status-pill ${activity.status}">${h(statusLabel(activity.status))}</span><small>${activity.assignmentRoundId ? "Assignments published" : "No published assignment"}</small></div>`).join("")}</div></div>
+    <div class="two-column"><div class="panel"><div class="panel-header"><h2>Provisional overall ranking</h2><button class="button ghost small" id="goResults">View all</button></div>${rankingTable(data.ranking)}</div>
+    <div class="panel"><h2>Dimension averages /1</h2><div class="member-list">${dimensionOrder.map((code) => `<div class="member-chip"><span>${h(data.dimensionNames?.[code] || dimensionNames[code])}</span><strong>${fmt(data.dimensionAverages?.[code] || 0)}</strong></div>`).join("")}</div><h3 style="margin-top:20px">Activity averages /5</h3><div class="member-list">${Object.entries(data.activityAverages).map(([code, value]) => `<div class="member-chip"><span>${h(statusLabel(code))}</span><strong>${fmt(value)}</strong></div>`).join("")}</div><div style="margin-top:18px" class="inline-actions"><button class="button primary" id="quickAttendance">Attendance</button><button class="button secondary" id="quickAssignments">Assignments</button></div></div></div>`;
+  $("#refreshDashboard").onclick = () => renderDashboard();
+  if ($("#goMonitoring")) $("#goMonitoring").onclick = () => switchSection("monitoring");
+  $("#goResults").onclick = () => switchSection("results");
+  $("#quickAttendance").onclick = () => switchSection("attendance");
+  $("#quickAssignments").onclick = () => switchSection("assignments");
+}
+
+function switchSection(section) {
+  state.section = section;
+  state.dirty = false;
+  renderSection();
+}
+
+function rankingTable(rows) {
+  if (!rows.length) return `<div class="empty-state"><p>No present recruits yet.</p></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Recruit</th><th>Score /20</th><th>Color</th><th>Missing</th></tr></thead><tbody>${rows.map((row) => `<tr><td><span class="rank-number">${row.overallRank}</span></td><td>${h(row.name)}</td><td><strong>${fmt(row.overallScore)}</strong></td><td><span class="color-chip ${row.color}">${h(row.color)}</span></td><td>${row.missingCount}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function makeAttendanceDraft() {
+  const source = state.attendanceTab === "recruits" ? state.journey.recruits : state.journey.evaluators;
+  state.attendanceDraft = Object.fromEntries(source.map((item) => [item.id, structuredClone(item)]));
+  state.dirty = false;
+}
+
+async function renderAttendance() {
+  await refreshJourney();
+  makeAttendanceDraft();
+  drawAttendance();
+}
+
+function drawAttendance() {
+  const isRecruit = state.attendanceTab === "recruits";
+  const rows = Object.values(state.attendanceDraft || {}).filter((item) => item.active).sort((a, b) => isRecruit
+    ? a.name.localeCompare(b.name)
+    : (a.role === b.role ? a.name.localeCompare(b.name) : a.role === "overall" ? -1 : 1));
+  host.innerHTML = `${sectionHeading("Confirmed roster", "Attendance", "Edits stay on this device until Save attendance is pressed.", `<button class="button ghost" id="attendanceRefresh">Reload confirmed</button>`)}
+    <div class="tabs"><button data-tab="recruits" class="${isRecruit ? "active" : ""}">Recruits</button><button data-tab="evaluators" class="${!isRecruit ? "active" : ""}">Evaluators</button></div>
+    <div class="panel"><div class="panel-header"><div class="toolbar"><input id="attendanceSearch" class="search-input" placeholder="Search by name or phone"><button class="button secondary" id="addPerson">+ Add ${isRecruit ? "recruit" : "evaluator"}</button><button class="button ghost" id="importPeople">Import Excel/CSV</button>${isRecruit ? `<button class="button ghost" id="bulkPhotos">Bulk photos</button>` : ""}</div><span class="subtle">${rows.filter((row) => row.present && row.active).length} ${isRecruit ? "present" : "active"}</span></div>
+      <div id="attendanceTable"></div>
+    </div>
+    <div class="sticky-save"><span id="unsavedLabel" class="subtle">No unsaved changes</span><button class="button ghost" id="discardAttendance" disabled>Discard</button><button class="button primary" id="saveAttendance" disabled>Save attendance</button></div>`;
+  renderAttendanceTable(rows);
+  $$(".tabs button", host).forEach((button) => button.onclick = () => {
+    if (!guardDirty()) return;
+    state.attendanceTab = button.dataset.tab;
+    makeAttendanceDraft();
+    drawAttendance();
+  });
+  $("#attendanceRefresh").onclick = renderAttendance;
+  $("#attendanceSearch").oninput = (event) => {
+    const query = event.target.value.toLowerCase();
+    renderAttendanceTable(rows.filter((item) => `${item.name} ${item.phoneNumber || ""}`.toLowerCase().includes(query)));
+  };
+  $("#addPerson").onclick = () => addPersonDialog(isRecruit);
+  $("#importPeople").onclick = () => importDialog(state.attendanceTab);
+  if (isRecruit) $("#bulkPhotos").onclick = bulkPhotosDialog;
+  $("#discardAttendance").onclick = () => { makeAttendanceDraft(); drawAttendance(); };
+  $("#saveAttendance").onclick = saveAttendance;
+}
+
+function dateTimeInput(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  const formatter = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Beirut", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+  return formatter.format(date).replace(" ", "T");
+}
+
+function nowBeirutInput() {
+  return dateTimeInput(new Date().toISOString());
+}
+
+function renderAttendanceTable(rows) {
+  const isRecruit = state.attendanceTab === "recruits";
+  const target = $("#attendanceTable");
+  const headers = isRecruit
+    ? "<th>Photo</th><th>Name</th><th>Phone number</th><th>Date of birth</th><th>Present</th><th>Arrival time (Beirut)</th><th>Photo action</th><th>Remove</th>"
+    : "<th>Name</th><th>Active</th><th>Role</th><th>Mandatory room</th><th>Remove</th>";
+  const body = rows.map((item) => {
+    const photoUrl = `/api/admin/journeys/${state.journey.id}/recruits/${item.id}/photo`;
+    const photo = item.hasPhoto
+      ? `<button type="button" class="photo-zoom-trigger" data-photo-viewer data-photo-url="${photoUrl}" data-photo-name="${h(item.name)}"><img class="avatar" src="${photoUrl}" alt="${h(item.name)}"></button>`
+      : `<span class="avatar placeholder">${h(item.name[0])}</span>`;
+    if (isRecruit) return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td>${photo}</td><td><strong>${h(item.name)}</strong></td><td><input class="table-input phone-input" inputmode="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></td><td><input class="table-input dob-input" type="date" value="${h(item.dateOfBirth || "")}" aria-label="${h(item.name)} date of birth"></td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><input class="table-input arrival-input" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></td><td><button class="button ghost small photo-button">${item.hasPhoto ? "Replace" : "Upload"}</button></td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
+    return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td><strong>${h(item.name)}</strong>${item.mandatoryRoom && !item.present ? `<small class="danger-text"> Required evaluator is inactive</small>` : ""}</td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} active" ${item.present ? "checked" : ""}></td><td><select class="table-input role-select"><option value="overall" ${item.role === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${item.role === "dossard" ? "selected" : ""}>Dossard</option></select></td><td>${item.mandatoryRoom ? `Room ${item.mandatoryRoom}` : "—"}</td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
+  }).join("");
+  target.innerHTML = `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
+  $$("tbody tr", target).forEach((row) => {
+    const item = state.attendanceDraft[row.dataset.id];
+    $(".delete-person", row).onclick = async () => {
+      if (state.dirty) return toast("Save or discard the current attendance edits before deleting someone.", "error");
+      if (!confirm(`Delete ${item.name} from this Journee? Existing historical evaluations will be preserved.`)) return;
+      try {
+        const result = await api(`/api/admin/journeys/${state.journey.id}/${isRecruit ? "recruits" : "evaluators"}/${item.id}`, mutation("DELETE"));
+        toast(result.disposition === "deleted" ? "Person deleted." : "Person removed; historical records were preserved.");
+        await renderAttendance();
+      } catch (error) { toast(error.message, "error"); }
+    };
+    $(".attendance-check", row).onchange = (event) => {
+      item.present = event.target.checked;
+      if (isRecruit) {
+        const input = $(".arrival-input", row);
+        input.disabled = !item.present;
+        if (item.present && !input.value) input.value = nowBeirutInput();
+        item.arrivalTime = item.present && input.value ? new Date(input.value).toISOString() : null;
+      }
+      markAttendanceDirty();
+    };
+    if (isRecruit) {
+      $(".phone-input", row).oninput = (event) => { item.phoneNumber = event.target.value; markAttendanceDirty(); };
+      $(".dob-input", row).onchange = (event) => { item.dateOfBirth = event.target.value || null; markAttendanceDirty(); };
+      $(".arrival-input", row).onchange = (event) => { item.arrivalTime = event.target.value ? new Date(event.target.value).toISOString() : null; markAttendanceDirty(); };
+      $(".photo-button", row).onclick = () => uploadSinglePhoto(item.id);
+    } else {
+      $(".role-select", row).onchange = (event) => { item.role = event.target.value; markAttendanceDirty(); };
+    }
+  });
+}
+
+function markAttendanceDirty() {
+  setDirty(true);
+  $("#unsavedLabel").innerHTML = `<span class="unsaved-dot"></span>Unsaved changes`;
+  $("#discardAttendance").disabled = false;
+  $("#saveAttendance").disabled = false;
+}
+
+async function saveAttendance() {
+  const isRecruit = state.attendanceTab === "recruits";
+  const items = Object.values(state.attendanceDraft).map((item) => isRecruit ? {
+    id: item.id, present: item.present, arrival_time: item.present ? item.arrivalTime : null, phone_number: item.phoneNumber || null, date_of_birth: item.dateOfBirth || null, active: item.active, base_version: item.version,
+  } : { id: item.id, present: item.present, role: item.role, active: item.active, base_version: item.version });
+  try {
+    await api(`/api/admin/journeys/${state.journey.id}/attendance/${state.attendanceTab}`, mutation("PUT", { items }));
+    toast("Attendance saved and published.");
+    state.dirty = false;
+    await renderAttendance();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+function addPersonDialog(isRecruit) {
+  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add ${isRecruit ? "recruit" : "evaluator"}</h2><div class="stack"><label>Full name<input name="name" required></label>${isRecruit ? `<label>Phone number (optional)<input name="phone" inputmode="tel"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label>` : `<label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label>`}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
+  $("#cancelModal").onclick = closeModal;
+  $("#personForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const body = isRecruit ? { name: form.get("name"), phone_number: form.get("phone") || null, date_of_birth: form.get("dateOfBirth") || null } : { name: form.get("name"), role: form.get("role"), add_to_directory: true };
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/${isRecruit ? "recruits" : "evaluators"}`, mutation("POST", body));
+      closeModal(); toast("Person added to the roster."); await renderAttendance();
+    } catch (error) { toast(error.message, "error"); }
+  };
+}
+
+function importDialog(kind) {
+  openModal(`<form id="importForm"><p class="eyebrow">Bulk roster</p><h2>Import ${h(kind)}</h2><p class="muted">Use an .xlsx or UTF-8 .csv file with a Name column. Recruit files may include Phone Number and Date of Birth (YYYY-MM-DD or DD/MM/YYYY); evaluator files may include Role.</p><label>File<input name="file" type="file" accept=".xlsx,.xlsm,.csv" required></label><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Import</button></div></form>`);
+  $("#cancelModal").onclick = closeModal;
+  $("#importForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const result = await api(`/api/admin/journeys/${state.journey.id}/import/${kind}`, { method: "POST", headers: { "X-CSRF-Token": state.csrf }, body: data });
+      closeModal(); toast(`${result.created.length} imported; ${result.skipped.length} skipped.`); await renderAttendance();
+    } catch (error) { toast(error.message, "error"); }
+  };
+}
+
+function bulkPhotosDialog() {
+  openModal(`<form id="photosForm"><p class="eyebrow">Photo matching</p><h2>Bulk upload recruit photos</h2><p class="muted">Name each image with the recruit's full name. Only unique matches are accepted.</p><label>Photos<input name="photos" type="file" accept="image/*" multiple required></label><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Match and upload</button></div></form>`);
+  $("#cancelModal").onclick = closeModal;
+  $("#photosForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    try {
+      const result = await api(`/api/admin/journeys/${state.journey.id}/recruits/photos`, { method: "POST", headers: { "X-CSRF-Token": state.csrf }, body: data });
+      closeModal(); toast(`${result.matched.length} photos matched; ${result.skipped.length} skipped.`); await renderAttendance();
+    } catch (error) { toast(error.message, "error"); }
+  };
+}
+
+function uploadSinglePhoto(recruitId) {
+  const input = $("#hiddenFile");
+  input.accept = "image/*";
+  input.multiple = false;
+  input.onchange = async () => {
+    if (!input.files[0]) return;
+    const data = new FormData();
+    data.append("photo", input.files[0]);
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/recruits/${recruitId}/photo`, { method: "POST", headers: { "X-CSRF-Token": state.csrf }, body: data });
+      toast("Photo saved."); await renderAttendance();
+    } catch (error) { toast(error.message, "error"); }
+    input.value = "";
+  };
+  input.click();
+}
+
+async function renderAssignments() {
+  if (state.assignmentActivity === "simulation") state.assignmentActivity = "skills";
+  const [publishedRooms, previewRooms, publishedRound, previewRound] = await Promise.all([
+    api(`/api/admin/journeys/${state.journey.id}/rooms?status=published`),
+    api(`/api/admin/journeys/${state.journey.id}/rooms?status=preview`),
+    api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}?status=published`),
+    api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}?status=preview`),
+  ]);
+  state.roomPlan = previewRooms || publishedRooms;
+  state.assignmentRound = previewRound || publishedRound;
+  const escapeState = state.journey.activities.find((item) => item.code === "escape_room");
+  const roomsFrozen = escapeState && ["open", "closed"].includes(escapeState.status);
+  const activityTabs = state.journey.activities.filter((activity) => activity.code !== "simulation").map((activity) => {
+    const name = activity.code === "skills" ? "Skills & Simulation" : activity.name;
+    return `<button data-activity="${activity.code}" class="${activity.code === state.assignmentActivity ? "active" : ""}">${h(name)}</button>`;
+  }).join("");
+  const assignmentName = state.assignmentActivity === "skills" ? "Skills & Simulation" : statusLabel(state.assignmentActivity);
+  host.innerHTML = `${sectionHeading("Distribution", "Rooms & assignments", "Preview changes privately, review warnings, then publish atomically.")}
+    <div class="panel"><div class="panel-header"><div><h2>Fixed room plan</h2><p class="muted">Used for Escape Room and Negotiation. Skills & Simulation use one global assignment for both activities.</p></div><div class="inline-actions"><label class="compact-field">Rooms<input id="roomCountInput" type="number" min="1" max="100" value="${state.journey.roomCount}"></label><button class="button ghost" id="saveRoomCount">Save room count</button><button class="button secondary" id="mandatoryRooms">Mandatory placements</button><button class="button ghost" id="previewRooms">${previewRooms ? "Regenerate preview" : "Generate preview"}</button>${previewRooms ? `<button class="button primary" id="publishRooms">${roomsFrozen ? "Publish override" : "Publish rooms"}</button>` : ""}</div></div>
+      ${state.roomPlan ? renderRoomPlan(state.roomPlan) : `<div class="empty-state"><p>Confirm attendance, then generate the room plan.</p></div>`}
+    </div>
+    <div class="panel"><div class="tabs">${activityTabs}</div><div class="panel-header"><div><h2>${h(assignmentName)} assignments</h2><p class="muted">${previewRound ? "Showing private preview" : publishedRound ? "Showing evaluator-visible published version" : "No assignment generated"}.${state.assignmentActivity === "skills" ? " One publication applies the exact pairing to both activities." : ""}</p></div><div class="inline-actions"><button class="button ghost" id="previewAssignments">${previewRound ? "Regenerate preview" : "Generate preview"}</button>${previewRound ? `<button class="button primary" id="publishAssignments">${state.assignmentActivity === "skills" ? "Publish for both activities" : "Publish assignments"}</button>` : ""}</div></div>
+      ${state.assignmentRound ? renderAssignmentRound(state.assignmentRound) : `<div class="empty-state"><p>Generate a reproducible assignment preview.</p></div>`}
+    </div>`;
+  $$(".tabs button", host).forEach((button) => button.onclick = () => { state.assignmentActivity = button.dataset.activity; renderAssignments(); });
+  $("#saveRoomCount").onclick = async () => {
+    const roomCount = Number($("#roomCountInput").value);
+    if (!Number.isInteger(roomCount) || roomCount < 1 || roomCount > 100) return toast("Enter a room count from 1 to 100.", "error");
+    if (roomCount === state.journey.roomCount) return toast("Room count is unchanged.");
+    const save = (reason = "") => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/count`, "PUT", { room_count: roomCount, reason }, "Room count saved. Generate a new room preview.", renderAssignments);
+    if (publishedRooms) reasonDialog("Change published room count", "Explain why the published room structure is being replaced. Existing historical assignments remain unchanged.", save);
+    else await save();
+  };
+  $("#previewRooms").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/preview`, "POST", {}, "Room preview generated.", renderAssignments);
+  if ($("#publishRooms")) $("#publishRooms").onclick = async () => {
+    if (roomsFrozen) {
+      reasonDialog("Override frozen room plan", "This changes room membership for future rounds only. Existing assignments and evaluations remain unchanged.", (reason) => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/${previewRooms.id}/publish-override`, "POST", { reason }, "Room override published for future rounds.", renderAssignments));
+    } else {
+      await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/${previewRooms.id}/publish`, "POST", {}, "Room plan published.", renderAssignments);
+    }
+  };
+  $("#previewAssignments").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}/preview`, "POST", {}, "Assignment preview generated.", renderAssignments);
+  if ($("#publishAssignments")) $("#publishAssignments").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${previewRound.id}/publish`, "POST", {}, state.assignmentActivity === "skills" ? "Skills & Simulation assignments published to evaluators." : "Assignments published to evaluators.", renderAssignments);
+  $("#mandatoryRooms").onclick = mandatoryRoomsDialog;
+  if (previewRooms) wireRoomEditors(previewRooms);
+  if (previewRound && previewRound.activityCode !== "simulation") wireAssignmentEditors(previewRound);
+}
+
+function warningHtml(warnings) {
+  return (warnings || []).map((warning) => `<div class="warning-box">${h(warning)}</div>`).join("");
+}
+
+function renderRoomPlan(plan) {
+  return `${warningHtml(plan.warnings)}<p class="subtle"><strong>${h(statusLabel(plan.status))} v${plan.version}</strong> · seed ${h(plan.seed)}</p><div class="room-grid">${plan.rooms.map((room) => `<article class="room-card"><h3>Room ${room.number}<span class="subtle">${room.recruits.length}R / ${room.evaluators.length}E</span></h3><small class="muted">Recruits</small><div class="member-list">${room.recruits.map((item) => `<div class="member-chip"><span>${h(item.name)}</span>${plan.status === "preview" ? roomSelector("recruit", item.id, room.number) : ""}</div>`).join("") || `<span class="subtle">None</span>`}</div><small class="muted" style="display:block;margin-top:12px">Evaluators</small><div class="member-list">${room.evaluators.map((item) => `<div class="member-chip"><span>${h(item.name)} ${item.mandatory ? "★" : ""}</span><span class="role-badge ${item.role}">${h(item.role)}</span>${plan.status === "preview" ? roomSelector("evaluator", item.id, room.number) : ""}</div>`).join("") || `<span class="subtle">None</span>`}</div></article>`).join("")}</div>${plan.status === "preview" ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="saveRoomMoves">Save manual room moves</button></div>` : ""}`;
+}
+
+function roomSelector(type, id, selected) {
+  return `<select class="room-move table-input" data-type="${type}" data-id="${id}">${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}" ${index + 1 === selected ? "selected" : ""}>Room ${index + 1}</option>`).join("")}</select>`;
+}
+
+function wireRoomEditors(plan) {
+  const button = $("#saveRoomMoves");
+  if (!button) return;
+  button.onclick = async () => {
+    const recruit_rooms = {}, evaluator_rooms = {};
+    $$(".room-move", host).forEach((select) => (select.dataset.type === "recruit" ? recruit_rooms : evaluator_rooms)[select.dataset.id] = Number(select.value));
+    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms }, "Manual room moves saved to preview.", renderAssignments);
+  };
+}
+
+function renderAssignmentRound(round) {
+  const editable = round.status === "preview" && round.activityCode !== "simulation";
+  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${h(statusLabel(round.status))} v${round.version}</strong> · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button ghost" id="saveAssignmentEdits">Save manual edits</button></div>` : round.activityCode === "simulation" && round.status === "preview" ? `<p class="subtle">Simulation is an exact, read-only copy of the published Skills pairing.</p>` : ""}`;
+}
+
+function wireAssignmentEditors(round) {
+  $$(".remove-assignment", host).forEach((button) => button.onclick = () => button.closest(".assignment-row").remove());
+  $("#addAssignment").onclick = () => {
+    const evaluators = state.journey.evaluators.filter((item) => item.active && item.present);
+    const recruits = state.journey.recruits.filter((item) => item.active && item.present);
+    openModal(`<form id="addPairForm"><h2>Add manual pairing</h2><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map((item) => `<option value="${item.id}">${h(item.name)} (${h(item.role)})</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map((item) => `<option value="${item.id}">${h(item.name)}</option>`).join("")}</select></label><label>Slot<select name="slot"><option value="1">Primary</option><option value="2">Secondary</option></select></label><label>Override reason (required for a forced repeat)<textarea name="reason"></textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add to preview</button></div></form>`);
+    $("#cancelModal").onclick = closeModal;
+    $("#addPairForm").onsubmit = (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const evaluator = evaluators.find((item) => item.id === form.get("evaluator"));
+      const recruit = recruits.find((item) => item.id === form.get("recruit"));
+      const slot = Number(form.get("slot"));
+      const existing = $$(".assignment-row", host);
+      if (existing.some((row) => row.dataset.evaluator === evaluator.id && row.dataset.recruit === recruit.id)) return toast("That evaluator–recruit pair already exists.", "error");
+      const recruitRows = existing.filter((row) => row.dataset.recruit === recruit.id);
+      if (recruitRows.length >= 2) return toast("A recruit cannot have more than two evaluators.", "error");
+      if (recruitRows.some((row) => Number(row.dataset.slot) === slot)) return toast(`This recruit already has a slot ${slot} evaluator.`, "error");
+      if (["escape_room", "negotiation"].includes(round.activityCode) && state.roomPlan) {
+        const recruitRoom = state.roomPlan.rooms.find((room) => room.recruits.some((item) => item.id === recruit.id))?.number;
+        const evaluatorRoom = state.roomPlan.rooms.find((room) => room.evaluators.some((item) => item.id === evaluator.id))?.number;
+        if (!recruitRoom || recruitRoom !== evaluatorRoom) return toast("Escape Room and Negotiation pairings must stay inside the same room.", "error");
+      }
+      const container = document.createElement("div");
+      container.className = "assignment-row";
+      container.dataset.evaluator = evaluator.id; container.dataset.recruit = recruit.id; container.dataset.slot = slot; container.dataset.room = ""; container.dataset.reason = form.get("reason");
+      container.innerHTML = `<span><strong>${h(evaluator.name)}</strong></span><span>→</span><span><strong>${h(recruit.name)}</strong> <small>slot ${h(form.get("slot"))}</small></span><button class="button ghost small remove-assignment">Remove</button>`;
+      $(".assignment-list").append(container);
+      $(".remove-assignment", container).onclick = () => container.remove();
+      closeModal();
+    };
+  };
+  $("#saveAssignmentEdits").onclick = async () => {
+    const items = $$(".assignment-row", host).map((row) => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, slot: Number(row.dataset.slot), room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
+    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items }, "Manual assignment edits saved to preview.", renderAssignments);
+  };
+}
+
+function mandatoryRoomsDialog() {
+  const evaluators = state.journey.evaluators.filter((item) => item.active);
+  openModal(`<form id="mandatoryForm"><p class="eyebrow">Room constraints</p><h2>Mandatory evaluator placements</h2><p class="muted">Leave Room blank for evaluators without a mandatory placement.</p><div class="stack" style="max-height:55vh;overflow:auto">${evaluators.map((item) => `<label>${h(item.name)} <span class="role-badge ${item.role}">${h(item.role)}</span><select name="${item.id}"><option value="" ${item.mandatoryRoom ? "" : "selected"}>No mandatory room</option>${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}" ${item.mandatoryRoom === index + 1 ? "selected" : ""}>Room ${index + 1}</option>`).join("")}</select></label>`).join("")}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save placements</button></div></form>`);
+  $("#cancelModal").onclick = closeModal;
+  $("#mandatoryForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const items = evaluators.filter((item) => form.get(item.id)).map((item) => ({ evaluator_id: item.id, room_number: Number(form.get(item.id)) }));
+    try { await api(`/api/admin/journeys/${state.journey.id}/mandatory-rooms`, mutation("PUT", { items })); await refreshJourney(); closeModal(); toast("Mandatory placements saved."); } catch (error) { toast(error.message, "error"); }
+  };
+}
+
+async function actionAndRefresh(url, method, body, message, refresh) {
+  try { await api(url, mutation(method, body)); toast(message); await refreshJourney(); await refresh(); } catch (error) { toast(error.message, "error"); }
+}
+
+async function renderMonitoring() {
+  await refreshJourney();
+  const data = await api(`/api/admin/journeys/${state.journey.id}/monitoring/${state.monitoringActivity}`);
+  const total = data.recruits.reduce((sum, item) => sum + item.expected, 0);
+  const submitted = data.recruits.reduce((sum, item) => sum + item.submitted, 0);
+  const remaining = Math.max(total - submitted, 0);
+  const activity = state.journey.activities.find((item) => item.code === state.monitoringActivity);
+  const skills = state.journey.activities.find((item) => item.code === "skills");
+  const simulation = state.journey.activities.find((item) => item.code === "simulation");
+  const pairStatus = skills.status === simulation.status ? skills.status : null;
+  const pairButton = ["skills", "simulation"].includes(state.monitoringActivity) && pairStatus
+    ? pairStatus === "not_started" ? `<button class="button primary" id="openPair">Open Skills & Simulation</button>`
+      : pairStatus === "open" ? `<button class="button danger" id="closePair">Close both</button>`
+      : `<button class="button secondary" id="reopenPair">Reopen both</button>` : "";
+  const simulatorPanel = state.testToolsEnabled ? `<div class="panel testing-panel"><div class="panel-header"><div><p class="eyebrow">Development-only testing tool</p><h2>Evaluation simulator</h2><p class="muted">Acts as the assigned evaluators and submits valid randomized ${h(data.activityName || activity.name)} forms through the normal scoring and version-history workflow.</p></div><span class="status-pill warning">Not available in production</span></div>
+    ${activity.status !== "open" ? `<div class="warning-box">Open ${h(data.activityName || activity.name)} before using the simulator.</div>` : total === 0 ? `<div class="empty-state"><p>No published evaluator tasks are assigned to this activity.</p></div>` : remaining === 0 ? `<div class="empty-state"><p>All ${total} assigned evaluations are already submitted.</p></div>` : `<div class="simulator-controls"><label class="activation-check"><input id="activateSimulator" type="checkbox" ${state.simulatorActivated ? "checked" : ""}> I understand this creates real test submissions in this Journee</label><label>Evaluations to complete<select id="simulatorCount" ${state.simulatorActivated ? "" : "disabled"}><option value="">All remaining (${remaining})</option>${Array.from({ length: remaining }, (_, index) => `<option value="${index + 1}">${index + 1} of ${remaining}</option>`).join("")}</select></label><button class="button danger" id="runSimulator" ${state.simulatorActivated ? "" : "disabled"}>Run simulated evaluations</button></div>`}
+    <p class="subtle">Already submitted evaluations are never overwritten. Every generated form is labeled in its comment and audit history.</p></div>` : "";
+  host.innerHTML = `${sectionHeading("Live submissions", "Activity control & monitoring", "Activities open one at a time, except Skills and Simulation which may run together.", `<button class="button ghost" id="refreshMonitoring">Refresh now</button>`)}
+    <div class="activity-control-grid">${state.journey.activities.map((item) => `<article class="activity-control-card ${item.code === state.monitoringActivity ? "selected" : ""}"><div class="panel-header"><h3>${h(item.name)}</h3><span class="status-pill ${item.status}">${h(statusLabel(item.status))}</span></div><button class="button ghost small select-monitor" data-code="${item.code}">Monitor</button></article>`).join("")}</div>
+    <div class="panel" style="margin-top:18px"><div class="panel-header"><div><h2>${h(data.activityName || activity.name)}</h2><p class="muted">${submitted} of ${total} expected evaluations received.</p></div><div class="inline-actions">${pairButton}${activity.status === "not_started" ? `<button class="button ghost" id="openActivity">Open only this activity</button>` : activity.status === "open" ? `<button class="button ghost" id="closeActivity">Close only this activity</button>` : `<button class="button ghost" id="reopenActivity">Reopen only this activity</button>`}</div></div><div class="progress"><span style="width:${total ? submitted / total * 100 : 0}%"></span></div>
+      <div class="segmented"><button data-mode="recruits" class="${state.monitoringMode === "recruits" ? "active" : ""}">By recruit</button><button data-mode="evaluators" class="${state.monitoringMode === "evaluators" ? "active" : ""}">By evaluator</button></div>
+      <div id="monitorTable" style="margin-top:14px">${monitorTable(data)}</div>
+    </div>${simulatorPanel}`;
+  $$(".select-monitor", host).forEach((button) => button.onclick = () => { state.monitoringActivity = button.dataset.code; state.simulatorActivated = false; renderMonitoring(); });
+  $$(".segmented button", host).forEach((button) => button.onclick = () => { state.monitoringMode = button.dataset.mode; renderMonitoring(); });
+  $("#refreshMonitoring").onclick = renderMonitoring;
+  if ($("#openActivity")) $("#openActivity").onclick = () => lifecycleAction("open");
+  if ($("#closeActivity")) $("#closeActivity").onclick = () => lifecycleAction("close");
+  if ($("#reopenActivity")) $("#reopenActivity").onclick = () => reasonDialog("Reopen activity", "Explain why evaluator editing is being reopened.", (reason) => lifecycleAction("reopen", reason));
+  if ($("#openPair")) $("#openPair").onclick = () => pairedLifecycleAction("open");
+  if ($("#closePair")) $("#closePair").onclick = () => pairedLifecycleAction("close");
+  if ($("#reopenPair")) $("#reopenPair").onclick = () => reasonDialog("Reopen Skills & Simulation", "Explain why both activities are being reopened.", (reason) => pairedLifecycleAction("reopen", reason));
+  if ($("#activateSimulator")) $("#activateSimulator").onchange = (event) => {
+    state.simulatorActivated = event.target.checked;
+    $("#simulatorCount").disabled = !state.simulatorActivated;
+    $("#runSimulator").disabled = !state.simulatorActivated;
+  };
+  if ($("#runSimulator")) $("#runSimulator").onclick = runEvaluationSimulator;
+  $$(".submission-detail", host).forEach((button) => button.onclick = () => showSubmissionDetail(button.dataset.id));
+}
+
+async function runEvaluationSimulator() {
+  if (!state.simulatorActivated) return;
+  const rawCount = $("#simulatorCount").value;
+  const count = rawCount ? Number(rawCount) : null;
+  const label = count ? `${count} missing evaluation${count === 1 ? "" : "s"}` : "all remaining evaluations";
+  if (!confirm(`Generate and submit ${label} for ${statusLabel(state.monitoringActivity)}? These are real test records and will affect monitoring and results.`)) return;
+  const button = $("#runSimulator");
+  button.disabled = true;
+  try {
+    const result = await api(`/api/admin/journeys/${state.journey.id}/testing/simulate/${state.monitoringActivity}`, mutation("POST", { count }, { "Idempotency-Key": uid() }));
+    state.simulatorActivated = false;
+    toast(`${result.completedCount} simulated evaluation${result.completedCount === 1 ? "" : "s"} submitted; ${result.remainingCount} remaining.`);
+    await refreshJourney();
+    await renderMonitoring();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+  }
+}
+
+function monitorTable(data) {
+  if (state.monitoringMode === "recruits") return `<div class="table-wrap"><table><thead><tr><th>Recruit</th><th>Expected</th><th>Received</th><th>Status</th></tr></thead><tbody>${data.recruits.map((item) => `<tr><td>${h(item.name)}</td><td>${item.expected}</td><td>${item.submitted}</td><td><span class="status-pill ${item.submitted === item.expected && item.expected ? "completed" : "warning"}">${item.submitted === item.expected && item.expected ? "Complete" : "Incomplete"}</span></td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Assigned recruit(s)</th><th>Received</th><th>Details</th></tr></thead><tbody>${data.evaluators.map((item) => `<tr><td>${h(item.name)}</td><td><span class="role-badge ${item.role}">${h(item.role)}</span></td><td>${item.tasks.map((task) => h(task.recruitName)).join(", ")}</td><td>${item.tasks.filter((task) => task.submitted).length}/${item.tasks.length}</td><td>${item.tasks.filter((task) => task.submissionId).map((task) => `<button class="button ghost small submission-detail" data-id="${task.submissionId}">${h(task.recruitName)}</button>`).join(" ") || "—"}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+async function showSubmissionDetail(submissionId) {
+  try {
+    const detail = await api(`/api/admin/journeys/${state.journey.id}/submissions/${submissionId}`);
+    const values = detail.activityCode === "sport" ? detail.raw : detail.responses;
+    const closed = state.journey.activities.find((item) => item.code === detail.activityCode)?.status === "closed";
+    openModal(`<form id="correctionForm"><p class="eyebrow">Evaluation detail</p><h2>${h(detail.recruitName)} · ${h(detail.activityName)}</h2><p class="muted">${h(detail.evaluatorName)} · v${detail.version} · ${fmt(detail.score)} /5</p><div class="stack" style="max-height:48vh;overflow:auto">${detail.rubric.criteria.map((criterion) => `<label>${h(criterion.name)}<small class="muted">${h(criterion.explanation)}</small><input name="${criterion.key}" ${criterion.inputType === "grade" ? `type="number" min="0" max="5" step="0.1"` : criterion.inputType === "integer" ? `type="number" min="0" step="1"` : `type="text"`} value="${h(values[criterion.key] ?? "")}" ${closed ? "" : "disabled"} required></label>`).join("")}<label>Comments<textarea name="comments" ${closed ? "" : "disabled"}>${h(detail.comments)}</textarea></label>${closed ? `<label>Correction reason<textarea name="reason" required></textarea></label>` : `<div class="warning-box">Close the activity before making an admin correction.</div>`}</div><h3 style="margin-top:16px">Edit history</h3><div class="audit-list">${detail.history.map((item) => `<div class="audit-item"><small>${localDateTime(item.createdAt)}</small><span>${h(item.actorName)} · v${item.version}</span><span>${fmt(item.score)} /5${item.reason ? ` · ${h(item.reason)}` : ""}</span></div>`).join("")}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Close</button>${closed ? `<button class="button primary">Save correction</button>` : ""}</div></form>`);
+    $("#cancelModal").onclick = closeModal;
+    if (closed) $("#correctionForm").onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const responses = {}, raw = {};
+      for (const criterion of detail.rubric.criteria) {
+        if (detail.activityCode === "sport") raw[criterion.key] = form.get(criterion.key);
+        else responses[criterion.key] = Number(form.get(criterion.key));
+      }
+      try {
+        await api(`/api/admin/journeys/${state.journey.id}/submissions/${submissionId}/correct`, mutation("POST", { responses, raw, comments: form.get("comments"), reason: form.get("reason") }));
+        closeModal(); toast("Evaluation correction saved as a new version."); await renderSection();
+      } catch (error) { toast(error.message, "error"); }
+    };
+  } catch (error) { toast(error.message, "error"); }
+}
+
+async function lifecycleAction(action, reason = "") {
+  if (action === "close" && !confirm("Close this activity and lock evaluator editing?")) return;
+  await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.monitoringActivity}/${action}`, "POST", { reason }, `Activity ${action === "reopen" ? "reopened" : `${action}ed`}.`, renderMonitoring);
+}
+
+async function pairedLifecycleAction(action, reason = "") {
+  if (action === "close" && !confirm("Close Skills and Simulation and lock both sets of evaluations?")) return;
+  await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/skills-simulation/${action}`, "POST", { reason }, `Skills and Simulation ${action === "reopen" ? "reopened" : `${action}ed`} together.`, renderMonitoring);
+}
+
+function reasonDialog(title, text, callback) {
+  openModal(`<form id="reasonForm"><h2>${h(title)}</h2><p class="muted">${h(text)}</p><label>Required reason<textarea name="reason" required></textarea></label><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Confirm</button></div></form>`);
+  $("#cancelModal").onclick = closeModal;
+  $("#reasonForm").onsubmit = (event) => { event.preventDefault(); const reason = new FormData(event.currentTarget).get("reason"); closeModal(); callback(reason); };
+}
+
+async function renderResults() {
+  const results = await api(`/api/admin/journeys/${state.journey.id}/results`);
+  const dimensionTabs = dimensionOrder.map((code) => `<button data-result="dimension:${code}" class="${state.resultsActivity === `dimension:${code}` ? "active" : ""}">${h(results.dimensionNames?.[code] || dimensionNames[code])}</button>`);
+  const activityTabs = state.journey.activities.map((item) => `<button data-result="activity:${item.code}" class="${state.resultsActivity === `activity:${item.code}` ? "active" : ""}">${h(item.name)}</button>`);
+  const tabs = [`<button data-result="overall" class="${state.resultsActivity === "overall" ? "active" : ""}">Overall /20</button>`, ...dimensionTabs, ...activityTabs].join("");
+  let rows = [...results.rows];
+  let table;
+  if (state.resultsActivity === "overall") {
+    rows.sort((a, b) => a.overallRank - b.overallRank);
+    table = overallResultsTable(rows);
+  } else if (state.resultsActivity.startsWith("dimension:")) {
+    const code = state.resultsActivity.split(":")[1];
+    rows.sort((a, b) => a.dimensions[code].rank - b.dimensions[code].rank);
+    table = dimensionResultsTable(rows, code, results.dimensionAverages[code]);
+  } else {
+    const code = state.resultsActivity.replace("activity:", "");
+    rows.sort((a, b) => a.activities[code].rank - b.activities[code].rank);
+    table = activityResultsTable(rows, code, results.activityAverages[code]);
+  }
+  host.innerHTML = `${sectionHeading("Scores", "Results & rankings", "Overall /20 is calculated from six dimensions plus the general assessment. Activity statistics remain available in the activity tabs.", `<a class="button ghost" href="/api/admin/journeys/${state.journey.id}/results.csv">CSV</a><a class="button primary" href="/api/admin/journeys/${state.journey.id}/export.xlsx">Full Excel export</a>`)}<div class="panel"><p class="formula-note">${h(results.formula)}</p><div class="tabs">${tabs}</div>${table}</div>`;
+  $$(".tabs button", host).forEach((button) => button.onclick = () => { state.resultsActivity = button.dataset.result; renderResults(); });
+}
+
+function overallResultsTable(rows) {
+  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Recruit</th><th>Overall /20</th>${dimensionOrder.map((code) => `<th>${h(dimensionNames[code])} /1</th>`).join("")}<th>General /1</th><th>Color</th><th>Missing</th></tr></thead><tbody>${rows.map((row) => `<tr><td><span class="rank-number">${row.overallRank}</span></td><td>${h(row.name)}</td><td><strong>${fmt(row.overallScore)}</strong></td>${dimensionOrder.map((code) => `<td>${fmt(row.dimensions[code].score)}</td>`).join("")}<td>${fmt(row.generalAverage)}</td><td><span class="color-chip ${row.color}">${h(row.color)}</span></td><td>${row.missingCount}</td></tr>`).join("")}</tbody></table></div>`;
+}
+
+function dimensionResultsTable(rows, code, average) {
+  return `<p class="muted">Dimension average: <strong>${fmt(average)} /1</strong></p><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Recruit</th><th>Grade /1</th><th>Coverage</th><th>Status</th></tr></thead><tbody>${rows.map((row) => { const item = row.dimensions[code]; return `<tr><td><span class="rank-number">${item.rank}</span></td><td>${h(row.name)}</td><td><strong>${fmt(item.score)}</strong></td><td>${Math.round((item.availableWeight || 0) * 100)}%</td><td><span class="status-pill ${item.complete ? "completed" : "warning"}">${item.complete ? "Complete" : "Incomplete"}</span></td></tr>`; }).join("")}</tbody></table></div>`;
+}
+
+function activityResultsTable(rows, code, average) {
+  return `<p class="muted">Activity average: <strong>${fmt(average)} /5</strong></p><div class="table-wrap"><table><thead><tr><th>Rank</th><th>Recruit</th><th>Grade /5</th><th>Submissions</th><th>Status</th></tr></thead><tbody>${rows.map((row) => { const item = row.activities[code]; return `<tr><td><span class="rank-number">${item.rank}</span></td><td>${h(row.name)}</td><td><strong>${fmt(item.score)}</strong></td><td>${item.submitted}/${item.expected}</td><td><span class="status-pill ${item.complete ? "completed" : "warning"}">${item.complete ? "Complete" : "Incomplete"}</span></td></tr>`; }).join("")}</tbody></table></div>`;
+}
+
+async function renderProfiles() {
+  const recruits = state.journey.recruits.filter((item) => item.active).sort((a, b) => a.name.localeCompare(b.name));
+  if (!recruits.some((item) => item.id === state.profileId)) state.profileId = recruits[0]?.id || null;
+  const profile = state.profileId ? await api(`/api/admin/journeys/${state.journey.id}/recruits/${state.profileId}/profile`) : null;
+  host.innerHTML = `${sectionHeading("Individual record", "Recruit profile", "Grades, rankings, comments, and correction history in one view.", `<select id="profileSelect">${recruits.map((item) => `<option value="${item.id}" ${item.id === state.profileId ? "selected" : ""}>${h(item.name)}</option>`).join("")}</select>`)}${profile ? profileHtml(profile) : `<div class="empty-state"><h2>No recruits</h2><p>Add a recruit to begin.</p></div>`}`;
+  if ($("#profileSelect")) $("#profileSelect").onchange = (event) => { if (!guardDirty()) return; state.profileId = event.target.value; state.dirty = false; renderProfiles(); };
+  if (profile) wireProfile(profile);
+}
+
+function profileHtml(profile) {
+  const result = profile.result || { activities: {}, dimensions: {}, overallScore: 0, overallRank: "—", color: "red", missingCount: 9 };
+  const arrival = profile.recruit.arrivalTime ? dateTimeInput(profile.recruit.arrivalTime).split("T")[1] : "Not recorded";
+  return `<div class="panel"><div class="profile-header">${profile.photoUrl ? `<button type="button" class="photo-zoom-trigger profile-photo-trigger" data-photo-viewer data-photo-url="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · Born ${h(profile.recruit.dateOfBirth || "Not recorded")} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${h(arrival)} <span>Asia/Beirut · use when grading punctuality</span></p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
+    <div class="panel"><div class="panel-header"><div><h2>Dimension performance</h2><p class="muted">These six grades, plus the general assessment, determine the overall /20. Select a dimension to inspect every criterion and evaluator grade.</p></div></div><div class="profile-performance"><div class="radar-wrap">${dimensionRadar(result)}</div><div class="profile-dimension-grid">${dimensionOrder.map((code) => { const item = result.dimensions?.[code] || { score: 0, rank: "—", complete: false }; return `<button type="button" class="profile-activity dimension-card" data-dimension="${code}" aria-label="View ${h(dimensionNames[code])} criterion grading"><small>${h(dimensionNames[code])}</small><strong>${fmt(item.score)} /1</strong><small>Rank ${item.rank ?? "—"} · ${item.complete ? "Complete" : "Incomplete"}</small><span class="dimension-card-action">View criteria →</span></button>`; }).join("")}</div></div></div>
+    <div class="panel"><h2>Activity performance</h2><p class="muted">Activity scores and ranks are retained for operational analysis.</p><div class="profile-performance"><div class="radar-wrap">${activityRadar(result)}</div><div class="profile-activity-grid">${state.journey.activities.map((activity) => { const item = result.activities[activity.code] || { score: 0, rank: "—", submitted: 0, expected: 0 }; return `<div class="profile-activity"><small>${h(activity.name)}</small><strong>${fmt(item.score)} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.submitted}/${item.expected}</small></div>`; }).join("")}</div></div></div>
+    <div class="two-column"><div class="panel"><h2>General assessment</h2><p class="muted">The average of these three grades contributes one /1 component. Changes stay local until Save profile.</p><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="discardProfile">Discard</button><button class="button primary">Save profile</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p><p class="formula-note">(Six dimensions + General) × 20 / 7</p><p class="muted">A missing co-evaluator does not dilute available grades. A dimension with incomplete expected input stays flagged, and a fully missing component contributes zero.</p></div></div>
+    <div class="panel"><h2>Evaluator breakdown</h2>${Object.entries(profile.evaluations).map(([code, entries]) => `<h3 style="margin-top:16px">${h(statusLabel(code))}</h3>${entries.length ? `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Score</th><th>Status</th><th>Comment</th><th>Details</th></tr></thead><tbody>${entries.map((entry) => `<tr><td>${h(entry.evaluatorName)}</td><td>${h(entry.evaluatorRole)}</td><td>${entry.submission ? fmt(entry.submission.score) : "—"}</td><td>${entry.submission ? h(statusLabel(entry.submission.status)) : "Missing"}</td><td>${h(entry.submission?.comments || "")}</td><td>${entry.submission ? `<button type="button" class="button ghost small submission-detail" data-id="${entry.submission.id}">View</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No published evaluator assignment.</p>`}`).join("")}</div>
+    <div class="panel"><h2>Profile audit history</h2>${profile.history.length ? `<div class="audit-list">${profile.history.map(auditItem).join("")}</div>` : `<p class="muted">No profile changes yet.</p>`}</div>`;
+}
+
+function activityRadar(result) {
+  const activities = state.journey.activities;
+  const cx = 160, cy = 145, radius = 104;
+  const point = (index, value) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / activities.length;
+    return [cx + Math.cos(angle) * radius * value, cy + Math.sin(angle) * radius * value];
+  };
+  const polygon = (value) => activities.map((_, index) => point(index, value).join(",")).join(" ");
+  const dataPoints = activities.map((activity, index) => point(index, Math.max(0, Math.min(5, Number(result.activities?.[activity.code]?.score || 0))) / 5));
+  return `<svg class="activity-radar" viewBox="0 0 320 300" role="img" aria-label="Radar chart of activity grades out of five">
+    ${[.2,.4,.6,.8,1].map((level) => `<polygon class="radar-grid" points="${polygon(level)}"></polygon>`).join("")}
+    ${activities.map((_, index) => { const p = point(index, 1); return `<line class="radar-axis" x1="${cx}" y1="${cy}" x2="${p[0]}" y2="${p[1]}"></line>`; }).join("")}
+    <polygon class="radar-data" points="${dataPoints.map((p) => p.join(",")).join(" ")}"></polygon>
+    ${dataPoints.map((p) => `<circle class="radar-dot" cx="${p[0]}" cy="${p[1]}" r="4"></circle>`).join("")}
+    ${activities.map((activity, index) => { const p = point(index, 1.2); const score = fmt(result.activities?.[activity.code]?.score || 0); return `<text class="radar-label" x="${p[0]}" y="${p[1]}" text-anchor="middle" dominant-baseline="middle"><tspan x="${p[0]}">${h(activity.name)}</tspan><tspan x="${p[0]}" dy="15">${score}/5</tspan></text>`; }).join("")}
+  </svg>`;
+}
+
+function dimensionRadar(result) {
+  const items = dimensionOrder.map((code) => ({ code, name: dimensionNames[code], score: Number(result.dimensions?.[code]?.score || 0) }));
+  const cx = 180, cy = 155, radius = 104;
+  const point = (index, value) => {
+    const angle = -Math.PI / 2 + index * Math.PI * 2 / items.length;
+    return [cx + Math.cos(angle) * radius * value, cy + Math.sin(angle) * radius * value];
+  };
+  const polygon = (value) => items.map((_, index) => point(index, value).join(",")).join(" ");
+  const dataPoints = items.map((item, index) => point(index, Math.max(0, Math.min(1, item.score))));
+  return `<svg class="activity-radar" viewBox="0 0 360 320" role="img" aria-label="Radar chart of the six dimension grades out of one">
+    ${[.2,.4,.6,.8,1].map((level) => `<polygon class="radar-grid" points="${polygon(level)}"></polygon>`).join("")}
+    ${items.map((_, index) => { const p = point(index, 1); return `<line class="radar-axis" x1="${cx}" y1="${cy}" x2="${p[0]}" y2="${p[1]}"></line>`; }).join("")}
+    <polygon class="radar-data" points="${dataPoints.map((p) => p.join(",")).join(" ")}"></polygon>
+    ${dataPoints.map((p) => `<circle class="radar-dot" cx="${p[0]}" cy="${p[1]}" r="4"></circle>`).join("")}
+    ${items.map((item, index) => { const p = point(index, 1.24); return `<text class="radar-label" x="${p[0]}" y="${p[1]}" text-anchor="middle" dominant-baseline="middle"><tspan x="${p[0]}">${h(item.name)}</tspan><tspan x="${p[0]}" dy="15">${fmt(item.score)}/1</tspan></text>`; }).join("")}
+  </svg>`;
+}
+
+function showDimensionBreakdown(profile, code) {
+  const breakdown = profile.dimensionBreakdowns?.[code];
+  if (!breakdown) {
+    toast("The dimension breakdown is not available.", "error");
+    return;
+  }
+  const activitySections = breakdown.activities.map((activity) => `
+    <section class="dimension-activity-section">
+      <div class="panel-header"><div><h3>${h(activity.name)}</h3><p class="muted">Activity grade: ${fmt(activity.activityScore)} /5</p></div></div>
+      <div class="dimension-criteria-list">${activity.criteria.map((criterion) => `
+        <article class="dimension-criterion">
+          <div class="dimension-criterion-heading"><div><strong>${h(criterion.name)}</strong><p class="muted">${h(criterion.explanation)}</p></div><div class="criterion-math"><span>Weight ${fmt(criterion.weight * 100)}%</span><strong>${criterion.criterionAverage == null ? "—" : `${fmt(criterion.criterionAverage)} /5`}</strong><small>Contribution ${fmt(criterion.weightedContribution)} /1</small></div></div>
+          <div class="criterion-evaluators">${criterion.evaluators.length ? criterion.evaluators.map((evaluator) => `<div class="criterion-evaluator ${evaluator.grade == null ? "missing" : ""}"><div><strong>${h(evaluator.evaluatorName)}</strong><span class="role-badge ${h(evaluator.evaluatorRole)}">${h(evaluator.evaluatorRole)}</span></div><div class="criterion-grade"><strong>${evaluator.grade == null ? "Missing" : `${fmt(evaluator.grade)} /5`}</strong>${evaluator.rawValue != null ? `<small>Result: ${h(evaluator.rawValue)}${criterion.unit ? ` ${h(criterion.unit)}` : ""}</small>` : ""}<small>${h(statusLabel(evaluator.status))}</small></div></div>`).join("") : `<p class="subtle">No published evaluator assignment for this activity.</p>`}</div>
+        </article>`).join("")}</div>
+    </section>`).join("");
+  openModal(`<div><p class="eyebrow">Dimension grading</p><div class="panel-header"><div><h2>${h(profile.recruit.name)} · ${h(breakdown.name)}</h2><p class="muted">Every submitted evaluator grade used to calculate this dimension.</p></div><div class="dimension-modal-score"><strong>${fmt(breakdown.score)} /1</strong><small>Rank ${breakdown.rank ?? "—"} · ${breakdown.complete ? "Complete" : "Incomplete"}</small></div></div><div class="dimension-breakdown-scroll">${activitySections}</div><div class="modal-actions"><button type="button" class="button primary" id="cancelModal">Close</button></div></div>`, { wide: true });
+  $("#cancelModal").onclick = closeModal;
+}
+
+function wireProfile(profile) {
+  const form = $("#profileForm");
+  form.oninput = () => setDirty(true);
+  $("#discardProfile").onclick = () => { state.dirty = false; renderProfiles(); };
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const value = (key) => data.get(key) === "" ? null : Number(data.get(key));
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment"), base_version: profile.assessment.version }));
+      state.dirty = false; toast("Recruit profile saved."); await renderProfiles();
+    } catch (error) { toast(error.message, "error"); }
+  };
+  $$(".dimension-card", host).forEach((button) => button.onclick = () => showDimensionBreakdown(profile, button.dataset.dimension));
+  $$(".submission-detail", host).forEach((button) => button.onclick = () => showSubmissionDetail(button.dataset.id));
+}
+
+function auditItem(item) {
+  return `<div class="audit-item"><small>${localDateTime(item.createdAt)}</small><span><strong>${h(item.actorName)}</strong> · ${h(item.actorType || "admin")}</span><span>${h(statusLabel(item.action))}${item.reason ? `<br><small class="muted">Reason: ${h(item.reason)}</small>` : ""}</span></div>`;
+}
+
+async function renderSettings() {
+  await refreshJourney();
+  const auditEvents = await api(`/api/admin/journeys/${state.journey.id}/audit?limit=500`);
+  const evalUrl = `${location.origin}/evaluate`;
+  host.innerHTML = `${sectionHeading("Configuration", "Settings, audit & export", "Manage event metadata, evaluator access, archives, and complete data extracts.")}
+    <div class="two-column"><div class="panel"><h2>Journee metadata</h2><form id="settingsForm" class="stack"><label>Name<input name="name" value="${h(state.journey.name)}" required></label><label>Date<input name="date" type="date" value="${h(state.journey.eventDate)}" required></label><label>Status<select name="status">${["draft", "ready", "active", "completed", "archived"].map((value) => `<option value="${value}" ${value === state.journey.status ? "selected" : ""}>${h(statusLabel(value))}</option>`).join("")}</select></label><button class="button primary">Save settings</button></form></div>
+    <div class="panel"><h2>Permanent evaluator link & QR</h2><p class="muted">This link never changes. It automatically opens the single Journee whose status is Active.</p><input readonly value="${h(evalUrl)}" id="evalLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyLink">Copy link</button></div><img src="/api/admin/journeys/${state.journey.id}/evaluator-qr.png" alt="Permanent evaluator link QR code" style="width:180px;max-width:100%;border:1px solid var(--line);border-radius:12px"></div></div>
+    <div class="panel"><div class="panel-header"><div><h2>Exports</h2><p class="muted">Excel includes rosters, rooms, assignments, raw answers, scores, rankings, comments, and audit.</p></div></div><div class="inline-actions"><a class="button primary" href="/api/admin/journeys/${state.journey.id}/export.xlsx">Full Excel workbook</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/results.csv">Results CSV</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/photos.zip">Photo ZIP</a><button class="button secondary" id="duplicateCurrent">Duplicate Journee</button></div></div>
+    <div class="panel"><div class="panel-header"><h2>Audit history</h2><span class="subtle">${auditEvents.length} most recent events</span></div>${auditEvents.length ? `<div class="audit-list">${auditEvents.map(auditItem).join("")}</div>` : `<p class="muted">No audit events.</p>`}</div>
+    <div class="panel"><h2 class="danger-text">Archive or delete</h2><p class="muted">Archiving preserves the Journee. Permanent deletion removes its attendance, rooms, assignments, evaluations, photos, and audit history.</p><div class="inline-actions"><button class="button ghost" id="archiveCurrent">Archive Journee</button><button class="button danger" id="deleteCurrent">Permanently delete Journee</button></div></div>`;
+  const form = $("#settingsForm");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}`, mutation("PATCH", { name: data.get("name"), event_date: data.get("date"), status: data.get("status"), base_version: state.journey.version }));
+      toast("Journee settings saved."); await renderSettings();
+    } catch (error) { toast(error.message, "error"); }
+  };
+  $("#copyLink").onclick = async () => { await navigator.clipboard.writeText(evalUrl); toast("Evaluator link copied."); };
+  $("#duplicateCurrent").onclick = () => duplicateJourney(state.journey.id);
+  $("#archiveCurrent").onclick = () => archiveCurrent();
+  $("#deleteCurrent").onclick = async () => {
+    if (!confirm(`Permanently delete ${state.journey.name} and all associated data? This cannot be undone.`)) return;
+    try { await api(`/api/admin/journeys/${state.journey.id}`, mutation("DELETE")); toast("Journee permanently deleted."); state.journey = null; await loadLibrary(); } catch (error) { toast(error.message, "error"); }
+  };
+}
+
+async function archiveCurrent() {
+  if (!confirm("Archive this Journee?")) return;
+  try {
+    await api(`/api/admin/journeys/${state.journey.id}`, mutation("PATCH", { status: "archived", base_version: state.journey.version }));
+    toast("Journee archived."); state.journey = null; await loadLibrary();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+initialize();

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#b20d2d">
+  <title>LRC Journee Recruitment · Admin</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="admin-body">
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <section id="loginView" class="login-shell hidden">
+    <div class="login-card">
+      <div class="brand-mark">LRC</div>
+      <p class="eyebrow">Lebanese Red Cross</p>
+      <h1>Journee Recruitment</h1>
+      <p class="muted">Unlock the administration workspace.</p>
+      <form id="loginForm" class="stack">
+        <label>Admin display name<input name="displayName" autocomplete="name" required maxlength="120"></label>
+        <label>Shared password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary wide">Unlock workspace</button>
+      </form>
+      <p id="loginError" class="form-error" role="alert"></p>
+    </div>
+  </section>
+
+  <div id="appView" class="hidden">
+    <header class="topbar">
+      <button id="menuButton" class="icon-button mobile-only" aria-label="Open menu">☰</button>
+      <button id="libraryButton" class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Recruitment admin</small></span></button>
+      <div id="journeyCrumb" class="journey-crumb">Journee library</div>
+      <div class="top-actions"><span id="adminName" class="muted"></span><button id="logoutButton" class="button ghost small">Log out</button></div>
+    </header>
+
+    <main id="libraryView" class="page-shell">
+      <div class="page-heading">
+        <div><p class="eyebrow">Workspace</p><h1>Journee library</h1><p class="muted">Every event is saved as an independent workspace.</p></div>
+        <div class="heading-actions"><label class="checkbox-inline"><input id="showArchived" type="checkbox"> Show archived</label><button id="createJourneyButton" class="button primary">+ New Journee</button></div>
+      </div>
+      <div id="journeyGrid" class="journey-grid"></div>
+    </main>
+
+    <div id="workspaceView" class="workspace hidden">
+      <aside id="sidebar" class="sidebar">
+        <nav id="workspaceNav">
+          <button data-section="dashboard" class="active"><span>⌂</span> Live dashboard</button>
+          <button data-section="attendance"><span>✓</span> Attendance</button>
+          <button data-section="assignments"><span>⇄</span> Rooms & assignments</button>
+          <button data-section="monitoring"><span>●</span> Activity control</button>
+          <button data-section="results"><span>↗</span> Results</button>
+          <button data-section="profiles"><span>♙</span> Recruit profiles</button>
+          <button data-section="settings"><span>⚙</span> Settings & audit</button>
+        </nav>
+        <button id="backToLibrary" class="button ghost wide">← Journee library</button>
+      </aside>
+      <main id="sectionHost" class="content"></main>
+    </div>
+  </div>
+
+  <dialog id="modal" class="modal"><div id="modalBody"></div></dialog>
+  <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
+  <input id="hiddenFile" type="file" class="hidden">
+  <script type="module" src="/static/admin.js"></script>
+</body>
+</html>

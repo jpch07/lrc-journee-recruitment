@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==8.4.1
+pytest-cov==6.2.1
+playwright==1.54.0
+huggingface-hub==0.34.4

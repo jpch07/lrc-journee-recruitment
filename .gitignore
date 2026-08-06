@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+.env.*
+data/
+scripts/apply_2_august_details.py
+scripts/apply_2_august_pm_details.py
+scripts/import_2_august_phones.py
+tests/*.db*
+playwright-report/
+test-results/
