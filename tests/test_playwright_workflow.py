@@ -70,6 +70,34 @@ def test_admin_create_and_mobile_layout(tmp_path):
             page.wait_for_selector("#workspaceView:not(.hidden)")
             assert page.locator("#journeyCrumb").inner_text() == "Mobile Acceptance"
             assert page.evaluate("document.documentElement.scrollWidth") == page.evaluate("window.innerWidth")
+
+            page.click("#menuButton")
+            page.click('#workspaceNav button[data-section="attendance"]')
+            page.click('.tabs button[data-tab="evaluators"]')
+            page.wait_for_selector('#attendanceSearch[placeholder="Type evaluator name and press Enter"]')
+            assert page.locator("#attendanceTable tbody tr").count() == 82
+            page.fill("#attendanceSearch", "Wahle")
+            page.press("#attendanceSearch", "Enter")
+            page.fill("#attendanceSearch", "Andy")
+            page.press("#attendanceSearch", "Enter")
+            names = page.locator("#attendanceTable tbody tr td:first-child strong").all_inner_texts()
+            assert names[:3] == ["Wahle", "Andy", "Ala2"]
+            page.click("#saveAttendance")
+            page.wait_for_selector("#saveAttendance:disabled")
+
+            page.click("#menuButton")
+            page.click('#workspaceNav button[data-section="assignments"]')
+            page.click("#mandatoryRooms")
+            page.fill("#mandatorySearch", "Wahle")
+            page.press("#mandatorySearch", "Enter")
+            wahle_row = page.locator('.mandatory-row:has-text("Wahle")')
+            assert wahle_row.locator("select").input_value() == "1"
+            page.click("#mandatoryForm button.primary")
+            page.wait_for_selector("#modal", state="hidden")
+            page.click("#mandatoryRooms")
+            wahle_row = page.locator('.mandatory-row:has-text("Wahle")')
+            assert wahle_row.locator("select").input_value() == "1"
+            page.click("#cancelModal")
             browser.close()
     finally:
         server.terminate()

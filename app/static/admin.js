@@ -326,6 +326,29 @@ function makeAttendanceDraft() {
   state.dirty = false;
 }
 
+function normalizedName(value) {
+  return String(value || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function evaluatorAttendanceSort(a, b) {
+  const group = (item) => item.present ? (item.role === "overall" ? 0 : 1) : (item.role === "overall" ? 2 : 3);
+  return group(a) - group(b) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+}
+
+function evaluatorSearchMatches(evaluators, query) {
+  const normalized = normalizedName(query);
+  if (!normalized) return [];
+  return evaluators.filter((item) => normalizedName(item.name).includes(normalized)).sort(evaluatorAttendanceSort);
+}
+
+function resolveEvaluatorSearch(evaluators, query) {
+  const normalized = normalizedName(query);
+  const exact = evaluators.find((item) => normalizedName(item.name) === normalized);
+  if (exact) return exact;
+  const matches = evaluatorSearchMatches(evaluators, query);
+  return matches.length === 1 ? matches[0] : null;
+}
+
 async function renderAttendance() {
   await refreshJourney();
   makeAttendanceDraft();
@@ -336,10 +359,11 @@ function drawAttendance() {
   const isRecruit = state.attendanceTab === "recruits";
   const rows = Object.values(state.attendanceDraft || {}).filter((item) => item.active).sort((a, b) => isRecruit
     ? a.name.localeCompare(b.name)
-    : (a.role === b.role ? a.name.localeCompare(b.name) : a.role === "overall" ? -1 : 1));
+    : evaluatorAttendanceSort(a, b));
   host.innerHTML = `${sectionHeading("Confirmed roster", "Attendance", "Edits stay on this device until Save attendance is pressed.", `<button class="button ghost" id="attendanceRefresh">Reload confirmed</button>`)}
     <div class="tabs"><button data-tab="recruits" class="${isRecruit ? "active" : ""}">Recruits</button><button data-tab="evaluators" class="${!isRecruit ? "active" : ""}">Evaluators</button></div>
-    <div class="panel"><div class="panel-header"><div class="toolbar"><input id="attendanceSearch" class="search-input" placeholder="Search by name or phone"><button class="button secondary" id="addPerson">+ Add ${isRecruit ? "recruit" : "evaluator"}</button><button class="button ghost" id="importPeople">Import Excel/CSV</button>${isRecruit ? `<button class="button ghost" id="bulkPhotos">Bulk photos</button>` : ""}</div><span class="subtle">${rows.filter((row) => row.present && row.active).length} ${isRecruit ? "present" : "active"}</span></div>
+    <div class="panel attendance-panel"><div class="panel-header"><div class="toolbar">${isRecruit ? `<input id="attendanceSearch" class="search-input" placeholder="Search by name or phone"><button class="button secondary" id="addPerson">+ Add recruit</button><button class="button ghost" id="importPeople">Import Excel/CSV</button><button class="button ghost" id="bulkPhotos">Bulk photos</button>` : `<div class="evaluator-quick-toggle"><input id="attendanceSearch" class="search-input" autocomplete="off" placeholder="Type evaluator name and press Enter" aria-label="Toggle evaluator attendance"><div id="attendanceSuggestions" class="search-suggestions" role="listbox"></div></div><button class="button secondary" id="addPerson">+ Add evaluator not listed</button>`}</div><span id="attendanceCount" class="subtle">${rows.filter((row) => row.present).length} present</span></div>
+      ${isRecruit ? "" : `<p class="formula-note">Type a name and press Enter to toggle that evaluator Present/Absent. Ambiguous searches never change attendance.</p>`}
       <div id="attendanceTable"></div>
     </div>
     <div class="sticky-save"><span id="unsavedLabel" class="subtle">No unsaved changes</span><button class="button ghost" id="discardAttendance" disabled>Discard</button><button class="button primary" id="saveAttendance" disabled>Save attendance</button></div>`;
@@ -351,15 +375,67 @@ function drawAttendance() {
     drawAttendance();
   });
   $("#attendanceRefresh").onclick = renderAttendance;
-  $("#attendanceSearch").oninput = (event) => {
-    const query = event.target.value.toLowerCase();
-    renderAttendanceTable(rows.filter((item) => `${item.name} ${item.phoneNumber || ""}`.toLowerCase().includes(query)));
-  };
+  if (isRecruit) {
+    $("#attendanceSearch").oninput = (event) => {
+      const query = event.target.value.toLowerCase();
+      renderAttendanceTable(rows.filter((item) => `${item.name} ${item.phoneNumber || ""}`.toLowerCase().includes(query)));
+    };
+  } else wireEvaluatorAttendanceSearch();
   $("#addPerson").onclick = () => addPersonDialog(isRecruit);
-  $("#importPeople").onclick = () => importDialog(state.attendanceTab);
-  if (isRecruit) $("#bulkPhotos").onclick = bulkPhotosDialog;
+  if (isRecruit) {
+    $("#importPeople").onclick = () => importDialog(state.attendanceTab);
+    $("#bulkPhotos").onclick = bulkPhotosDialog;
+  }
   $("#discardAttendance").onclick = () => { makeAttendanceDraft(); drawAttendance(); };
   $("#saveAttendance").onclick = saveAttendance;
+}
+
+function evaluatorAttendanceRows() {
+  return Object.values(state.attendanceDraft || {}).filter((item) => item.active).sort(evaluatorAttendanceSort);
+}
+
+function refreshEvaluatorAttendanceTable() {
+  const rows = evaluatorAttendanceRows();
+  renderAttendanceTable(rows);
+  $("#attendanceCount").textContent = `${rows.filter((item) => item.present).length} present`;
+}
+
+function toggleEvaluatorAttendance(item) {
+  item.present = !item.present;
+  markAttendanceDirty();
+  refreshEvaluatorAttendanceTable();
+  toast(`${item.name} marked ${item.present ? "Present" : "Absent"}.`);
+}
+
+function wireEvaluatorAttendanceSearch() {
+  const input = $("#attendanceSearch");
+  const suggestions = $("#attendanceSuggestions");
+  const evaluators = evaluatorAttendanceRows();
+  const drawSuggestions = () => {
+    const matches = evaluatorSearchMatches(evaluators, input.value).slice(0, 8);
+    suggestions.innerHTML = matches.map((item) => `<button type="button" data-id="${item.id}" role="option"><span><strong>${h(item.name)}</strong><small>${item.present ? "Present" : "Absent"}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
+    suggestions.classList.toggle("visible", Boolean(input.value.trim() && matches.length));
+    $$("button", suggestions).forEach((button) => button.onclick = () => {
+      toggleEvaluatorAttendance(state.attendanceDraft[button.dataset.id]);
+      input.value = "";
+      suggestions.classList.remove("visible");
+      input.focus();
+    });
+  };
+  input.oninput = drawSuggestions;
+  input.onkeydown = (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const item = resolveEvaluatorSearch(evaluators, input.value);
+    if (!item) {
+      const count = evaluatorSearchMatches(evaluators, input.value).length;
+      return toast(count ? "More than one evaluator matches. Keep typing or select the correct suggestion." : "No evaluator matches that name. Use Add evaluator not listed if needed.", "error");
+    }
+    toggleEvaluatorAttendance(item);
+    input.value = "";
+    suggestions.classList.remove("visible");
+    input.focus();
+  };
 }
 
 function dateTimeInput(value) {
@@ -378,14 +454,14 @@ function renderAttendanceTable(rows) {
   const target = $("#attendanceTable");
   const headers = isRecruit
     ? "<th>Photo</th><th>Name</th><th>Phone number</th><th>Date of birth</th><th>Present</th><th>Arrival time (Beirut)</th><th>Photo action</th><th>Remove</th>"
-    : "<th>Name</th><th>Active</th><th>Role</th><th>Mandatory room</th><th>Remove</th>";
+    : "<th>Name</th><th>Present</th><th>Role</th><th>Mandatory room</th><th>Remove</th>";
   const body = rows.map((item) => {
     const photoUrl = `/api/admin/journeys/${state.journey.id}/recruits/${item.id}/photo`;
     const photo = item.hasPhoto
       ? `<button type="button" class="photo-zoom-trigger" data-photo-viewer data-photo-url="${photoUrl}" data-photo-name="${h(item.name)}"><img class="avatar" src="${photoUrl}" alt="${h(item.name)}"></button>`
       : `<span class="avatar placeholder">${h(item.name[0])}</span>`;
     if (isRecruit) return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td>${photo}</td><td><strong>${h(item.name)}</strong></td><td><input class="table-input phone-input" inputmode="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></td><td><input class="table-input dob-input" type="date" value="${h(item.dateOfBirth || "")}" aria-label="${h(item.name)} date of birth"></td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><input class="table-input arrival-input" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></td><td><button class="button ghost small photo-button">${item.hasPhoto ? "Replace" : "Upload"}</button></td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
-    return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td><strong>${h(item.name)}</strong>${item.mandatoryRoom && !item.present ? `<small class="danger-text"> Required evaluator is inactive</small>` : ""}</td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} active" ${item.present ? "checked" : ""}></td><td><select class="table-input role-select"><option value="overall" ${item.role === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${item.role === "dossard" ? "selected" : ""}>Dossard</option></select></td><td>${item.mandatoryRoom ? `Room ${item.mandatoryRoom}` : "—"}</td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
+    return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td><strong>${h(item.name)}</strong>${item.mandatoryRoom && !item.present ? `<small class="danger-text"> Required evaluator is absent</small>` : ""}</td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><span class="role-badge ${item.role}">${h(item.role)}</span></td><td>${item.mandatoryRoom ? `Room ${item.mandatoryRoom}` : "—"}</td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
   }).join("");
   target.innerHTML = `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
   $$("tbody tr", target).forEach((row) => {
@@ -408,14 +484,13 @@ function renderAttendanceTable(rows) {
         item.arrivalTime = item.present && input.value ? new Date(input.value).toISOString() : null;
       }
       markAttendanceDirty();
+      if (!isRecruit) refreshEvaluatorAttendanceTable();
     };
     if (isRecruit) {
       $(".phone-input", row).oninput = (event) => { item.phoneNumber = event.target.value; markAttendanceDirty(); };
       $(".dob-input", row).onchange = (event) => { item.dateOfBirth = event.target.value || null; markAttendanceDirty(); };
       $(".arrival-input", row).onchange = (event) => { item.arrivalTime = event.target.value ? new Date(event.target.value).toISOString() : null; markAttendanceDirty(); };
       $(".photo-button", row).onclick = () => uploadSinglePhoto(item.id);
-    } else {
-      $(".role-select", row).onchange = (event) => { item.role = event.target.value; markAttendanceDirty(); };
     }
   });
 }
@@ -441,7 +516,7 @@ async function saveAttendance() {
 }
 
 function addPersonDialog(isRecruit) {
-  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add ${isRecruit ? "recruit" : "evaluator"}</h2><div class="stack"><label>Full name<input name="name" required></label>${isRecruit ? `<label>Phone number (optional)<input name="phone" inputmode="tel"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label>` : `<label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label>`}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
+  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add ${isRecruit ? "recruit" : "evaluator not in the default list"}</h2>${isRecruit ? "" : `<p class="muted">This evaluator will also be added to the master directory for every future Journee.</p>`}<div class="stack"><label>Full name<input name="name" required></label>${isRecruit ? `<label>Phone number (optional)<input name="phone" inputmode="tel"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label>` : `<label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label>`}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#personForm").onsubmit = async (event) => {
     event.preventDefault();
@@ -611,13 +686,62 @@ function wireAssignmentEditors(round) {
 }
 
 function mandatoryRoomsDialog() {
-  const evaluators = state.journey.evaluators.filter((item) => item.active);
-  openModal(`<form id="mandatoryForm"><p class="eyebrow">Room constraints</p><h2>Mandatory evaluator placements</h2><p class="muted">Leave Room blank for evaluators without a mandatory placement.</p><div class="stack" style="max-height:55vh;overflow:auto">${evaluators.map((item) => `<label>${h(item.name)} <span class="role-badge ${item.role}">${h(item.role)}</span><select name="${item.id}"><option value="" ${item.mandatoryRoom ? "" : "selected"}>No mandatory room</option>${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}" ${item.mandatoryRoom === index + 1 ? "selected" : ""}>Room ${index + 1}</option>`).join("")}</select></label>`).join("")}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save placements</button></div></form>`);
+  const evaluators = state.journey.evaluators.filter((item) => item.active).sort(evaluatorAttendanceSort);
+  const placements = Object.fromEntries(evaluators.filter((item) => item.mandatoryRoom).map((item) => [item.id, item.mandatoryRoom]));
+  openModal(`<form id="mandatoryForm"><p class="eyebrow">Room constraints</p><h2>Mandatory evaluator placements</h2><p class="muted">Choose a room, type an evaluator, and press Enter. Enter assigns an unplaced evaluator, removes one already in that room, or moves one assigned to another room.</p><div class="mandatory-search-grid"><label>Target room<select id="mandatoryTargetRoom">${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}">Room ${index + 1}</option>`).join("")}</select></label><label>Required evaluator<div class="evaluator-quick-toggle"><input id="mandatorySearch" autocomplete="off" placeholder="Type evaluator name and press Enter"><div id="mandatorySuggestions" class="search-suggestions" role="listbox"></div></div></label></div><div id="mandatoryCount" class="formula-note"></div><div id="mandatoryList" class="mandatory-list"></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save placements</button></div></form>`, { wide: true });
   $("#cancelModal").onclick = closeModal;
+  const roomOptions = (selected) => `<option value="" ${selected ? "" : "selected"}>No mandatory room</option>${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}" ${selected === index + 1 ? "selected" : ""}>Room ${index + 1}</option>`).join("")}`;
+  const drawList = () => {
+    const count = Object.keys(placements).length;
+    $("#mandatoryCount").textContent = `${count} mandatory evaluator${count === 1 ? "" : "s"} selected. Absent required evaluators will produce a room-planning warning.`;
+    $("#mandatoryList").innerHTML = evaluators.map((item) => `<div class="mandatory-row ${item.present ? "" : "absent"}" data-id="${item.id}"><div><strong>${h(item.name)}</strong><small>${item.present ? "Present" : "Absent"}</small></div><span class="role-badge ${item.role}">${h(item.role)}</span><select aria-label="Mandatory room for ${h(item.name)}">${roomOptions(placements[item.id])}</select></div>`).join("");
+    $$(".mandatory-row", $("#mandatoryList")).forEach((row) => {
+      $("select", row).onchange = (event) => {
+        if (event.target.value) placements[row.dataset.id] = Number(event.target.value);
+        else delete placements[row.dataset.id];
+        drawList();
+      };
+    });
+  };
+  const input = $("#mandatorySearch");
+  const suggestions = $("#mandatorySuggestions");
+  const togglePlacement = (item) => {
+    const room = Number($("#mandatoryTargetRoom").value);
+    if (placements[item.id] === room) {
+      delete placements[item.id];
+      toast(`${item.name} removed from mandatory placements.`);
+    } else {
+      const moved = placements[item.id];
+      placements[item.id] = room;
+      toast(`${item.name} ${moved ? "moved" : "assigned"} to Room ${room}.${item.present ? "" : " This evaluator is currently absent."}`, item.present ? "success" : "error");
+    }
+    drawList();
+    input.value = "";
+    suggestions.classList.remove("visible");
+    input.focus();
+  };
+  const drawSuggestions = () => {
+    const matches = evaluatorSearchMatches(evaluators, input.value).slice(0, 8);
+    suggestions.innerHTML = matches.map((item) => `<button type="button" data-id="${item.id}" role="option"><span><strong>${h(item.name)}</strong><small>${item.present ? "Present" : "Absent"}${placements[item.id] ? ` · Room ${placements[item.id]}` : ""}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
+    suggestions.classList.toggle("visible", Boolean(input.value.trim() && matches.length));
+    $$("button", suggestions).forEach((button) => button.onclick = () => togglePlacement(evaluators.find((item) => item.id === button.dataset.id)));
+  };
+  input.oninput = drawSuggestions;
+  input.onkeydown = (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const item = resolveEvaluatorSearch(evaluators, input.value);
+    if (!item) {
+      const count = evaluatorSearchMatches(evaluators, input.value).length;
+      return toast(count ? "More than one evaluator matches. Keep typing or select a suggestion." : "No evaluator matches that name.", "error");
+    }
+    togglePlacement(item);
+  };
+  drawList();
+  setTimeout(() => input.focus(), 0);
   $("#mandatoryForm").onsubmit = async (event) => {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const items = evaluators.filter((item) => form.get(item.id)).map((item) => ({ evaluator_id: item.id, room_number: Number(form.get(item.id)) }));
+    const items = Object.entries(placements).map(([evaluator_id, room_number]) => ({ evaluator_id, room_number }));
     try { await api(`/api/admin/journeys/${state.journey.id}/mandatory-rooms`, mutation("PUT", { items })); await refreshJourney(); closeModal(); toast("Mandatory placements saved."); } catch (error) { toast(error.message, "error"); }
   };
 }

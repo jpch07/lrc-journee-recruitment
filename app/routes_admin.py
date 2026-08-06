@@ -867,10 +867,17 @@ def duplicate_journey(
     for item in db.scalars(select(Recruit).where(Recruit.journey_id == source.id, Recruit.active.is_(True))):
         db.add(Recruit(journey_id=clone.id, name=item.name, phone_number=item.phone_number,
                        date_of_birth=item.date_of_birth, photo_data=item.photo_data, photo_type=item.photo_type))
+    clone_evaluators = list(db.scalars(select(Evaluator).where(Evaluator.journey_id == clone.id)))
+    clone_by_directory = {item.directory_id: item for item in clone_evaluators if item.directory_id}
+    clone_by_name = {item.name.casefold(): item for item in clone_evaluators}
     for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == source.id, Evaluator.active.is_(True))):
-        copied = Evaluator(journey_id=clone.id, directory_id=item.directory_id, name=item.name, role=item.role)
-        db.add(copied)
-        db.flush()
+        copied = clone_by_directory.get(item.directory_id) or clone_by_name.get(item.name.casefold())
+        if copied:
+            copied.role = item.role
+        else:
+            copied = Evaluator(journey_id=clone.id, directory_id=item.directory_id, name=item.name, role=item.role)
+            db.add(copied)
+            db.flush()
         evaluator_id_map[item.id] = copied.id
     for item in db.scalars(select(MandatoryRoomEvaluator).where(MandatoryRoomEvaluator.journey_id == source.id)):
         if item.evaluator_id in evaluator_id_map:
@@ -978,11 +985,24 @@ def add_evaluator(
     require_csrf(request, context.csrf_token)
     journey = get_journey_or_404(db, journey_id)
     clean_name = " ".join(payload.name.split())
+    existing = db.scalar(
+        select(Evaluator).where(
+            Evaluator.journey_id == journey.id,
+            func.lower(Evaluator.name) == clean_name.lower(),
+        )
+    )
+    if existing:
+        raise HTTPException(status_code=409, detail="This evaluator is already in the Journee directory.")
     directory = db.scalar(select(EvaluatorDirectory).where(func.lower(EvaluatorDirectory.name) == clean_name.lower()))
-    if payload.add_to_directory and not directory:
-        directory = EvaluatorDirectory(name=clean_name, default_role=payload.role)
-        db.add(directory)
-        db.flush()
+    if payload.add_to_directory:
+        if not directory:
+            directory = EvaluatorDirectory(name=clean_name, default_role=payload.role)
+            db.add(directory)
+            db.flush()
+        elif not directory.active:
+            directory.name = clean_name
+            directory.default_role = payload.role
+            directory.active = True
     evaluator = Evaluator(journey_id=journey.id, directory_id=directory.id if directory else None, name=clean_name, role=payload.role)
     db.add(evaluator)
     db.flush()

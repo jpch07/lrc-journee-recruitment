@@ -44,9 +44,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0005_event_day_protection":
+            if revision != "0006_evaluator_master_directory":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0005_event_day_protection'."
+                    f"Database migration is {revision!r}, expected '0006_evaluator_master_directory'."
                 )
         return {"status": "ready"}
     except Exception as exc:
