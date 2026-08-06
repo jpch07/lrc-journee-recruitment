@@ -287,6 +287,8 @@ tr.inactive { opacity: .5; }
 .attendance-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .attendance-fields input { min-height: 44px; }
 .attendance-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.attendance-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.attendance-photo-preview { display: block; width: min(100%, 360px); max-height: 360px; margin: 14px auto 0; border: 1px solid var(--line); border-radius: 14px; object-fit: contain; background: #f3f5f7; }
 .row-sync { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: .75rem; font-weight: 750; }
 .row-sync::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
 .row-sync.saved { color: var(--green); }
@@ -387,6 +389,9 @@ tr.inactive { opacity: .5; }
   .attendance-toggle { grid-column: 1 / -1; justify-content: center; }
   .attendance-fields { grid-template-columns: 1fr; }
   .attendance-arrival-field { grid-column: auto; }
+  .attendance-card-footer { align-items: flex-start; flex-direction: column; }
+  .attendance-card-actions { width: 100%; justify-content: stretch; }
+  .attendance-card-actions .button { flex: 1 1 auto; }
   .attendance-save-bar { grid-template-columns: 1fr 1fr; }
   .attendance-save-bar span { grid-column: 1 / -1; text-align: center; }
 }

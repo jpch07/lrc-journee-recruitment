@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import io
+
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app.main import app
 
@@ -24,6 +27,69 @@ def _attendance_login(client, path: str, name: str) -> str:
     )
     assert response.status_code == 200, response.text
     return response.json()["csrfToken"]
+
+
+def _photo_bytes(color: tuple[int, int, int]) -> bytes:
+    output = io.BytesIO()
+    Image.new("RGB", (80, 100), color=color).save(output, format="PNG")
+    return output.getvalue()
+
+
+def test_attendance_operator_can_add_replace_and_remove_recruit_photo(client):
+    admin_csrf = _admin_login(client)
+    admin_headers = {"X-CSRF-Token": admin_csrf}
+    journey = client.post(
+        "/api/admin/journeys",
+        headers=admin_headers,
+        json={"name": "Photo Attendance", "event_date": "2026-08-14"},
+    ).json()
+    recruit = client.post(
+        f"/api/admin/journeys/{journey['id']}/recruits",
+        headers=admin_headers,
+        json={"name": "Recruit Photo"},
+    ).json()
+    path = client.get(f"/api/admin/journeys/{journey['id']}").json()["recruitAttendancePath"]
+
+    with TestClient(app) as attendance_device:
+        csrf = _attendance_login(attendance_device, path, "Door Photographer")
+        url = f"/api/recruit-attendance/recruits/{recruit['id']}/photo"
+        first_photo = _photo_bytes((180, 20, 40))
+
+        missing_csrf = attendance_device.post(
+            url,
+            files={"photo": ("first.png", first_photo, "image/png")},
+        )
+        assert missing_csrf.status_code == 403
+
+        uploaded = attendance_device.post(
+            url,
+            headers={"X-CSRF-Token": csrf},
+            files={"photo": ("first.png", first_photo, "image/png")},
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        assert uploaded.json()["hasPhoto"] is True
+        first_version = uploaded.json()["version"]
+        served = attendance_device.get(url)
+        assert served.status_code == 200
+        assert served.headers["content-type"] == "image/webp"
+
+        replaced = attendance_device.post(
+            url,
+            headers={"X-CSRF-Token": csrf},
+            files={"photo": ("replacement.png", _photo_bytes((20, 80, 180)), "image/png")},
+        )
+        assert replaced.status_code == 200, replaced.text
+        assert replaced.json()["version"] == first_version + 1
+
+        removed = attendance_device.delete(url, headers={"X-CSRF-Token": csrf})
+        assert removed.status_code == 200, removed.text
+        assert removed.json()["hasPhoto"] is False
+        assert removed.json()["version"] == first_version + 2
+        assert attendance_device.get(url).status_code == 404
+
+    admin_detail = client.get(f"/api/admin/journeys/{journey['id']}").json()
+    admin_recruit = next(item for item in admin_detail["recruits"] if item["id"] == recruit["id"])
+    assert admin_recruit["hasPhoto"] is False
 
 
 def test_attendance_link_is_scoped_and_merges_concurrent_field_changes(client):

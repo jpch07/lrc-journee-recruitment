@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -22,6 +22,7 @@ from .models import (
     Recruit,
     RecruitAttendanceAccess,
     RoomPlanRecruit,
+    utcnow,
 )
 from .schemas import (
     RecruitAttendanceRequest,
@@ -29,7 +30,12 @@ from .schemas import (
     RecruitAttendanceSessionRequest,
     RecruitCreateRequest,
 )
-from .services import get_recruit_or_404, serialize_recruit, update_recruit_attendance_fields
+from .services import (
+    get_recruit_or_404,
+    process_photo,
+    serialize_recruit,
+    update_recruit_attendance_fields,
+)
 from .utils import audit
 
 
@@ -317,3 +323,69 @@ def recruit_attendance_photo(
         media_type=recruit.photo_type or "image/webp",
         headers={"Cache-Control": "private, max-age=300"},
     )
+
+
+@router.post("/api/recruit-attendance/recruits/{recruit_id}/photo")
+def upload_recruit_attendance_photo(
+    recruit_id: str,
+    request: Request,
+    photo: UploadFile = File(...),
+    context: RecruitAttendanceContext = Depends(require_recruit_attendance),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = _session_journey(db, context)
+    recruit = get_recruit_or_404(db, journey.id, recruit_id)
+    if not recruit.active:
+        raise HTTPException(status_code=404, detail="Recruit not found.")
+    before = {"hasPhoto": bool(recruit.photo_data), "version": recruit.version}
+    data, media_type = process_photo(photo.file.read())
+    recruit.photo_data = data
+    recruit.photo_type = media_type
+    recruit.photo_updated_at = utcnow()
+    recruit.version += 1
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="attendance",
+        actor_name=context.actor_name,
+        action="recruit.photo_updated",
+        entity_type="recruit",
+        entity_id=recruit.id,
+        before=before,
+        after={"hasPhoto": True, "version": recruit.version},
+    )
+    _commit(db)
+    return serialize_recruit(recruit)
+
+
+@router.delete("/api/recruit-attendance/recruits/{recruit_id}/photo")
+def remove_recruit_attendance_photo(
+    recruit_id: str,
+    request: Request,
+    context: RecruitAttendanceContext = Depends(require_recruit_attendance),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = _session_journey(db, context)
+    recruit = get_recruit_or_404(db, journey.id, recruit_id)
+    if not recruit.active or not recruit.photo_data:
+        raise HTTPException(status_code=404, detail="No photo available.")
+    before = {"hasPhoto": True, "version": recruit.version}
+    recruit.photo_data = None
+    recruit.photo_type = None
+    recruit.photo_updated_at = utcnow()
+    recruit.version += 1
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="attendance",
+        actor_name=context.actor_name,
+        action="recruit.photo_removed",
+        entity_type="recruit",
+        entity_id=recruit.id,
+        before=before,
+        after={"hasPhoto": False, "version": recruit.version},
+    )
+    _commit(db)
+    return serialize_recruit(recruit)
