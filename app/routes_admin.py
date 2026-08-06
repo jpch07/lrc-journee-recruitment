@@ -8,7 +8,7 @@ import re
 import secrets
 import zipfile
 from collections import Counter, defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
@@ -31,6 +31,7 @@ from .auth import (
 )
 from .db import get_db
 from .config import settings
+from .event_day import ProtectionControlError, cancel_monitor, dispatch_monitor, find_monitor_run, is_configured
 from .models import (
     ActivityState,
     Assignment,
@@ -39,6 +40,7 @@ from .models import (
     EvaluationSubmission,
     Evaluator,
     EvaluatorDirectory,
+    EventDayProtection,
     GeneralAssessment,
     IdempotencyRecord,
     Journey,
@@ -48,6 +50,7 @@ from .models import (
     RoomPlanEvaluator,
     RoomPlanRecruit,
     SubmissionVersion,
+    new_id,
     utcnow,
 )
 from .rubric import (
@@ -67,6 +70,8 @@ from .schemas import (
     AssignmentEditRequest,
     EvaluatorAttendanceRequest,
     EvaluationSimulationRequest,
+    EventDayProtectionActionRequest,
+    EventDayProtectionStartRequest,
     EvaluatorCreateRequest,
     GeneralAssessmentRequest,
     JourneyCreateRequest,
@@ -132,6 +137,95 @@ def _activity_states(db: Session, journey_id: str) -> list[dict]:
         for code in ACTIVITY_ORDER
         if code in states
     ]
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _sync_protection(db: Session, protection: EventDayProtection) -> None:
+    if protection.status in {"stopped", "completed"}:
+        return
+    now = utcnow()
+    if _aware(protection.ends_at) <= now:
+        protection.status = "completed"
+        protection.last_error = ""
+        protection.version += 1
+        return
+    try:
+        run = find_monitor_run(protection.activation_id)
+    except ProtectionControlError as exc:
+        protection.last_error = str(exc)
+        protection.version += 1
+        return
+    if not run:
+        if now - _aware(protection.started_at) > timedelta(minutes=2):
+            protection.status = "incident"
+            protection.last_error = "GitHub did not create the protection run within two minutes. Restart protection."
+            protection.version += 1
+        return
+    changed = False
+    run_id = str(run["id"])
+    if protection.github_run_id != run_id:
+        protection.github_run_id = run_id
+        protection.github_run_url = run.get("html_url")
+        changed = True
+    failed_jobs = [
+        job.get("name", "monitor")
+        for job in run.get("jobs", [])
+        if job.get("conclusion") in {"failure", "timed_out", "startup_failure"}
+    ]
+    if failed_jobs:
+        status = "incident"
+        error = f"A protection monitor failed: {', '.join(failed_jobs)}. Start replacement protection."
+    elif run.get("status") in {"queued", "in_progress", "waiting", "pending"}:
+        status = "active"
+        error = ""
+    elif run.get("conclusion") == "success":
+        status = "completed"
+        error = ""
+    elif run.get("conclusion") == "cancelled" and protection.status == "stopped":
+        status = "stopped"
+        error = ""
+    else:
+        status = "incident"
+        error = f"The protection workflow ended with status: {run.get('conclusion') or run.get('status')}."
+    if protection.status != status or protection.last_error != error:
+        protection.status = status
+        protection.last_error = error
+        changed = True
+    if changed:
+        protection.version += 1
+
+
+def _protection_payload(protection: EventDayProtection | None) -> dict:
+    if not protection:
+        return {"configured": is_configured(), "status": "inactive"}
+    now = utcnow()
+    remaining = max(0, int((_aware(protection.ends_at) - now).total_seconds()))
+    return {
+        "configured": is_configured(),
+        "status": protection.status,
+        "durationHours": protection.duration_hours,
+        "startedAt": _aware(protection.started_at).isoformat(),
+        "endsAt": _aware(protection.ends_at).isoformat(),
+        "remainingSeconds": remaining,
+        "runUrl": protection.github_run_url,
+        "error": protection.last_error,
+        "version": protection.version,
+    }
+
+
+def _cancel_protection_monitor(protection: EventDayProtection) -> None:
+    run_id = protection.github_run_id
+    if not run_id:
+        try:
+            run = find_monitor_run(protection.activation_id)
+            run_id = str(run["id"]) if run else None
+        except ProtectionControlError:
+            run_id = None
+    if run_id:
+        cancel_monitor(run_id)
 
 
 @router.post("/login")
@@ -2000,6 +2094,205 @@ def correct_submission(
     )
     _commit(db)
     return {"ok": True, "version": submission.version, "score": float(submission.score)}
+
+
+@router.get("/journeys/{journey_id}/event-day-protection")
+def event_day_protection_status(
+    journey_id: str,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    get_journey_or_404(db, journey_id)
+    protection = db.scalar(select(EventDayProtection).where(EventDayProtection.journey_id == journey_id))
+    if protection:
+        _sync_protection(db, protection)
+        _commit(db)
+    return _protection_payload(protection)
+
+
+@router.post("/journeys/{journey_id}/event-day-protection/start")
+def start_event_day_protection(
+    journey_id: str,
+    payload: EventDayProtectionStartRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    if not is_configured():
+        raise HTTPException(status_code=503, detail="Event-day protection is not configured on this server.")
+    journey = get_journey_or_404(db, journey_id)
+    if journey.status in {"completed", "archived"}:
+        raise HTTPException(status_code=409, detail="Reopen this Journee before starting event-day protection.")
+    now = utcnow()
+    other = db.scalar(
+        select(EventDayProtection).where(
+            EventDayProtection.journey_id != journey.id,
+            EventDayProtection.status.in_(["starting", "active", "incident"]),
+            EventDayProtection.ends_at > now,
+        )
+    )
+    if other:
+        other_journey = db.get(Journey, other.journey_id)
+        raise HTTPException(
+            status_code=409,
+            detail=f"Protection is already active for {other_journey.name if other_journey else 'another Journee'}.",
+        )
+    existing_active = db.scalar(select(Journey).where(Journey.status == "active", Journey.id != journey.id))
+    if existing_active:
+        raise HTTPException(status_code=409, detail=f"{existing_active.name} is already the active Journee.")
+    protection = db.scalar(select(EventDayProtection).where(EventDayProtection.journey_id == journey.id))
+    if protection and protection.status in {"starting", "active"} and _aware(protection.ends_at) > now:
+        raise HTTPException(status_code=409, detail="Event-day protection is already running for this Journee.")
+    activation_id = new_id()
+    if not protection:
+        protection = EventDayProtection(
+            journey_id=journey.id,
+            activation_id=activation_id,
+            duration_hours=payload.duration_hours,
+            status="starting",
+            started_at=now,
+            ends_at=now + timedelta(hours=payload.duration_hours),
+        )
+        db.add(protection)
+    else:
+        protection.activation_id = activation_id
+        protection.duration_hours = payload.duration_hours
+        protection.status = "starting"
+        protection.github_run_id = None
+        protection.github_run_url = None
+        protection.last_error = ""
+        protection.started_at = now
+        protection.ends_at = now + timedelta(hours=payload.duration_hours)
+        protection.stopped_at = None
+        protection.version += 1
+    db.flush()
+    before_status = journey.status
+    journey.status = "active"
+    journey.archived_at = None
+    journey.version += 1
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="event_day_protection.started",
+        entity_type="event_day_protection",
+        entity_id=protection.id,
+        before={"journeyStatus": before_status},
+        after={"durationHours": payload.duration_hours, "activationId": activation_id},
+    )
+    _commit(db)
+    try:
+        dispatch_monitor(payload.duration_hours, activation_id)
+    except ProtectionControlError as exc:
+        protection = db.scalar(select(EventDayProtection).where(EventDayProtection.journey_id == journey.id))
+        protection.status = "incident"
+        protection.last_error = str(exc)
+        protection.version += 1
+        _commit(db)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _protection_payload(protection)
+
+
+@router.post("/journeys/{journey_id}/event-day-protection/restart")
+def restart_event_day_protection(
+    journey_id: str,
+    payload: EventDayProtectionActionRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    protection = db.scalar(select(EventDayProtection).where(EventDayProtection.journey_id == journey.id))
+    if not protection:
+        raise HTTPException(status_code=409, detail="Start event-day protection first.")
+    if protection.github_run_id or protection.activation_id:
+        try:
+            _cancel_protection_monitor(protection)
+        except ProtectionControlError:
+            pass
+    now = utcnow()
+    activation_id = new_id()
+    protection.activation_id = activation_id
+    protection.status = "starting"
+    protection.github_run_id = None
+    protection.github_run_url = None
+    protection.last_error = ""
+    protection.started_at = now
+    protection.ends_at = now + timedelta(hours=protection.duration_hours)
+    protection.stopped_at = None
+    protection.version += 1
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="event_day_protection.restarted",
+        entity_type="event_day_protection",
+        entity_id=protection.id,
+        after={"durationHours": protection.duration_hours, "activationId": activation_id},
+        reason=payload.reason or "Admin restarted event-day protection.",
+    )
+    _commit(db)
+    try:
+        dispatch_monitor(protection.duration_hours, activation_id)
+    except ProtectionControlError as exc:
+        protection.status = "incident"
+        protection.last_error = str(exc)
+        protection.version += 1
+        _commit(db)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return _protection_payload(protection)
+
+
+@router.post("/journeys/{journey_id}/event-day-protection/end")
+def end_event_day(
+    journey_id: str,
+    payload: EventDayProtectionActionRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    protection = db.scalar(select(EventDayProtection).where(EventDayProtection.journey_id == journey.id))
+    if protection:
+        try:
+            _cancel_protection_monitor(protection)
+        except ProtectionControlError as exc:
+            protection.last_error = str(exc)
+    now = utcnow()
+    if protection:
+        protection.status = "stopped"
+        protection.stopped_at = now
+        protection.version += 1
+    for activity in db.scalars(
+        select(ActivityState).where(ActivityState.journey_id == journey.id, ActivityState.status == "open")
+    ):
+        activity.status = "closed"
+        activity.closed_at = now
+        activity.version += 1
+    before_status = journey.status
+    journey.status = "completed"
+    journey.current_activity = None
+    journey.version += 1
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="journey.completed_with_protection_stopped",
+        entity_type="journey",
+        entity_id=journey.id,
+        before={"status": before_status},
+        after={"status": "completed", "protectionStatus": "stopped"},
+        reason=payload.reason or "Journee completed from event-day control.",
+    )
+    _commit(db)
+    return {"ok": True, "protection": _protection_payload(protection), "journeyStatus": journey.status}
 
 
 @router.get("/journeys/{journey_id}/audit")

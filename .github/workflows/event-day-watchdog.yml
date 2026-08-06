@@ -1,72 +1,140 @@
 name: Event-day protection
+run-name: "Journee protection ${{ inputs.activation_id || 'baseline' }} · ${{ inputs.duration_hours || 'scheduled' }}"
 
 on:
   schedule:
-    # Offset from the top of the hour because scheduled Actions are most likely
-    # to be delayed when many repositories start work at minute zero.
+    # Baseline wake-up. Event-day protection uses continuous workflow_dispatch jobs.
     - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
   workflow_dispatch:
     inputs:
       duration_hours:
-        description: Run two redundant one-minute monitors for this many hours
+        description: Protection duration
         required: true
-        default: "5"
+        default: "6"
         type: choice
-        options: ["1", "2", "3", "4", "5"]
+        options: ["6", "12"]
+      activation_id:
+        description: Control ID (leave as manual when starting from GitHub)
+        required: true
+        default: "manual"
+        type: string
 
 permissions:
   contents: read
 
+env:
+  APP_URL: ${{ vars.RENDER_APP_URL }}
+
 jobs:
-  scheduled-keepalive:
+  scheduled_keepalive:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Keep the application warm
-        env:
-          APP_URL: ${{ vars.RENDER_APP_URL }}
         run: >-
-          python scripts/event_day_guard.py
-          "${APP_URL}"
-          --cycles 1
-          --retry-count 5
-          --retry-delay-seconds 10
+          python scripts/event_day_guard.py "${APP_URL}"
+          --cycles 1 --retry-count 5 --retry-delay-seconds 10
 
-  primary-monitor:
+  primary_1:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 359
+    timeout-minutes: 190
     steps:
       - uses: actions/checkout@v4
-      - name: Run primary event-day monitor
-        env:
-          APP_URL: ${{ vars.RENDER_APP_URL }}
-          DURATION_HOURS: ${{ inputs.duration_hours }}
+      - name: Primary monitor · segment 1
         run: >-
-          python scripts/event_day_guard.py
-          "${APP_URL}"
-          --duration-minutes "$((DURATION_HOURS * 60))"
-          --interval-seconds 60
-          --retry-count 6
-          --retry-delay-seconds 10
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
 
-  secondary-monitor:
+  secondary_1:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 359
+    timeout-minutes: 190
     steps:
       - uses: actions/checkout@v4
-      - name: Run offset backup event-day monitor
-        env:
-          APP_URL: ${{ vars.RENDER_APP_URL }}
-          DURATION_HOURS: ${{ inputs.duration_hours }}
+      - name: Secondary monitor · segment 1
         run: >-
-          python scripts/event_day_guard.py
-          "${APP_URL}"
-          --duration-minutes "$((DURATION_HOURS * 60))"
-          --interval-seconds 60
-          --initial-delay-seconds 30
-          --retry-count 6
-          --retry-delay-seconds 10
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60 --initial-delay-seconds 30
+          --retry-count 6 --retry-delay-seconds 10
+
+  primary_2:
+    needs: primary_1
+    if: ${{ always() && needs.primary_1.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Primary monitor · segment 2
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+
+  secondary_2:
+    needs: secondary_1
+    if: ${{ always() && needs.secondary_1.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 2
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+
+  primary_3:
+    needs: primary_2
+    if: ${{ always() && inputs.duration_hours == '12' && needs.primary_2.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Primary monitor · segment 3
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+
+  secondary_3:
+    needs: secondary_2
+    if: ${{ always() && inputs.duration_hours == '12' && needs.secondary_2.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 3
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+
+  primary_4:
+    needs: primary_3
+    if: ${{ always() && inputs.duration_hours == '12' && needs.primary_3.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Primary monitor · segment 4
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+
+  secondary_4:
+    needs: secondary_3
+    if: ${{ always() && inputs.duration_hours == '12' && needs.secondary_3.result != 'cancelled' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 4
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10

@@ -19,6 +19,7 @@ const state = {
   profileId: null,
   dirty: false,
   pollTimer: null,
+  lastProtectionPoll: 0,
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -233,6 +234,9 @@ async function openJourney(id, section = "dashboard") {
     if (["dashboard", "monitoring"].includes(state.section)) {
       try { await renderSection(true); } catch { /* a visible refresh remains available */ }
     }
+    if (state.section === "settings" && Date.now() - state.lastProtectionPoll > 15000) {
+      try { await refreshProtectionPanel(); } catch { /* keep the last visible status */ }
+    }
   }, 5000);
 }
 
@@ -285,7 +289,7 @@ async function renderDashboard() {
   const presentEvaluators = data.journey.presentEvaluatorCount;
   const expectedSubmissions = data.activeMonitoring ? data.activeMonitoring.recruits.reduce((sum, item) => sum + item.expected, 0) : 0;
   const receivedSubmissions = data.activeMonitoring ? data.activeMonitoring.recruits.reduce((sum, item) => sum + item.submitted, 0) : 0;
-  host.innerHTML = `${sectionHeading("Live operations", data.journey.name, `${data.journey.eventDate} · Updates every five seconds`, `<button class="button ghost" id="refreshDashboard">Refresh</button>`)}
+  host.innerHTML = `${sectionHeading("Live operations", data.journey.name, `${data.journey.eventDate} · Updates every five seconds`, `<button class="button primary" id="goProtection">Event-day protection</button><button class="button ghost" id="refreshDashboard">Refresh</button>`)}
     <div class="metric-grid">
       <div class="metric-card"><small>Present recruits</small><strong>${presentRecruits}</strong><span class="subtle"> of ${data.journey.recruitCount}</span></div>
       <div class="metric-card"><small>Present evaluators</small><strong>${presentEvaluators}</strong><span class="subtle"> of ${data.journey.evaluatorCount}</span></div>
@@ -298,6 +302,7 @@ async function renderDashboard() {
     <div class="two-column"><div class="panel"><div class="panel-header"><h2>Provisional overall ranking</h2><button class="button ghost small" id="goResults">View all</button></div>${rankingTable(data.ranking)}</div>
     <div class="panel"><h2>Dimension averages /1</h2><div class="member-list">${dimensionOrder.map((code) => `<div class="member-chip"><span>${h(data.dimensionNames?.[code] || dimensionNames[code])}</span><strong>${fmt(data.dimensionAverages?.[code] || 0)}</strong></div>`).join("")}</div><h3 style="margin-top:20px">Activity averages /5</h3><div class="member-list">${Object.entries(data.activityAverages).map(([code, value]) => `<div class="member-chip"><span>${h(statusLabel(code))}</span><strong>${fmt(value)}</strong></div>`).join("")}</div><div style="margin-top:18px" class="inline-actions"><button class="button primary" id="quickAttendance">Attendance</button><button class="button secondary" id="quickAssignments">Assignments</button></div></div></div>`;
   $("#refreshDashboard").onclick = () => renderDashboard();
+  $("#goProtection").onclick = () => switchSection("settings");
   if ($("#goMonitoring")) $("#goMonitoring").onclick = () => switchSection("monitoring");
   $("#goResults").onclick = () => switchSection("results");
   $("#quickAttendance").onclick = () => switchSection("attendance");
@@ -857,15 +862,93 @@ function auditItem(item) {
   return `<div class="audit-item"><small>${localDateTime(item.createdAt)}</small><span><strong>${h(item.actorName)}</strong> · ${h(item.actorType || "admin")}</span><span>${h(statusLabel(item.action))}${item.reason ? `<br><small class="muted">Reason: ${h(item.reason)}</small>` : ""}</span></div>`;
 }
 
+function protectionPanel(protection) {
+  const status = protection.status || "inactive";
+  if (!protection.configured) {
+    return `<div class="panel protection-panel critical"><h2>Event-day protection unavailable</h2><p>The private GitHub control credential is not configured on this server. Contact the development team before the Journee.</p></div>`;
+  }
+  if (status === "stopped" && state.journey?.status === "completed") {
+    return `<div class="panel protection-panel"><div class="panel-header"><div><h2>Journee completed</h2><p class="muted">Protection is stopped, open activities are closed, and evaluator edits are locked.</p></div><span class="status-pill completed">Completed</span></div><div class="inline-actions"><a class="button primary" href="/api/admin/journeys/${state.journey.id}/export.xlsx">Download final Excel export</a><button class="button ghost" id="checkProtection">Check status</button></div></div>`;
+  }
+  if (status === "inactive" || status === "stopped") {
+    return `<div class="panel protection-panel"><div class="panel-header"><div><h2>Event-day protection</h2><p class="muted">One action starts two independent external monitors, activates this Journee, and keeps checking the application and database.</p></div><span class="status-pill ${status}">${h(statusLabel(status))}</span></div>
+      <div class="protection-start"><label>Journee duration<select id="protectionDuration"><option value="6">6 hours</option><option value="12">12 hours</option></select></label><button class="button primary" id="startProtection">Start Journee protection</button></div>
+      <p class="subtle">Start this after setting up the IT desk. No GitHub page or manual monitor setup is required.</p></div>`;
+  }
+  const active = ["starting", "active"].includes(status);
+  const remaining = Math.max(0, Number(protection.remainingSeconds || 0));
+  const hours = Math.floor(remaining / 3600);
+  const minutes = Math.ceil((remaining % 3600) / 60);
+  const remainingText = `${hours}h ${minutes}m remaining`;
+  return `<div class="panel protection-panel ${status === "incident" ? "critical" : ""}"><div class="panel-header"><div><h2>Event-day protection</h2><p class="muted">${active ? `Protection is running · ${h(remainingText)}` : status === "incident" ? "The monitoring workflow needs attention." : "The selected protection window has ended."}</p></div><span class="status-pill ${status}">${h(statusLabel(status))}</span></div>
+    <div class="protection-metrics"><div><small>Duration</small><strong>${protection.durationHours} hours</strong></div><div><small>Started</small><strong>${h(localDateTime(protection.startedAt))}</strong></div><div><small>Protected until</small><strong>${h(localDateTime(protection.endsAt))}</strong></div></div>
+    ${protection.error ? `<div class="warning-box critical"><strong>Incident:</strong> ${h(protection.error)}</div>` : ""}
+    <div class="inline-actions"><button class="button secondary" id="checkProtection">Check now</button>${protection.runUrl ? `<a class="button ghost" href="${h(protection.runUrl)}" target="_blank" rel="noopener">Technical monitor</a>` : ""}${status === "incident" ? `<button class="button primary" id="restartProtection">Restart protection</button>` : ""}<button class="button danger" id="endJournee">End Journee</button></div>
+    <p class="subtle">Ending the Journee stops the monitors, closes every open activity, locks evaluator edits, and marks this Journee completed.</p></div>`;
+}
+
+async function refreshProtectionPanel() {
+  if (!state.journey || state.section !== "settings") return;
+  state.lastProtectionPoll = Date.now();
+  const protection = await api(`/api/admin/journeys/${state.journey.id}/event-day-protection`);
+  const panel = $("#protectionPanel");
+  if (!panel) return;
+  panel.innerHTML = protectionPanel(protection);
+  bindProtectionControls(protection);
+}
+
+function bindProtectionControls(protection) {
+  if ($("#startProtection")) $("#startProtection").onclick = async () => {
+    const duration = Number($("#protectionDuration").value);
+    const button = $("#startProtection");
+    button.disabled = true;
+    button.textContent = "Starting protection…";
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/event-day-protection/start`, mutation("POST", { duration_hours: duration }));
+      toast(`${duration}-hour Journee protection started.`);
+      await refreshProtectionPanel();
+    } catch (error) { toast(error.message, "error"); button.disabled = false; button.textContent = "Start Journee protection"; }
+  };
+  if ($("#checkProtection")) $("#checkProtection").onclick = async () => {
+    toast("Checking application, database, and monitors…");
+    await refreshProtectionPanel();
+  };
+  if ($("#restartProtection")) $("#restartProtection").onclick = async () => {
+    const button = $("#restartProtection");
+    button.disabled = true;
+    button.textContent = "Restarting…";
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/event-day-protection/restart`, mutation("POST", { reason: "Restarted from incident control." }));
+      toast("Replacement protection monitors started.");
+      await refreshProtectionPanel();
+    } catch (error) { toast(error.message, "error"); button.disabled = false; button.textContent = "Restart protection"; }
+  };
+  if ($("#endJournee")) $("#endJournee").onclick = async () => {
+    if (!confirm("End this Journee now? This stops protection, closes open activities, locks evaluator edits, and marks the Journee completed.")) return;
+    const button = $("#endJournee");
+    button.disabled = true;
+    button.textContent = "Ending Journee…";
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/event-day-protection/end`, mutation("POST", { reason: "Journee ended from event-day control." }));
+      toast("Journee completed and protection stopped.");
+      await refreshJourney();
+      await renderSection();
+    } catch (error) { toast(error.message, "error"); button.disabled = false; button.textContent = "End Journee"; }
+  };
+}
+
 async function renderSettings() {
   await refreshJourney();
-  const auditEvents = await api(`/api/admin/journeys/${state.journey.id}/audit?limit=500`);
+  const [auditEvents, protection] = await Promise.all([
+    api(`/api/admin/journeys/${state.journey.id}/audit?limit=500`),
+    api(`/api/admin/journeys/${state.journey.id}/event-day-protection`),
+  ]);
+  state.lastProtectionPoll = Date.now();
   const evalUrl = `${location.origin}/evaluate`;
-  const protectionUrl = "https://github.com/jpch07/lrc-journee-recruitment/actions/workflows/event-day-watchdog.yml";
   host.innerHTML = `${sectionHeading("Configuration", "Settings, audit & export", "Manage event metadata, evaluator access, archives, and complete data extracts.")}
     <div class="two-column"><div class="panel"><h2>Journee metadata</h2><form id="settingsForm" class="stack"><label>Name<input name="name" value="${h(state.journey.name)}" required></label><label>Date<input name="date" type="date" value="${h(state.journey.eventDate)}" required></label><label>Status<select name="status">${["draft", "ready", "active", "completed", "archived"].map((value) => `<option value="${value}" ${value === state.journey.status ? "selected" : ""}>${h(statusLabel(value))}</option>`).join("")}</select></label><button class="button primary">Save settings</button></form></div>
     <div class="panel"><h2>Permanent evaluator link & QR</h2><p class="muted">This link never changes. It automatically opens the single Journee whose status is Active.</p><input readonly value="${h(evalUrl)}" id="evalLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyLink">Copy link</button></div><img src="/api/admin/journeys/${state.journey.id}/evaluator-qr.png" alt="Permanent evaluator link QR code" style="width:180px;max-width:100%;border:1px solid var(--line);border-radius:12px"></div></div>
-    <div class="panel"><div class="panel-header"><div><h2>Event-day protection</h2><p class="muted">A baseline external check runs every five minutes. Before recruits arrive, start two redundant one-minute monitors for the full event window.</p></div><a class="button primary" href="${protectionUrl}" target="_blank" rel="noopener">Activate / view protection</a></div><div class="warning-box"><strong>Event-day rule:</strong> start protection 30 minutes early, confirm both monitor jobs are running, and do not deploy or restart the service until the Journee is completed.</div><p class="subtle">For events longer than five hours, start a second five-hour run before the first one ends. Free hosting cannot provide a contractual zero-downtime guarantee; keep the documented operational fallback ready.</p></div>
+    <div id="protectionPanel">${protectionPanel(protection)}</div>
     <div class="panel"><div class="panel-header"><div><h2>Exports</h2><p class="muted">Excel includes rosters, rooms, assignments, raw answers, scores, rankings, comments, and audit.</p></div></div><div class="inline-actions"><a class="button primary" href="/api/admin/journeys/${state.journey.id}/export.xlsx">Full Excel workbook</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/results.csv">Results CSV</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/photos.zip">Photo ZIP</a><button class="button secondary" id="duplicateCurrent">Duplicate Journee</button></div></div>
     <div class="panel"><div class="panel-header"><h2>Audit history</h2><span class="subtle">${auditEvents.length} most recent events</span></div>${auditEvents.length ? `<div class="audit-list">${auditEvents.map(auditItem).join("")}</div>` : `<p class="muted">No audit events.</p>`}</div>
     <div class="panel"><h2 class="danger-text">Archive or delete</h2><p class="muted">Archiving preserves the Journee. Permanent deletion removes its attendance, rooms, assignments, evaluations, photos, and audit history.</p><div class="inline-actions"><button class="button ghost" id="archiveCurrent">Archive Journee</button><button class="button danger" id="deleteCurrent">Permanently delete Journee</button></div></div>`;
@@ -879,6 +962,7 @@ async function renderSettings() {
     } catch (error) { toast(error.message, "error"); }
   };
   $("#copyLink").onclick = async () => { await navigator.clipboard.writeText(evalUrl); toast("Evaluator link copied."); };
+  bindProtectionControls(protection);
   $("#duplicateCurrent").onclick = () => duplicateJourney(state.journey.id);
   $("#archiveCurrent").onclick = () => archiveCurrent();
   $("#deleteCurrent").onclick = async () => {

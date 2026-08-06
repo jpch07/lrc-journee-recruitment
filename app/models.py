@@ -281,6 +281,24 @@ class EvaluatorSession(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class EventDayProtection(Base):
+    __tablename__ = "event_day_protections"
+    __table_args__ = (UniqueConstraint("journey_id", name="uq_event_day_protection_journey"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    activation_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    duration_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="starting")
+    github_run_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    github_run_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=utcnow)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+
 class IdempotencyRecord(Base):
     __tablename__ = "idempotency_records"
     __table_args__ = (UniqueConstraint("scope", "request_key", name="uq_idempotency_scope_key"),)

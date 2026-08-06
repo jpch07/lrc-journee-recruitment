@@ -3,25 +3,18 @@
 ## Before the Journee
 
 1. Verify the external PostgreSQL backup completed and that a recent restore test exists.
-2. Open the production service early enough to wake it from sleep, then run:
-
-   ```powershell
-   python scripts/check_health.py https://lrc-journee-recruitment.onrender.com
-   ```
-
-3. Confirm `/health/live` and `/health/ready` both return `200`.
-4. Open the Journee, set the room count in Rooms & Assignments, then verify the roster, evaluator roles, and mandatory room placements.
-5. Confirm attendance on a second admin device and test the evaluator QR with a fictional evaluator if available.
-6. Open Admin > Settings & audit > Event-day protection and click `Activate / view protection`.
-7. In GitHub Actions, click `Run workflow`, choose the required duration, and start it at least 30
-   minutes before recruits arrive. Confirm both `primary-monitor` and `secondary-monitor` remain in
-   progress. They are offset by 30 seconds and check the service every minute.
-8. A separate scheduled check runs every five minutes at all times. This is a backup, not a substitute
-   for starting the two event-day monitors. GitHub notes that scheduled workflows can be delayed.
-9. If the Journee will exceed five hours, start another five-hour run before the first run finishes.
-10. Freeze production during the event: do not merge/deploy code, change hosting configuration, rotate
+2. Open the production admin application and the Journee being operated.
+3. Go to Settings & audit > Event-day protection, select `6 hours` or `12 hours`, and click
+   `Start Journee protection`. This also makes the selected Journee Active.
+4. Wait for the status to change from `Starting` to `Active`. The application verifies the process,
+   database, and two offset external monitor lanes automatically.
+5. Set the room count in Rooms & Assignments, then verify the roster, evaluator roles, and mandatory room placements.
+6. Confirm attendance on a second admin device and test the evaluator QR with a fictional evaluator if available.
+7. A separate scheduled check runs every five minutes at all times. This is a backup; GitHub notes that
+   scheduled workflows can be delayed.
+8. Freeze production during the event: do not merge/deploy code, change hosting configuration, rotate
     secrets, or restart Render until the Journee is completed unless responding to an active incident.
-11. Absolute zero downtime cannot be guaranteed by a free single-instance host. Keep the current
+9. Absolute zero downtime cannot be guaranteed by a free single-instance host. Keep the current
     Google Sheets process and a fresh Excel export available as the agreed emergency fallback.
 
 ## During the Journee
@@ -39,11 +32,16 @@
 - Do not publish a new assignment merely to refresh evaluator screens. Use Refresh; clients poll every five seconds.
 - If an evaluator/recruit becomes unavailable, save corrected attendance, generate a replacement preview, review warnings, and publish it.
 - If Render restarts, confirmed data remains in PostgreSQL. Re-run both health checks before continuing.
+- If the protection card shows `Incident`, click `Restart protection`. This cancels the unhealthy run and
+  starts a replacement for the selected 6- or 12-hour duration. If the admin application itself cannot
+  open, tell Codex `Incident on Journee <name>; restore protection` so hosting, database, and monitor state
+  can be checked from outside the application.
 - Use the current Google Sheets process only as the agreed pilot fallback; do not enter real data into two authoritative systems after cutover.
 
 ## After the Journee
 
-1. Close every activity and mark the Journee Completed.
+1. Go to Settings & audit > Event-day protection and click `End Journee`. After confirmation, this stops
+   the external monitors, closes every open activity, locks evaluator edits, and marks the Journee Completed.
 2. Export the full Excel workbook and verify its rosters, raw answers, scores, rankings, comments, and audit tabs.
 3. Store the export according to LRC policy. Export the admin-only photo ZIP only when required.
 4. Confirm the next database backup. Archive the Journee only after operational review.

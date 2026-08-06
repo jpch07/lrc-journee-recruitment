@@ -109,6 +109,14 @@ class ActivityActionRequest(BaseModel):
     reason: str = Field(default="", max_length=1000)
 
 
+class EventDayProtectionStartRequest(BaseModel):
+    duration_hours: Literal[6, 12]
+
+
+class EventDayProtectionActionRequest(BaseModel):
+    reason: str = Field(default="", max_length=1000)
+
+
 class EvaluationSimulationRequest(BaseModel):
     count: int | None = Field(default=None, ge=1, le=200)
 
