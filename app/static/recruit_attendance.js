@@ -72,14 +72,14 @@ function filteredRecruits() {
 }
 
 function recruitCard(item) {
-  const photoUrl = `/api/recruit-attendance/recruits/${item.id}/photo`;
+  const photoUrl = `/api/recruit-attendance/recruits/${item.id}/photo?v=${item.version}`;
   const photo = item.hasPhoto
     ? `<button type="button" class="photo-zoom-trigger attendance-photo" data-photo-url="${photoUrl}" data-photo-name="${h(item.name)}"><img src="${photoUrl}" alt="${h(item.name)}"></button>`
     : `<span class="attendance-photo placeholder">${h(item.name.slice(0, 1))}</span>`;
   return `<article class="attendance-recruit-card ${item.present ? "present" : ""}" data-id="${item.id}">
     <div class="attendance-recruit-heading">${photo}<div><h2>${h(item.name)}</h2><span class="attendance-state">${item.present ? "Present" : "Not present"}</span></div><label class="attendance-toggle"><input type="checkbox" class="attendance-present" ${item.present ? "checked" : ""}><span>Present</span></label></div>
     <div class="attendance-fields"><label>Phone number<input class="attendance-phone" inputmode="tel" autocomplete="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></label><label>Date of birth<input class="attendance-dob" type="date" value="${h(item.dateOfBirth || "")}"></label><label class="attendance-arrival-field">Time of arrival<input class="attendance-arrival" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></label></div>
-    <div class="attendance-card-footer"><span class="row-sync ${state.saves.has(item.id) ? "saving" : "saved"}" data-sync-id="${item.id}">${state.saves.has(item.id) ? "Saving…" : "Saved"}</span><button type="button" class="button danger small attendance-delete">Remove recruit</button></div>
+    <div class="attendance-card-footer"><span class="row-sync ${state.saves.has(item.id) ? "saving" : "saved"}" data-sync-id="${item.id}">${state.saves.has(item.id) ? "Saving…" : "Saved"}</span><div class="attendance-card-actions"><button type="button" class="button secondary small attendance-photo-change">${item.hasPhoto ? "Replace photo" : "+ Add photo"}</button>${item.hasPhoto ? `<button type="button" class="button ghost small attendance-photo-remove">Remove photo</button>` : ""}<button type="button" class="button danger small attendance-delete">Remove recruit</button></div></div>
   </article>`;
 }
 
@@ -122,6 +122,8 @@ function wireRoster() {
     card.querySelector(".attendance-phone").oninput = (event) => { item.phoneNumber = event.target.value; queueRecruitSave(item, { phone_number: item.phoneNumber || null }, 550); };
     card.querySelector(".attendance-dob").onchange = (event) => { item.dateOfBirth = event.target.value || null; queueRecruitSave(item, { date_of_birth: item.dateOfBirth }); };
     card.querySelector(".attendance-arrival").onchange = (event) => { item.arrivalTime = event.target.value ? new Date(event.target.value).toISOString() : null; queueRecruitSave(item, { arrival_time: item.arrivalTime }); };
+    card.querySelector(".attendance-photo-change").onclick = () => openPhotoDialog(item);
+    card.querySelector(".attendance-photo-remove")?.addEventListener("click", () => removePhoto(item));
     card.querySelector(".attendance-delete").onclick = () => removeRecruit(item);
   });
   document.querySelectorAll(".attendance-photo[data-photo-url]").forEach((button) => {
@@ -276,6 +278,70 @@ function openAddDialog() {
       button.disabled = false;
     }
   };
+}
+
+function applyRecruitSnapshot(saved) {
+  state.draft[saved.id] = structuredClone(saved);
+  const index = state.recruits.findIndex((item) => item.id === saved.id);
+  if (index >= 0) state.recruits[index] = structuredClone(saved);
+}
+
+function openPhotoDialog(item) {
+  if (state.saves.size) return toast("Wait for the current recruit changes to finish saving.", "error");
+  modalBody.innerHTML = `<form id="attendancePhotoForm"><p class="eyebrow">Recruit photo</p><h2>${item.hasPhoto ? "Replace" : "Add"} photo for ${h(item.name)}</h2><p class="muted">Choose a photo or take one with this device. It will be resized and stored privately.</p><label>Photo<input id="attendancePhotoInput" name="photo" type="file" accept="image/*" required></label><img id="attendancePhotoPreview" class="attendance-photo-preview hidden" alt="Selected photo preview"><div class="modal-actions"><button type="button" class="button ghost" id="attendanceModalCancel">Cancel</button><button class="button primary">${item.hasPhoto ? "Replace photo" : "Upload photo"}</button></div></form>`;
+  modal.className = "modal";
+  modal.showModal();
+  const input = document.querySelector("#attendancePhotoInput");
+  const preview = document.querySelector("#attendancePhotoPreview");
+  let previewUrl = null;
+  document.querySelector("#attendanceModalCancel").onclick = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    modal.close();
+  };
+  input.onchange = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const file = input.files?.[0];
+    if (!file) {
+      preview.classList.add("hidden");
+      return;
+    }
+    previewUrl = URL.createObjectURL(file);
+    preview.src = previewUrl;
+    preview.classList.remove("hidden");
+  };
+  document.querySelector("#attendancePhotoForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button.primary");
+    button.disabled = true;
+    try {
+      const saved = await api(`/api/recruit-attendance/recruits/${item.id}/photo`, {
+        method: "POST",
+        headers: { "X-CSRF-Token": state.session.csrfToken },
+        body: new FormData(event.currentTarget),
+      });
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      modal.close();
+      applyRecruitSnapshot(saved);
+      renderRoster();
+      toast(item.hasPhoto ? "Recruit photo replaced." : "Recruit photo added.");
+    } catch (problem) {
+      toast(problem.message, "error");
+      button.disabled = false;
+    }
+  };
+}
+
+async function removePhoto(item) {
+  if (state.saves.size) return toast("Wait for the current recruit changes to finish saving.", "error");
+  if (!confirm(`Remove the photo for ${item.name}? You can upload another photo afterward.`)) return;
+  try {
+    const saved = await api(`/api/recruit-attendance/recruits/${item.id}/photo`, mutation("DELETE"));
+    applyRecruitSnapshot(saved);
+    renderRoster();
+    toast("Recruit photo removed.");
+  } catch (problem) {
+    toast(problem.message, "error");
+  }
 }
 
 async function removeRecruit(item) {

@@ -28,6 +28,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "queueRecruitSave" in attendance_js
     assert "attendanceSave" not in attendance_js
     assert "checking for updates every 5 seconds" in attendance_js
+    assert "attendance-photo-change" in attendance_js
+    assert "removePhoto" in attendance_js
     assert "data-photo-viewer" in evaluator_js
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
