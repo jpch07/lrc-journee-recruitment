@@ -24,6 +24,7 @@ from .models import (
     AssignmentRound,
     EvaluationSubmission,
     Evaluator,
+    EvaluatorDirectory,
     GeneralAssessment,
     Journey,
     MandatoryRoomEvaluator,
@@ -78,6 +79,37 @@ def get_evaluator_or_404(db: Session, journey_id: str, evaluator_id: str) -> Eva
     return evaluator
 
 
+def populate_journey_evaluators_from_directory(db: Session, journey_id: str) -> list[Evaluator]:
+    existing = list(db.scalars(select(Evaluator).where(Evaluator.journey_id == journey_id)))
+    by_directory = {item.directory_id: item for item in existing if item.directory_id}
+    by_name = {item.name.casefold(): item for item in existing}
+    added: list[Evaluator] = []
+    directory = list(
+        db.scalars(
+            select(EvaluatorDirectory)
+            .where(EvaluatorDirectory.active.is_(True))
+            .order_by(EvaluatorDirectory.name)
+        )
+    )
+    for entry in directory:
+        evaluator = by_directory.get(entry.id) or by_name.get(entry.name.casefold())
+        if evaluator:
+            if not evaluator.directory_id:
+                evaluator.directory_id = entry.id
+            continue
+        evaluator = Evaluator(
+            journey_id=journey_id,
+            directory_id=entry.id,
+            name=entry.name,
+            role=entry.default_role,
+            present=False,
+            active=True,
+        )
+        db.add(evaluator)
+        added.append(evaluator)
+    return added
+
+
 def create_journey(db: Session, name: str, event_date, room_count: int, actor_name: str) -> Journey:
     journey = Journey(
         name=" ".join(name.split()),
@@ -96,6 +128,7 @@ def create_journey(db: Session, name: str, event_date, room_count: int, actor_na
             rubric_json=dumps([public_rubric(code) for code in ACTIVITY_ORDER]),
         )
     )
+    populate_journey_evaluators_from_directory(db, journey.id)
     audit(
         db,
         journey_id=journey.id,

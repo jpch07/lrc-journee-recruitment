@@ -12,6 +12,9 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "Save attendance" in admin_js
     assert "Full Excel" in admin_js
     assert "attendance-check" in admin_js
+    assert "Type evaluator name and press Enter" in admin_js
+    assert "evaluatorAttendanceSort" in admin_js
+    assert "mandatorySearch" in admin_js
     assert 'class="active-check"' not in admin_js
     assert "data-photo-viewer" in admin_js
     assert "Select your name" in evaluator_js
