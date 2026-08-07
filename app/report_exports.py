@@ -383,7 +383,7 @@ def _profile_sheet(workbook: Workbook, journey: Journey, data: dict, recruit: Re
         ["Attendance", "Present" if recruit.present else "Absent", "Arrival", _local_time(recruit.arrival_time)],
         ["Phone", recruit.phone_number or "Not recorded", "Date of birth", recruit.date_of_birth or "Not recorded"],
         ["Overall /20", (result or {}).get("overallScore", 0), "Overall rank", (result or {}).get("overallRank", "—")],
-        ["Color grade", color.title(), "Missing components", (result or {}).get("missingCount", 9)],
+        ["Color grade", color.title(), "Missing components", (result or {}).get("missingCount", 8)],
     ]
     if recruit.attendance_comment:
         details.append(["Attendance comment", recruit.attendance_comment, "", ""])

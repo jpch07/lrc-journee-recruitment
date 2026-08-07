@@ -877,10 +877,13 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
         general_missing = sum(1 for value in general_values.values() if value is None)
         overall = overall_score(dimension_values, general)
         overall_rank_inputs.append((recruit.id, overall))
+        missing_activities = [
+            code for code, item in activities_payload.items() if not item["complete"]
+        ]
         missing_dimensions = sum(1 for item in dimensions_payload.values() if not item["complete"])
-        missing = missing_dimensions + general_missing
+        missing = len(missing_activities) + general_missing
         missing_components = [
-            item["name"] for item in dimensions_payload.values() if not item["complete"]
+            RUBRICS[code].name for code in missing_activities
         ] + [
             label
             for key, label in (("punctuality", "Punctuality"), ("respect", "Respect to us"), ("seriousness", "Seriousness"))
@@ -899,6 +902,7 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                 "color": color_grade(overall),
                 "missingCount": missing,
                 "missingComponents": missing_components,
+                "missingActivityCount": len(missing_activities),
                 "missingDimensionCount": missing_dimensions,
                 "missingGeneralCount": general_missing,
                 "complete": missing == 0,

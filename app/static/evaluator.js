@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.4";
+import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.5";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const host = $("#evalHost");
@@ -60,14 +60,17 @@ async function showLanding() {
   try {
     const accounts = await api("/api/auth/usernames");
     $("#journeyName").textContent = "Evaluator workspace";
-    host.innerHTML = `<section class="eval-welcome"><p class="eyebrow">Secure access</p><h1>Evaluator login</h1></section><form id="evaluatorLoginForm" class="panel stack" style="margin-top:14px"><label>Username<input name="username" list="evaluatorUsernames" autocomplete="username" placeholder="Type your name" required></label><datalist id="evaluatorUsernames">${accounts.map((item) => `<option value="${h(item.username)}"></option>`).join("")}</datalist><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary wide">Log in</button><p id="evaluatorLoginError" class="form-error"></p></form>`;
+    host.innerHTML = `<section class="eval-welcome"><p class="eyebrow">Secure access</p><h1>Evaluator login</h1></section><form id="evaluatorLoginForm" class="panel stack" style="margin-top:14px"><label>Username<div class="account-search-picker"><input name="username" id="evaluatorUsername" autocomplete="off" placeholder="Search your name" required><div id="evaluatorUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit" id="evaluatorLoginSubmit" class="button primary wide">Log in</button><p id="evaluatorLoginError" class="form-error"></p></form>`;
+    wireAccountPicker($("#evaluatorUsername"), $("#evaluatorUsernames"), accounts);
     $("#evaluatorLoginForm").onsubmit = async (event) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget);
       const error = $("#evaluatorLoginError");
       error.textContent = "";
       try {
-        const login = await api("/api/auth/login", { method: "POST", body: { username: data.get("username"), password: data.get("password") } });
+        const account = selectedAccount(accounts, data.get("username"));
+        if (!account) throw new Error("Select a username from the evaluator list.");
+        const login = await api("/api/auth/login", { method: "POST", body: { username: account.username, password: data.get("password") } });
         state.csrf = login.csrfToken;
         const evaluatorSession = await api("/api/evaluator/session");
         state.csrf = evaluatorSession.csrfToken;

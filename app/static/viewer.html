@@ -1,3 +1,48 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#b20d2d"><title>LRC Journee · Read-only</title><link rel="stylesheet" href="/static/styles.css?v=20260807.4"></head>
-<body class="attendance-body"><div id="toasts" class="toasts" aria-live="polite"></div><header class="attendance-header"><span class="brand-mark small">LRC</span><div><strong>Management view</strong><small>Read-only statistics and profiles</small></div><button id="viewerLogout" class="button ghost small hidden">Log out</button></header><main id="viewerHost" class="viewer-shell"><div class="loading-card">Loading…</div></main><dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog><script type="module" src="/static/viewer.js?v=20260807.4"></script></body></html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#b20d2d">
+  <title>LRC Journee · Management view</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260807.5">
+</head>
+<body class="admin-body">
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <section id="viewerLoginView" class="login-shell hidden">
+    <div class="login-card">
+      <div class="brand-mark">LRC</div>
+      <p class="eyebrow">Lebanese Red Cross</p>
+      <h1>Management view</h1>
+      <form id="viewerLoginForm" class="stack">
+        <label>Username<div class="account-search-picker"><input id="viewerUsername" name="username" autocomplete="off" required placeholder="Search your name"><div id="viewerUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button type="submit" id="viewerLoginSubmit" class="button primary wide">Log in</button>
+        <p id="viewerLoginError" class="form-error" role="alert"></p>
+      </form>
+    </div>
+  </section>
+  <div id="viewerApp" class="hidden">
+    <header class="topbar">
+      <button id="viewerMenu" class="icon-button mobile-only" aria-label="Open menu">☰</button>
+      <div class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Read-only management</small></span></div>
+      <label class="journey-crumb">Journee <select id="viewerJourney"></select></label>
+      <div class="top-actions"><span id="viewerName" class="muted"></span><button id="viewerLogout" class="button ghost small">Log out</button></div>
+    </header>
+    <div class="workspace">
+      <aside id="viewerSidebar" class="sidebar">
+        <nav id="viewerNav">
+          <button data-tab="attendance"><span>✓</span> Attendance</button>
+          <button data-tab="results" class="active"><span>↗</span> Results</button>
+          <button data-tab="profiles"><span>♟</span> Recruit profiles</button>
+        </nav>
+        <span class="subtle">View only</span>
+      </aside>
+      <main id="viewerHost" class="content"><div class="loading-card">Loading…</div></main>
+    </div>
+  </div>
+  <dialog id="viewerModal" class="modal"><div id="viewerModalBody"></div></dialog>
+  <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
+  <script type="module" src="/static/viewer.js?v=20260807.5"></script>
+</body>
+</html>

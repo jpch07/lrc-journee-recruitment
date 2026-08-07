@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#b20d2d">
   <title>LRC Journee Recruitment · Admin</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260807.4">
+  <link rel="stylesheet" href="/static/styles.css?v=20260807.5">
 </head>
 <body class="admin-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -16,10 +16,9 @@
       <p class="eyebrow">Lebanese Red Cross</p>
       <h1>Journee Recruitment</h1>
       <form id="loginForm" class="stack">
-        <label>Username<input name="username" list="accountUsernames" autocomplete="username" required maxlength="200" placeholder="Type your name"></label>
-        <datalist id="accountUsernames"></datalist>
+        <label>Username<div class="account-search-picker"><input name="username" id="adminUsername" autocomplete="off" required maxlength="200" placeholder="Search your name"><div id="accountUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label>
         <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-        <button class="button primary wide">Log in</button>
+        <button type="submit" id="adminLoginSubmit" class="button primary wide">Log in</button>
       </form>
       <p id="loginError" class="form-error" role="alert"></p>
     </div>
@@ -62,6 +61,6 @@
   <dialog id="modal" class="modal"><div id="modalBody"></div></dialog>
   <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
   <input id="hiddenFile" type="file" class="hidden">
-  <script type="module" src="/static/admin.js?v=20260807.4"></script>
+  <script type="module" src="/static/admin.js?v=20260807.5"></script>
 </body>
 </html>

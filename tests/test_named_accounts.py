@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
+
 from app.db import SessionLocal
-from app.models import EvaluatorDirectory
+from app.auth import hash_password
+from app.models import EvaluatorDirectory, UserAccount
 
 
 def _login(client, username="JP Chaaya", password="test-password"):
@@ -21,6 +24,10 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
     })
     assert created.status_code == 200, created.text
     account = created.json()
+    assert "managedPassword" not in account
+    owner_accounts = client.get("/api/auth/accounts").json()
+    visible = next(item for item in owner_accounts if item["username"] == "Permission Tester")
+    assert visible["managedPassword"] == "temporary-password"
     updated = client.patch(f"/api/auth/accounts/{account['id']}", headers=headers, json={
         "can_results": True,
         "attendance_journey_ids": [journey["id"]],
@@ -62,6 +69,7 @@ def test_missing_accounts_are_generated_in_short_repeatable_batches(client):
     assert first.status_code == 200, first.text
     assert len(first.json()["created"]) == 8
     assert first.json()["remaining"] == 3
+    assert all(re.fullmatch(r"batchevaluator\d{2}\d{3}", item["password"]) for item in first.json()["created"])
 
     second = client.post("/api/auth/accounts/generate-missing", headers=headers)
     assert second.status_code == 200, second.text
@@ -71,3 +79,32 @@ def test_missing_accounts_are_generated_in_short_repeatable_batches(client):
     finished = client.post("/api/auth/accounts/generate-missing", headers=headers)
     assert finished.status_code == 200, finished.text
     assert finished.json() == {"created": [], "remaining": 0, "shownOnce": True}
+
+    accounts = client.get("/api/auth/accounts").json()
+    generated = [item for item in accounts if item["username"].startswith("Batch Evaluator")]
+    assert len(generated) == 11
+    assert all(item["managedPassword"] for item in generated)
+
+
+def test_generator_replaces_an_existing_unrecoverable_password(client):
+    with SessionLocal() as db:
+        directory = EvaluatorDirectory(name="Legacy Evaluator", default_role="dossard")
+        db.add(directory)
+        db.flush()
+        db.add(UserAccount(
+            username=directory.name,
+            password_hash=hash_password("old-unrecoverable-password"),
+            managed_password=None,
+            directory_id=directory.id,
+            evaluator_role="dossard",
+        ))
+        db.commit()
+
+    owner = _login(client)
+    generated = client.post(
+        "/api/auth/accounts/generate-missing",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+    ).json()
+    credential = next(item for item in generated["created"] if item["username"] == "Legacy Evaluator")
+    assert re.fullmatch(r"legacyevaluator\d{3}", credential["password"])
+    assert _login(client, "Legacy Evaluator", credential["password"])["evaluatorRole"] == "dossard"

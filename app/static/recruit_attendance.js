@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, toast } from "/static/common.js?v=20260807.4";
+import { api, escapeHtml as h, selectedAccount, toast, wireAccountPicker } from "/static/common.js?v=20260807.5";
 
 const host = document.querySelector("#recruitAttendanceHost");
 const journeyLabel = document.querySelector("#attendanceJourneyName");
@@ -42,8 +42,9 @@ function nowBeirutInput() {
 function renderUnlock() {
   logoutButton.classList.add("hidden");
   host.innerHTML = `<section class="attendance-welcome"><p class="eyebrow">${h(state.landing.eventDate)}</p><h1>${h(state.landing.name)}</h1></section>
-    <form id="attendanceUnlockForm" class="attendance-unlock-card"><label>Username<input name="username" list="attendanceUsernames" autocomplete="username" maxlength="200" required autofocus></label><datalist id="attendanceUsernames"></datalist><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary wide">Log in</button><p id="attendanceUnlockError" class="form-error" role="alert"></p></form>`;
-  api("/api/auth/usernames").then(items => { document.querySelector("#attendanceUsernames").innerHTML = items.map(item => `<option value="${h(item.username)}"></option>`).join(""); }).catch(() => {});
+    <form id="attendanceUnlockForm" class="attendance-unlock-card"><label>Username<div class="account-search-picker"><input name="username" id="attendanceUsername" autocomplete="off" maxlength="200" placeholder="Search your name" required autofocus><div id="attendanceUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button type="submit" id="attendanceLoginSubmit" class="button primary wide">Log in</button><p id="attendanceUnlockError" class="form-error" role="alert"></p></form>`;
+  let accounts = [];
+  api("/api/auth/usernames").then(items => { accounts = items; wireAccountPicker(document.querySelector("#attendanceUsername"), document.querySelector("#attendanceUsernames"), accounts); }).catch(() => {});
   document.querySelector("#attendanceUnlockForm").onsubmit = async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector("button");
@@ -52,9 +53,11 @@ function renderUnlock() {
     error.textContent = "";
     try {
       const values = new FormData(event.currentTarget);
+      const selected = selectedAccount(accounts, values.get("username"));
+      if (!selected) throw new Error("Select a username from the evaluator list.");
       const account = await api("/api/auth/login", {
         method: "POST",
-        body: { username: values.get("username"), password: values.get("password") },
+        body: { username: selected.username, password: values.get("password") },
       });
       state.session = await api(`/api/public/recruit-attendance/${encodeURIComponent(token)}/select`, { method: "POST", headers: { "X-CSRF-Token": account.csrfToken } });
       logoutButton.classList.remove("hidden");

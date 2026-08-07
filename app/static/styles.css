@@ -119,6 +119,12 @@ textarea { min-height: 105px; resize: vertical; }
 .search-suggestions { position: absolute; z-index: 30; top: calc(100% + 5px); left: 0; right: 0; display: none; overflow: auto; max-height: 330px; padding: 5px; border: 1px solid #cfd5dd; border-radius: 10px; background: #fff; box-shadow: 0 15px 40px rgba(25, 32, 45, .18); }
 .search-suggestions.visible { display: grid; }
 .search-suggestions button { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; color: var(--ink); background: transparent; text-align: left; }
+.account-search-picker { position: relative; }
+.account-search-picker > input { width: 100%; }
+.account-suggestions { top: calc(100% + 5px); right: 0; left: 0; max-height: 280px; overflow-y: auto; }
+.account-suggestions small { display: block; margin-top: 2px; color: var(--muted); text-transform: capitalize; }
+.managed-password { display: grid; grid-template-columns: minmax(145px, 1fr) auto auto; gap: 5px; min-width: 300px; }
+.managed-password input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .search-suggestions button:hover, .search-suggestions button:focus-visible { background: var(--red-soft); outline: none; }
 .search-suggestions button span:first-child { min-width: 0; }
 .search-suggestions button strong, .search-suggestions button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
