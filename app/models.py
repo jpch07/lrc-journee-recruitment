@@ -111,6 +111,7 @@ class UserAccount(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     username: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+    managed_password: Mapped[str | None] = mapped_column(String(500), nullable=True)
     directory_id: Mapped[str | None] = mapped_column(ForeignKey("evaluator_directory.id"), nullable=True, unique=True)
     evaluator_role: Mapped[str] = mapped_column(String(20), nullable=False, default="dossard")
     is_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

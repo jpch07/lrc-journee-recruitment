@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.4";
+import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.5";
 
 const state = {
   csrf: "",
@@ -22,6 +22,7 @@ const state = {
   pollTimer: null,
   lastProtectionPoll: 0,
   recruitAttendanceSaves: new Map(),
+  loginAccounts: [],
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -107,7 +108,7 @@ modal.addEventListener("click", (event) => {
 });
 
 async function initialize() {
-  loadAccountUsernames();
+  await loadAccountUsernames();
   try {
     const session = await api("/api/auth/session");
     if (!session.isOwner && !session.canAdmin) throw new Error("Administration access is not permitted.");
@@ -124,9 +125,9 @@ async function initialize() {
 
 async function loadAccountUsernames() {
   try {
-    const accounts = await api("/api/auth/usernames");
-    $("#accountUsernames").innerHTML = accounts.map((item) => `<option value="${h(item.username)}"></option>`).join("");
-  } catch { /* Manual username entry remains available. */ }
+    state.loginAccounts = await api("/api/auth/usernames");
+    wireAccountPicker($("#adminUsername"), $("#accountUsernames"), state.loginAccounts);
+  } catch { state.loginAccounts = []; }
 }
 
 $("#loginForm").addEventListener("submit", async (event) => {
@@ -134,9 +135,11 @@ $("#loginForm").addEventListener("submit", async (event) => {
   const form = new FormData(event.currentTarget);
   $("#loginError").textContent = "";
   try {
+    const account = selectedAccount(state.loginAccounts, form.get("username"));
+    if (!account) throw new Error("Select a username from the evaluator list.");
     const result = await api("/api/auth/login", {
       method: "POST",
-      body: { username: form.get("username"), password: form.get("password") },
+      body: { username: account.username, password: form.get("password") },
     });
     if (!result.isOwner && !result.canAdmin) throw new Error("This account does not have administration access.");
     state.csrf = result.csrfToken;
@@ -1075,12 +1078,12 @@ async function renderProfiles() {
 }
 
 function profileHtml(profile) {
-  const result = profile.result || { activities: {}, dimensions: {}, overallScore: 0, overallRank: "—", color: "red", missingCount: 9 };
+  const result = profile.result || { activities: {}, dimensions: {}, overallScore: 0, overallRank: "—", color: "red", missingCount: 8 };
   const arrival = profile.recruit.arrivalTime ? dateTimeInput(profile.recruit.arrivalTime).split("T")[1] : "Not recorded";
-  return `<div class="panel"><div class="profile-header">${profile.photoUrl ? `<button type="button" class="photo-zoom-trigger profile-photo-trigger" data-photo-viewer data-photo-url="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · Born ${h(profile.recruit.dateOfBirth || "Not recorded")} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${h(arrival)} <span>Asia/Beirut · use when grading punctuality</span></p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
+  return `<div class="panel"><div class="profile-header">${profile.photoUrl ? `<button type="button" class="photo-zoom-trigger profile-photo-trigger" data-photo-viewer data-photo-url="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · ${profile.recruit.dateOfBirth ? `Date of birth: ${h(profile.recruit.dateOfBirth)}` : "Date of birth not recorded"} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${h(arrival)}</p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
     <div class="panel"><div class="panel-header"><div><h2>Dimension performance</h2><p class="muted">These six grades, plus the general assessment, determine the overall /20. Select a dimension to inspect every criterion and evaluator grade.</p></div></div><div class="profile-performance"><div class="radar-wrap">${dimensionRadar(result)}</div><div class="profile-dimension-grid">${dimensionOrder.map((code) => { const item = result.dimensions?.[code] || { score: 0, rank: "—", complete: false }; return `<button type="button" class="profile-activity dimension-card" data-dimension="${code}" aria-label="View ${h(dimensionNames[code])} criterion grading"><small>${h(dimensionNames[code])}</small><strong>${fmt(item.score)} /1</strong><small>Rank ${item.rank ?? "—"} · ${item.complete ? "Complete" : "Incomplete"}</small><span class="dimension-card-action">View criteria →</span></button>`; }).join("")}</div></div></div>
     <div class="panel"><h2>Activity performance</h2><p class="muted">Select an activity to inspect and edit its evaluator submissions.</p><div class="profile-performance"><div class="radar-wrap">${activityRadar(result)}</div><div class="profile-activity-grid">${state.journey.activities.map((activity) => { const item = result.activities[activity.code] || { score: 0, rank: "—", submitted: 0, expected: 0 }; return `<button type="button" class="profile-activity profile-activity-button" data-activity-code="${activity.code}"><small>${h(activity.name)}</small><strong>${fmt(item.score)} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.submitted}/${item.expected}</small><span class="dimension-card-action">View evaluations →</span></button>`; }).join("")}</div></div></div>
-    <div class="two-column"><div class="panel"><h2>General assessment</h2><p class="muted">The average of these three grades contributes one /1 component. Changes stay local until Save profile.</p><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5" placeholder="Add private administrative notes about this recruit">${h(profile.assessment.notes)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="discardProfile">Discard</button><button class="button primary">Save profile</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p><p class="formula-note">(Six dimensions + General) × 20 / 7</p><p class="muted">A missing co-evaluator does not dilute available grades. A dimension with incomplete expected input stays flagged, and a fully missing component contributes zero.</p></div></div>
+    <div class="two-column"><div class="panel"><h2>General assessment</h2><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5" placeholder="Add private administrative notes about this recruit">${h(profile.assessment.notes)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="discardProfile">Discard</button><button class="button primary">Save profile</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p></div></div>
     <div class="panel"><h2>Evaluator breakdown</h2>${Object.entries(profile.evaluations).map(([code, entries]) => `<h3 style="margin-top:16px">${h(statusLabel(code))}</h3>${entries.length ? `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Score</th><th>Status</th><th>Comment</th><th>Control</th></tr></thead><tbody>${entries.map((entry) => `<tr><td>${h(entry.evaluatorName)}</td><td>${h(entry.evaluatorRole)}</td><td>${entry.submission ? fmt(entry.submission.score) : "—"}</td><td>${entry.submission ? h(statusLabel(entry.submission.status)) : "Missing"}</td><td>${h(entry.submission?.comments || "")}</td><td>${entry.submission ? `<button type="button" class="button secondary small submission-detail" data-id="${entry.submission.id}">Edit evaluation</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No published evaluator assignment.</p>`}`).join("")}</div>
     <div class="panel"><h2>Profile audit history</h2>${profile.history.length ? `<div class="audit-list">${profile.history.map(auditItem).join("")}</div>` : `<p class="muted">No profile changes yet.</p>`}</div>`;
 }
@@ -1227,7 +1230,7 @@ async function renderPermissions() {
   if (!state.isOwner) throw new Error("Owner access is required.");
   const [accounts, accountAudit] = await Promise.all([api("/api/auth/accounts"), api("/api/auth/account-audit")]);
   host.innerHTML = `${sectionHeading("Security", "Access & permissions", "", `<button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
-    <div class="panel"><div class="table-wrap"><table><thead><tr><th>Username</th><th>Role</th><th>Admin</th><th>Results</th><th>${h(state.journey.name)} attendance</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}"><td><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text"> Owner</small>` : ""}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-attendance attendance-check" type="checkbox" ${account.attendanceJourneyIds.includes(state.journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}></td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="inline-actions"><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save</button><button class="button ghost small reset-account">Reset password</button></div></td></tr>`).join("")}</tbody></table></div></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
+    <div class="panel"><div class="table-wrap"><table><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th>${h(state.journey.name)} attendance</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}"><td><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text"> Owner</small>` : ""}</td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-attendance attendance-check" type="checkbox" ${account.attendanceJourneyIds.includes(state.journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}></td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="inline-actions"><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save</button><button class="button ghost small reset-account">Reset password</button></div></td></tr>`).join("")}</tbody></table></div></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
   $$(".save-account", host).forEach((button) => button.onclick = async () => {
     const row = button.closest("tr");
     const account = accounts.find((item) => item.id === row.dataset.accountId);
@@ -1249,14 +1252,27 @@ async function renderPermissions() {
   });
   $$(".reset-account", host).forEach((button) => button.onclick = async () => {
     const account = accounts.find((item) => item.id === button.closest("tr").dataset.accountId);
-    const password = prompt(`Enter a new temporary password for ${account.username} (minimum 8 characters):`);
+    const compact = account.username.normalize("NFKD").toLocaleLowerCase().replace(/[^a-z0-9]/g, "") || "lrcuser";
+    const suggested = `${compact}${Math.floor(Math.random() * 900) + 100}`;
+    const password = prompt(`Enter a new password for ${account.username}:`, suggested);
     if (!password) return;
     try { await api(`/api/auth/accounts/${account.id}/reset-password`, mutation("POST", { new_password: password })); toast("Password reset. The user must change it after login."); }
-    catch (error) { toast(error.message, "error"); }
+    catch (error) { toast(error.message, "error"); return; }
+    await renderPermissions();
+  });
+  $$(".reveal-password", host).forEach((button) => button.onclick = () => {
+    const input = $(".managed-password-value", button.closest("td"));
+    input.type = input.type === "password" ? "text" : "password";
+    button.textContent = input.type === "password" ? "Show" : "Hide";
+  });
+  $$(".copy-password", host).forEach((button) => button.onclick = async () => {
+    const input = $(".managed-password-value", button.closest("td"));
+    await navigator.clipboard.writeText(input.value);
+    toast("Password copied.");
   });
   $("#addAccount").onclick = addAccountDialog;
   $("#generateAccounts").onclick = async () => {
-    if (!confirm("Generate accounts and one-time passwords for every active evaluator who does not have an account yet?")) return;
+    if (!confirm("Generate simple passwords for evaluators who do not have a visible managed password, and create any missing accounts?")) return;
     const button = $("#generateAccounts");
     button.disabled = true;
     const originalLabel = button.textContent;
@@ -1267,10 +1283,10 @@ async function renderPermissions() {
         const result = await api("/api/auth/accounts/generate-missing", mutation("POST"));
         created.push(...result.created);
         remaining = Number(result.remaining || 0);
-        button.textContent = remaining ? `Creating accounts… ${remaining} left` : "Preparing password file…";
+        button.textContent = remaining ? `Generating passwords… ${remaining} left` : "Preparing password file…";
         if (!result.created.length && remaining > 0) throw new Error("Account generation could not make progress.");
       }
-      if (!created.length) { toast("All active evaluators already have accounts."); return; }
+      if (!created.length) { toast("All active evaluators already have visible passwords."); return; }
       const rows = [["Username", "Password", "Role"], ...created.map((item) => [item.username, item.password, item.role])];
       const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
       const link = document.createElement("a");
@@ -1278,7 +1294,7 @@ async function renderPermissions() {
       link.download = `LRC-evaluator-passwords-${new Date().toISOString().slice(0, 10)}.csv`;
       link.click();
       URL.revokeObjectURL(link.href);
-      toast(`${created.length} accounts created. Password list downloaded; it cannot be retrieved again.`);
+      toast(`${created.length} evaluator passwords generated. They remain visible to the owner.`);
       await renderPermissions();
     } catch (error) { toast(error.message, "error"); }
     finally { button.disabled = false; button.textContent = originalLabel; }

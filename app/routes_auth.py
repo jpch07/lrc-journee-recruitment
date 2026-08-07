@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import secrets
+import unicodedata
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import delete, func, select
@@ -55,8 +56,14 @@ def _permission_ids(db: Session, account_id: str) -> list[str]:
     )
 
 
-def account_payload(db: Session, account: UserAccount, *, include_permissions: bool = True) -> dict:
-    return {
+def account_payload(
+    db: Session,
+    account: UserAccount,
+    *,
+    include_permissions: bool = True,
+    include_managed_password: bool = False,
+) -> dict:
+    payload = {
         "id": account.id,
         "username": account.username,
         "evaluatorRole": account.evaluator_role,
@@ -69,6 +76,15 @@ def account_payload(db: Session, account: UserAccount, *, include_permissions: b
         "attendanceJourneyIds": _permission_ids(db, account.id) if include_permissions else [],
         "testToolsEnabled": settings.test_tools_enabled,
     }
+    if include_managed_password:
+        payload["managedPassword"] = account.managed_password
+    return payload
+
+
+def simple_managed_password(username: str) -> str:
+    normalized = unicodedata.normalize("NFKD", username).casefold()
+    compact = "".join(character for character in normalized if character.isalnum()) or "lrcuser"
+    return f"{compact}{secrets.randbelow(900) + 100}"
 
 
 def _current_account(db: Session, context: UserContext) -> UserAccount:
@@ -144,6 +160,7 @@ def change_password(
     if not verify_password(account.password_hash, payload.current_password):
         raise HTTPException(status_code=403, detail="Current password is incorrect.")
     account.password_hash = hash_password(payload.new_password)
+    account.managed_password = payload.new_password
     account.must_change_password = False
     account.version += 1
     db.execute(delete(UserSession).where(UserSession.account_id == account.id, UserSession.token_hash != context.token_hash))
@@ -169,6 +186,7 @@ def create_account_record(db: Session, username: str, password: str, evaluator_r
     account = UserAccount(
         username=clean,
         password_hash=hash_password(password),
+        managed_password=password,
         directory_id=directory.id,
         evaluator_role=evaluator_role,
         must_change_password=True,
@@ -185,7 +203,7 @@ def accounts(
 ):
     del context
     return [
-        account_payload(db, item)
+        account_payload(db, item, include_managed_password=True)
         for item in db.scalars(select(UserAccount).order_by(UserAccount.is_owner.desc(), func.lower(UserAccount.username)))
     ]
 
@@ -248,23 +266,49 @@ def generate_missing_accounts(
         and directory.name.casefold() != "jp chaaya"
         and directory.name.casefold() not in existing_usernames
     ]
-    batch = missing_directories[:ACCOUNT_GENERATION_BATCH_SIZE]
+    accounts_without_managed_password = list(db.scalars(
+        select(UserAccount)
+        .where(
+            UserAccount.active.is_(True),
+            UserAccount.is_owner.is_(False),
+            UserAccount.managed_password.is_(None),
+            func.lower(UserAccount.username) != "marita",
+        )
+        .order_by(func.lower(UserAccount.username))
+    ))
+    pending: list[tuple[str, UserAccount | EvaluatorDirectory]] = [
+        ("reset", account) for account in accounts_without_managed_password
+    ] + [("create", directory) for directory in missing_directories]
+    batch = pending[:ACCOUNT_GENERATION_BATCH_SIZE]
     credentials: list[dict] = []
-    for directory in batch:
-        password = secrets.token_urlsafe(9)
-        account = create_account_record(db, directory.name, password, directory.default_role)
+    reset_count = 0
+    for action, item in batch:
+        password = simple_managed_password(item.username if action == "reset" else item.name)
+        if action == "reset":
+            account = item
+            account.password_hash = hash_password(password)
+            account.managed_password = password
+            account.must_change_password = True
+            account.version += 1
+            db.execute(delete(UserSession).where(UserSession.account_id == account.id))
+            reset_count += 1
+        else:
+            directory = item
+            account = create_account_record(db, directory.name, password, directory.default_role)
         credentials.append({"username": account.username, "password": password, "role": account.evaluator_role})
     audit(db, journey_id=None, actor_type="owner", actor_name=context.username,
           action="accounts.initial_password_batch_generated", entity_type="user_account",
           after={
               "count": len(credentials),
-              "remaining": len(missing_directories) - len(batch),
+              "created": len(batch) - reset_count,
+              "reset": reset_count,
+              "remaining": len(pending) - len(batch),
               "usernames": [item["username"] for item in credentials],
           })
     _commit(db)
     return {
         "created": credentials,
-        "remaining": len(missing_directories) - len(batch),
+        "remaining": len(pending) - len(batch),
         "shownOnce": True,
     }
 
@@ -328,6 +372,7 @@ def reset_password(
     if account.is_owner and not context.is_owner:
         raise HTTPException(status_code=403, detail="Only the owner can reset the owner password.")
     account.password_hash = hash_password(payload.new_password)
+    account.managed_password = payload.new_password
     account.must_change_password = True
     account.version += 1
     db.execute(delete(UserSession).where(UserSession.account_id == account.id))

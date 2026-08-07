@@ -9,6 +9,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     evaluator_js = (static / "evaluator.js").read_text(encoding="utf-8")
     attendance = (static / "recruit_attendance.html").read_text(encoding="utf-8")
     attendance_js = (static / "recruit_attendance.js").read_text(encoding="utf-8")
+    viewer = (static / "viewer.html").read_text(encoding="utf-8")
+    viewer_js = (static / "viewer.js").read_text(encoding="utf-8")
     assert "Journee library" in admin
     assert "Rooms & assignments" in admin
     assert "Save attendance" in admin_js
@@ -32,6 +34,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert 'type="number" min="0" max="5"' in evaluator_js
     common_js = (static / "common.js").read_text(encoding="utf-8")
     assert "wireDurationPickers" in common_js
+    assert "wireAccountPicker" in common_js
+    assert "selectedAccount" in common_js
     assert "data-duration-minutes" in common_js
     assert "Recruit attendance" in attendance
     assert "queueRecruitSave" in attendance_js
@@ -40,13 +44,21 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "attendance-photo-change" in attendance_js
     assert "removePhoto" in attendance_js
     assert "data-photo-viewer" in evaluator_js
+    assert "Search your name" in admin
+    assert "Search your name" in evaluator_js
+    assert "Search your name" in attendance_js
+    assert "Read-only management" in viewer
+    assert "View criteria" in viewer_js
+    assert "View evaluations" in viewer_js
+    assert "Evaluator breakdown" in viewer_js
+    assert "Results & profiles report" in viewer_js
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "?v=20260807.4" in admin
-    assert "?v=20260807.4" in evaluator
-    assert "common.js?v=20260807.4" in admin_js
-    assert "common.js?v=20260807.4" in evaluator_js
+    assert "?v=20260807.5" in admin
+    assert "?v=20260807.5" in evaluator
+    assert "common.js?v=20260807.5" in admin_js
+    assert "common.js?v=20260807.5" in evaluator_js
 
 
 def test_frontend_responses_prevent_stale_release_mixing(client):

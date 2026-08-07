@@ -24,6 +24,24 @@ def admin_headers(csrf):
     return {"X-CSRF-Token": csrf}
 
 
+def test_completion_lists_missing_activities_and_general_grades_not_dimensions():
+    with SessionLocal() as db:
+        journey = create_journey(db, "Incomplete Journey", date(2026, 9, 1), 1, "Test")
+        recruit = Recruit(journey_id=journey.id, name="Incomplete Recruit", present=True)
+        db.add(recruit)
+        db.flush()
+        row = result_snapshot(db, journey)["rows"][0]
+
+    assert row["missingCount"] == 8
+    assert row["missingActivityCount"] == 5
+    assert row["missingGeneralCount"] == 3
+    assert row["missingComponents"] == [
+        *[RUBRICS[code].name for code in ACTIVITY_ORDER],
+        "Punctuality", "Respect to us", "Seriousness",
+    ]
+    assert not any(name in row["missingComponents"] for name in ("Willingness", "Adaptability", "Intelligence"))
+
+
 def test_profile_notes_are_saved_audited_and_exported(client):
     csrf = admin_login(client)
     journey = client.post(

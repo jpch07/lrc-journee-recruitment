@@ -6,9 +6,15 @@ from sqlalchemy.orm import Session
 
 from .auth import UserContext, require_results
 from .db import get_db
-from .models import Journey, Recruit
-from .routes_admin import recruit_profile
-from .services import get_journey_or_404, result_snapshot, serialize_journey, serialize_recruit
+from .models import Evaluator, Journey, MandatoryRoomEvaluator, Recruit
+from .routes_admin import _activity_states, export_results_xlsx, export_xlsx, recruit_profile, submission_detail
+from .services import (
+    get_journey_or_404,
+    result_snapshot,
+    serialize_evaluator,
+    serialize_journey,
+    serialize_recruit,
+)
 
 router = APIRouter(prefix="/api/view", tags=["read-only-management"])
 
@@ -28,7 +34,26 @@ def journey_view(journey_id: str, context: UserContext = Depends(require_results
     recruits = list(db.scalars(select(Recruit).where(
         Recruit.journey_id == journey.id, Recruit.active.is_(True)
     ).order_by(func.lower(Recruit.name))))
-    return {"journey": serialize_journey(db, journey), "recruits": [serialize_recruit(item) for item in recruits], "results": result_snapshot(db, journey)}
+    mandatory_rooms = {
+        item.evaluator_id: item.room_number
+        for item in db.scalars(select(MandatoryRoomEvaluator).where(
+            MandatoryRoomEvaluator.journey_id == journey.id
+        ))
+    }
+    evaluators = []
+    for item in db.scalars(select(Evaluator).where(
+        Evaluator.journey_id == journey.id, Evaluator.active.is_(True)
+    ).order_by((Evaluator.role == "dossard"), func.lower(Evaluator.name))):
+        payload = serialize_evaluator(item)
+        payload["mandatoryRoom"] = mandatory_rooms.get(item.id)
+        evaluators.append(payload)
+    return {
+        "journey": serialize_journey(db, journey),
+        "activities": _activity_states(db, journey.id),
+        "recruits": [serialize_recruit(item) for item in recruits],
+        "evaluators": evaluators,
+        "results": result_snapshot(db, journey),
+    }
 
 
 @router.get("/journeys/{journey_id}/recruits/{recruit_id}/profile")
@@ -47,3 +72,34 @@ def profile_photo(journey_id: str, recruit_id: str, context: UserContext = Depen
     if not recruit or recruit.journey_id != journey_id or not recruit.photo_data:
         raise HTTPException(status_code=404, detail="Photo not found.")
     return Response(recruit.photo_data, media_type=recruit.photo_type or "image/webp", headers={"Cache-Control": "private, no-store"})
+
+
+@router.get("/journeys/{journey_id}/submissions/{submission_id}")
+def read_submission(
+    journey_id: str,
+    submission_id: str,
+    context: UserContext = Depends(require_results),
+    db: Session = Depends(get_db),
+):
+    del context
+    return submission_detail(journey_id, submission_id, context=None, db=db)
+
+
+@router.get("/journeys/{journey_id}/export.xlsx")
+def read_full_export(
+    journey_id: str,
+    context: UserContext = Depends(require_results),
+    db: Session = Depends(get_db),
+):
+    del context
+    return export_xlsx(journey_id, context=None, db=db)
+
+
+@router.get("/journeys/{journey_id}/results.xlsx")
+def read_results_export(
+    journey_id: str,
+    context: UserContext = Depends(require_results),
+    db: Session = Depends(get_db),
+):
+    del context
+    return export_results_xlsx(journey_id, context=None, db=db)

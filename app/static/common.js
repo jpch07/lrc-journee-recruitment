@@ -24,6 +24,50 @@ export function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function normalizedAccountName(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+export function selectedAccount(accounts, value) {
+  const normalized = normalizedAccountName(value);
+  return accounts.find((item) => normalizedAccountName(item.username) === normalized) || null;
+}
+
+export function wireAccountPicker(input, suggestions, accounts, { onSelect } = {}) {
+  const ordered = [...accounts].sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }));
+  const matches = () => {
+    const query = normalizedAccountName(input.value);
+    return query ? ordered.filter((item) => normalizedAccountName(item.username).includes(query)).slice(0, 8) : [];
+  };
+  const choose = (item) => {
+    input.value = item.username;
+    input.dataset.selectedUsername = item.username;
+    suggestions.classList.remove("visible");
+    suggestions.innerHTML = "";
+    onSelect?.(item);
+  };
+  const draw = () => {
+    delete input.dataset.selectedUsername;
+    const items = matches();
+    suggestions.innerHTML = items.map((item) => `<button type="button" role="option" data-username="${escapeHtml(item.username)}"><span><strong>${escapeHtml(item.username)}</strong><small>${escapeHtml(item.role || "account")}</small></span><span class="role-badge ${escapeHtml(item.role || "")}">${escapeHtml(item.role || "")}</span></button>`).join("");
+    suggestions.classList.toggle("visible", Boolean(input.value.trim() && items.length));
+    suggestions.querySelectorAll("button").forEach((button) => button.onclick = () => choose(
+      ordered.find((item) => item.username === button.dataset.username),
+    ));
+  };
+  input.addEventListener("input", draw);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const first = matches()[0];
+    if (!first) return;
+    event.preventDefault();
+    choose(first);
+    input.form?.querySelector('input[type="password"]')?.focus();
+  });
+  input.addEventListener("focus", draw);
+  input.addEventListener("blur", () => setTimeout(() => suggestions.classList.remove("visible"), 150));
+}
+
 export function fmt(value, digits = 2) {
   return Number(value || 0).toFixed(digits);
 }

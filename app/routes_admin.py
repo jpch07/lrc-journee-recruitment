@@ -2249,8 +2249,11 @@ def recruit_profile(
             "overallScore": 0.0,
             "overallRank": None,
             "color": "red",
-            "missingCount": len(DIMENSION_ORDER) + 3,
-            "missingComponents": [DIMENSION_NAMES[code] for code in DIMENSION_ORDER] + ["Punctuality", "Respect to us", "Seriousness"],
+            "missingCount": len(ACTIVITY_ORDER) + 3,
+            "missingComponents": [RUBRICS[code].name for code in ACTIVITY_ORDER] + ["Punctuality", "Respect to us", "Seriousness"],
+            "missingActivityCount": len(ACTIVITY_ORDER),
+            "missingDimensionCount": len(DIMENSION_ORDER),
+            "missingGeneralCount": 3,
             "complete": False,
         }
     assessment = db.get(GeneralAssessment, recruit.id)
@@ -2330,6 +2333,7 @@ def recruit_profile(
             "version": assessment.version if assessment else 0,
         },
         "evaluations": details,
+        "rubrics": {code: public_rubric(code) for code in ACTIVITY_ORDER},
         "adminEvaluations": {item.activity_code: _admin_evaluation_payload(item) for item in admin_evaluations},
         "history": [
             {
