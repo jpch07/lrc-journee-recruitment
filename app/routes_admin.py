@@ -2359,11 +2359,30 @@ def update_recruit_profile(
     db: Session = Depends(get_db),
 ):
     require_csrf(request, context.csrf_token)
+    return save_general_assessment(
+        db,
+        journey_id=journey_id,
+        recruit_id=recruit_id,
+        payload=payload,
+        actor_name=context.actor_name,
+        actor_type="admin",
+    )
+
+
+def save_general_assessment(
+    db: Session,
+    *,
+    journey_id: str,
+    recruit_id: str,
+    payload: GeneralAssessmentRequest,
+    actor_name: str,
+    actor_type: str,
+):
     journey = get_journey_or_404(db, journey_id)
     recruit = get_recruit_or_404(db, journey.id, recruit_id)
     assessment = db.get(GeneralAssessment, recruit.id)
     if assessment and payload.base_version is not None and payload.base_version != assessment.version:
-        raise HTTPException(status_code=409, detail="This profile was changed by another admin. Reload before saving.")
+        raise HTTPException(status_code=409, detail="This profile was changed by another user. Reload before saving.")
     before = {
         "punctuality": assessment.punctuality if assessment else None,
         "respect": assessment.respect if assessment else None,
@@ -2394,8 +2413,8 @@ def update_recruit_profile(
     audit(
         db,
         journey_id=journey.id,
-        actor_type="admin",
-        actor_name=context.actor_name,
+        actor_type=actor_type,
+        actor_name=actor_name,
         action="recruit.profile_updated",
         entity_type="recruit",
         entity_id=recruit.id,

@@ -47,18 +47,21 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "Search your name" in admin
     assert "Search your name" in evaluator_js
     assert "Search your name" in attendance_js
-    assert "Read-only management" in viewer
+    assert "Management view" in viewer
+    assert "General assessment editable" in viewer
+    assert "viewerGeneralAssessmentForm" in viewer_js
+    assert "Save general assessment" in viewer_js
     assert "View criteria" in viewer_js
     assert "View evaluations" in viewer_js
     assert "Evaluator breakdown" in viewer_js
     assert "Results & profiles report" in viewer_js
-    assert "viewer.js?v=20260807.6" in viewer
+    assert "viewer.js?v=20260807.7" in viewer
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "?v=20260807.5" in admin
-    assert "?v=20260807.5" in evaluator
-    assert "common.js?v=20260807.5" in admin_js
+    assert "?v=20260807.7" in admin
+    assert "?v=20260807.7" in evaluator
+    assert "common.js?v=20260807.7" in admin_js
     assert "common.js?v=20260807.5" in evaluator_js
 
 

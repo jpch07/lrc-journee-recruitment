@@ -75,6 +75,7 @@ def ensure_owner_account(db: Session) -> UserAccount:
         account.can_admin = True
         account.can_results = True
         account.active = True
+        account.evaluator_role = "dossard"
         if owner_directory and not account.directory_id:
             account.directory_id = owner_directory.id
         return account
@@ -83,7 +84,7 @@ def ensure_owner_account(db: Session) -> UserAccount:
         username="JP Chaaya",
         password_hash=password_hash,
         directory_id=owner_directory.id if owner_directory else None,
-        evaluator_role="overall",
+        evaluator_role="dossard",
         is_owner=True,
         can_admin=True,
         can_results=True,

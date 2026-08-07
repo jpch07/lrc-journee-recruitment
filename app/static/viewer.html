@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#b20d2d">
   <title>LRC Journee · Management view</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260807.5">
+  <link rel="stylesheet" href="/static/styles.css?v=20260807.7">
 </head>
 <body class="admin-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -25,7 +25,7 @@
   <div id="viewerApp" class="hidden">
     <header class="topbar">
       <button id="viewerMenu" class="icon-button mobile-only" aria-label="Open menu">☰</button>
-      <div class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Read-only management</small></span></div>
+      <div class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Management view</small></span></div>
       <label class="journey-crumb">Journee <select id="viewerJourney"></select></label>
       <div class="top-actions"><span id="viewerName" class="muted"></span><button id="viewerLogout" class="button ghost small">Log out</button></div>
     </header>
@@ -36,13 +36,13 @@
           <button data-tab="results" class="active"><span>↗</span> Results</button>
           <button data-tab="profiles"><span>♟</span> Recruit profiles</button>
         </nav>
-        <span class="subtle">View only</span>
+        <span class="subtle">General assessment editable</span>
       </aside>
       <main id="viewerHost" class="content"><div class="loading-card">Loading…</div></main>
     </div>
   </div>
   <dialog id="viewerModal" class="modal"><div id="viewerModalBody"></div></dialog>
   <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
-  <script type="module" src="/static/viewer.js?v=20260807.6"></script>
+  <script type="module" src="/static/viewer.js?v=20260807.7"></script>
 </body>
 </html>

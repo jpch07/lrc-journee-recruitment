@@ -15,9 +15,15 @@ def _login(client, username="JP Chaaya", password="test-password"):
 
 def test_named_permissions_protect_admin_results_and_attendance(client):
     owner = _login(client)
+    assert owner["evaluatorRole"] == "dossard"
     headers = {"X-CSRF-Token": owner["csrfToken"]}
     journey = client.post("/api/admin/journeys", headers=headers,
                           json={"name": "Permissions", "event_date": "2026-09-09"}).json()
+    recruit = client.post(
+        f"/api/admin/journeys/{journey['id']}/recruits",
+        headers=headers,
+        json={"name": "General Assessment Recruit"},
+    ).json()
     created = client.post("/api/auth/accounts", headers=headers, json={
         "username": "Permission Tester", "password": "temporary-password",
         "evaluator_role": "dossard",
@@ -40,6 +46,32 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
     assert client.get("/api/view/journeys").status_code == 200
     detail = client.get(f"/api/view/journeys/{journey['id']}")
     assert detail.status_code == 200
+    profile_url = f"/api/view/journeys/{journey['id']}/recruits/{recruit['id']}/profile"
+    profile = client.get(profile_url).json()
+    saved = client.put(profile_url, headers={"X-CSRF-Token": user["csrfToken"]}, json={
+        "punctuality": 0.7,
+        "respect": 0.8,
+        "seriousness": 0.9,
+        "comment": "Results-team assessment",
+        "notes": "Results-team note",
+        "base_version": profile["assessment"]["version"],
+    })
+    assert saved.status_code == 200, saved.text
+    updated_profile = client.get(profile_url).json()
+    assert updated_profile["assessment"] == {
+        "punctuality": 0.7,
+        "respect": 0.8,
+        "seriousness": 0.9,
+        "comment": "Results-team assessment",
+        "notes": "Results-team note",
+        "version": 1,
+    }
+    assert updated_profile["history"][0]["actorName"] == "Permission Tester"
+    stale = client.put(profile_url, headers={"X-CSRF-Token": user["csrfToken"]}, json={
+        "punctuality": 1,
+        "base_version": 0,
+    })
+    assert stale.status_code == 409
 
     owner = _login(client)
     journey_detail = client.get(f"/api/admin/journeys/{journey['id']}").json()
@@ -53,6 +85,21 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
 def test_marita_is_not_available_in_the_global_account_directory(client):
     names = [item["username"].casefold() for item in client.get("/api/auth/usernames").json()]
     assert "marita" not in names
+
+
+def test_owner_is_always_a_dossard_in_permissions(client):
+    owner = _login(client)
+    accounts = client.get("/api/auth/accounts").json()
+    jp = next(item for item in accounts if item["username"] == "JP Chaaya")
+    assert jp["evaluatorRole"] == "dossard"
+
+    changed = client.patch(
+        f"/api/auth/accounts/{jp['id']}",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+        json={"evaluator_role": "overall", "base_version": jp["version"]},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["evaluatorRole"] == "dossard"
 
 
 def test_missing_accounts_are_generated_in_short_repeatable_batches(client):
