@@ -59,12 +59,13 @@ $("#viewerLoginForm").onsubmit = async event => {
 
 async function openApp() {
   $("#viewerLoginView").classList.add("hidden");
-  $("#viewerApp").classList.remove("hidden");
+  $("#viewerApp").classList.add("hidden");
   $("#viewerName").textContent = state.session.username;
   state.journeys = await api("/api/view/journeys");
   if (!state.journeyId || !state.journeys.some(item => item.id === state.journeyId)) state.journeyId = state.journeys[0]?.id || "";
   $("#viewerJourney").innerHTML = state.journeys.map(item => `<option value="${item.id}" ${item.id === state.journeyId ? "selected" : ""}>${h(item.name)} · ${h(item.eventDate)}</option>`).join("");
   if (state.journeyId) await loadJourney(); else host.innerHTML = `<div class="empty-state"><h2>No Journees</h2></div>`;
+  $("#viewerApp").classList.remove("hidden");
 }
 
 async function loadJourney() {
