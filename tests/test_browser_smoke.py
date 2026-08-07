@@ -52,6 +52,7 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "View evaluations" in viewer_js
     assert "Evaluator breakdown" in viewer_js
     assert "Results & profiles report" in viewer_js
+    assert "viewer.js?v=20260807.6" in viewer
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
