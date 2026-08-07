@@ -33,6 +33,7 @@ from .utils import loads
 
 
 router = APIRouter(prefix="/api/auth", tags=["authentication"])
+ACCOUNT_GENERATION_BATCH_SIZE = 8
 
 
 def _commit(db: Session) -> None:
@@ -233,22 +234,39 @@ def generate_missing_accounts(
 ):
     require_csrf(request, context.csrf_token)
     existing_directory_ids = set(db.scalars(select(UserAccount.directory_id).where(UserAccount.directory_id.is_not(None))))
+    existing_usernames = {
+        name.casefold() for name in db.scalars(select(UserAccount.username))
+    }
+    missing_directories = [
+        directory
+        for directory in db.scalars(
+            select(EvaluatorDirectory)
+            .where(EvaluatorDirectory.active.is_(True), func.lower(EvaluatorDirectory.name) != "marita")
+            .order_by(func.lower(EvaluatorDirectory.name))
+        )
+        if directory.id not in existing_directory_ids
+        and directory.name.casefold() != "jp chaaya"
+        and directory.name.casefold() not in existing_usernames
+    ]
+    batch = missing_directories[:ACCOUNT_GENERATION_BATCH_SIZE]
     credentials: list[dict] = []
-    for directory in db.scalars(
-        select(EvaluatorDirectory)
-        .where(EvaluatorDirectory.active.is_(True), func.lower(EvaluatorDirectory.name) != "marita")
-        .order_by(func.lower(EvaluatorDirectory.name))
-    ):
-        if directory.id in existing_directory_ids or directory.name.casefold() == "jp chaaya":
-            continue
+    for directory in batch:
         password = secrets.token_urlsafe(9)
         account = create_account_record(db, directory.name, password, directory.default_role)
         credentials.append({"username": account.username, "password": password, "role": account.evaluator_role})
     audit(db, journey_id=None, actor_type="owner", actor_name=context.username,
-          action="accounts.initial_passwords_generated", entity_type="user_account",
-          after={"count": len(credentials), "usernames": [item["username"] for item in credentials]})
+          action="accounts.initial_password_batch_generated", entity_type="user_account",
+          after={
+              "count": len(credentials),
+              "remaining": len(missing_directories) - len(batch),
+              "usernames": [item["username"] for item in credentials],
+          })
     _commit(db)
-    return {"created": credentials, "shownOnce": True}
+    return {
+        "created": credentials,
+        "remaining": len(missing_directories) - len(batch),
+        "shownOnce": True,
+    }
 
 
 @router.patch("/accounts/{account_id}")
