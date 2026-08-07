@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.3";
+import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.4";
 
 const state = {
   csrf: "",
@@ -1257,19 +1257,31 @@ async function renderPermissions() {
   $("#addAccount").onclick = addAccountDialog;
   $("#generateAccounts").onclick = async () => {
     if (!confirm("Generate accounts and one-time passwords for every active evaluator who does not have an account yet?")) return;
+    const button = $("#generateAccounts");
+    button.disabled = true;
+    const originalLabel = button.textContent;
     try {
-      const result = await api("/api/auth/accounts/generate-missing", mutation("POST"));
-      if (!result.created.length) { toast("All active evaluators already have accounts."); return; }
-      const rows = [["Username", "Password", "Role"], ...result.created.map((item) => [item.username, item.password, item.role])];
+      const created = [];
+      let remaining = 1;
+      while (remaining > 0) {
+        const result = await api("/api/auth/accounts/generate-missing", mutation("POST"));
+        created.push(...result.created);
+        remaining = Number(result.remaining || 0);
+        button.textContent = remaining ? `Creating accounts… ${remaining} left` : "Preparing password file…";
+        if (!result.created.length && remaining > 0) throw new Error("Account generation could not make progress.");
+      }
+      if (!created.length) { toast("All active evaluators already have accounts."); return; }
+      const rows = [["Username", "Password", "Role"], ...created.map((item) => [item.username, item.password, item.role])];
       const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
       const link = document.createElement("a");
       link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
       link.download = `LRC-evaluator-passwords-${new Date().toISOString().slice(0, 10)}.csv`;
       link.click();
       URL.revokeObjectURL(link.href);
-      toast(`${result.created.length} accounts created. Password list downloaded; it cannot be retrieved again.`);
+      toast(`${created.length} accounts created. Password list downloaded; it cannot be retrieved again.`);
       await renderPermissions();
     } catch (error) { toast(error.message, "error"); }
+    finally { button.disabled = false; button.textContent = originalLabel; }
   };
 }
 

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from app.db import SessionLocal
+from app.models import EvaluatorDirectory
+
 
 def _login(client, username="JP Chaaya", password="test-password"):
     response = client.post("/api/auth/login", json={"username": username, "password": password})
@@ -43,3 +46,28 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
 def test_marita_is_not_available_in_the_global_account_directory(client):
     names = [item["username"].casefold() for item in client.get("/api/auth/usernames").json()]
     assert "marita" not in names
+
+
+def test_missing_accounts_are_generated_in_short_repeatable_batches(client):
+    with SessionLocal() as db:
+        db.add_all([
+            EvaluatorDirectory(name=f"Batch Evaluator {index:02}", default_role="overall")
+            for index in range(11)
+        ])
+        db.commit()
+
+    owner = _login(client)
+    headers = {"X-CSRF-Token": owner["csrfToken"]}
+    first = client.post("/api/auth/accounts/generate-missing", headers=headers)
+    assert first.status_code == 200, first.text
+    assert len(first.json()["created"]) == 8
+    assert first.json()["remaining"] == 3
+
+    second = client.post("/api/auth/accounts/generate-missing", headers=headers)
+    assert second.status_code == 200, second.text
+    assert len(second.json()["created"]) == 3
+    assert second.json()["remaining"] == 0
+
+    finished = client.post("/api/auth/accounts/generate-missing", headers=headers)
+    assert finished.status_code == 200, finished.text
+    assert finished.json() == {"created": [], "remaining": 0, "shownOnce": True}

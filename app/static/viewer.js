@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, fmt } from "/static/common.js?v=20260807.3";
+import { api, escapeHtml as h, fmt } from "/static/common.js?v=20260807.4";
 
 const host = document.querySelector("#viewerHost");
 const logout = document.querySelector("#viewerLogout");
