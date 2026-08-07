@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, toast } from "/static/common.js?v=20260807.2";
+import { api, escapeHtml as h, toast } from "/static/common.js?v=20260807.3";
 
 const host = document.querySelector("#recruitAttendanceHost");
 const journeyLabel = document.querySelector("#attendanceJourneyName");
@@ -41,8 +41,9 @@ function nowBeirutInput() {
 
 function renderUnlock() {
   logoutButton.classList.add("hidden");
-  host.innerHTML = `<section class="attendance-welcome"><p class="eyebrow">${h(state.landing.eventDate)}</p><h1>${h(state.landing.name)}</h1><p>Enter your name so recruit attendance changes are recorded correctly.</p></section>
-    <form id="attendanceUnlockForm" class="attendance-unlock-card"><label>Your name<input name="displayName" autocomplete="name" maxlength="120" required autofocus></label><button class="button primary wide">Open recruit attendance</button><p id="attendanceUnlockError" class="form-error" role="alert"></p></form>`;
+  host.innerHTML = `<section class="attendance-welcome"><p class="eyebrow">${h(state.landing.eventDate)}</p><h1>${h(state.landing.name)}</h1></section>
+    <form id="attendanceUnlockForm" class="attendance-unlock-card"><label>Username<input name="username" list="attendanceUsernames" autocomplete="username" maxlength="200" required autofocus></label><datalist id="attendanceUsernames"></datalist><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary wide">Log in</button><p id="attendanceUnlockError" class="form-error" role="alert"></p></form>`;
+  api("/api/auth/usernames").then(items => { document.querySelector("#attendanceUsernames").innerHTML = items.map(item => `<option value="${h(item.username)}"></option>`).join(""); }).catch(() => {});
   document.querySelector("#attendanceUnlockForm").onsubmit = async (event) => {
     event.preventDefault();
     const button = event.currentTarget.querySelector("button");
@@ -50,10 +51,12 @@ function renderUnlock() {
     button.disabled = true;
     error.textContent = "";
     try {
-      state.session = await api(`/api/public/recruit-attendance/${encodeURIComponent(token)}/session`, {
+      const values = new FormData(event.currentTarget);
+      const account = await api("/api/auth/login", {
         method: "POST",
-        body: { display_name: new FormData(event.currentTarget).get("displayName") },
+        body: { username: values.get("username"), password: values.get("password") },
       });
+      state.session = await api(`/api/public/recruit-attendance/${encodeURIComponent(token)}/select`, { method: "POST", headers: { "X-CSRF-Token": account.csrfToken } });
       logoutButton.classList.remove("hidden");
       await loadRoster();
       startAttendancePolling();
@@ -78,7 +81,7 @@ function recruitCard(item) {
     : `<span class="attendance-photo placeholder">${h(item.name.slice(0, 1))}</span>`;
   return `<article class="attendance-recruit-card ${item.present ? "present" : ""}" data-id="${item.id}">
     <div class="attendance-recruit-heading">${photo}<div><h2>${h(item.name)}</h2><span class="attendance-state">${item.present ? "Present" : "Not present"}</span></div><label class="attendance-toggle"><input type="checkbox" class="attendance-present" ${item.present ? "checked" : ""}><span>Present</span></label></div>
-    <div class="attendance-fields"><label>Phone number<input class="attendance-phone" inputmode="tel" autocomplete="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></label><label>Date of birth<input class="attendance-dob" type="date" value="${h(item.dateOfBirth || "")}"></label><label class="attendance-arrival-field">Time of arrival<input class="attendance-arrival" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></label></div>
+    <div class="attendance-fields"><label>Phone number<input class="attendance-phone" inputmode="tel" autocomplete="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></label><label>Date of birth<input class="attendance-dob" type="date" value="${h(item.dateOfBirth || "")}"></label><label class="attendance-arrival-field">Time of arrival<input class="attendance-arrival" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></label><label class="attendance-comment-field">Attendance comment<input class="attendance-comment" value="${h(item.attendanceComment || "")}" placeholder="Reason for tardiness (optional)"></label></div>
     <div class="attendance-card-footer"><span class="row-sync ${state.saves.has(item.id) ? "saving" : "saved"}" data-sync-id="${item.id}">${state.saves.has(item.id) ? "Saving…" : "Saved"}</span><div class="attendance-card-actions"><button type="button" class="button secondary small attendance-photo-change">${item.hasPhoto ? "Replace photo" : "+ Add photo"}</button>${item.hasPhoto ? `<button type="button" class="button ghost small attendance-photo-remove">Remove photo</button>` : ""}<button type="button" class="button danger small attendance-delete">Remove recruit</button></div></div>
   </article>`;
 }
@@ -122,6 +125,7 @@ function wireRoster() {
     card.querySelector(".attendance-phone").oninput = (event) => { item.phoneNumber = event.target.value; queueRecruitSave(item, { phone_number: item.phoneNumber || null }, 550); };
     card.querySelector(".attendance-dob").onchange = (event) => { item.dateOfBirth = event.target.value || null; queueRecruitSave(item, { date_of_birth: item.dateOfBirth }); };
     card.querySelector(".attendance-arrival").onchange = (event) => { item.arrivalTime = event.target.value ? new Date(event.target.value).toISOString() : null; queueRecruitSave(item, { arrival_time: item.arrivalTime }); };
+    card.querySelector(".attendance-comment").oninput = (event) => { item.attendanceComment = event.target.value; queueRecruitSave(item, { attendance_comment: item.attendanceComment }, 550); };
     card.querySelector(".attendance-photo-change").onclick = () => openPhotoDialog(item);
     card.querySelector(".attendance-photo-remove")?.addEventListener("click", () => removePhoto(item));
     card.querySelector(".attendance-delete").onclick = () => removeRecruit(item);
@@ -166,6 +170,7 @@ function applyPendingChanges(item, changes) {
   if ("arrival_time" in changes) item.arrivalTime = changes.arrival_time;
   if ("phone_number" in changes) item.phoneNumber = changes.phone_number || "";
   if ("date_of_birth" in changes) item.dateOfBirth = changes.date_of_birth;
+  if ("attendance_comment" in changes) item.attendanceComment = changes.attendance_comment || "";
 }
 
 async function runRecruitSave(recruitId) {
@@ -358,7 +363,7 @@ async function removeRecruit(item) {
 
 logoutButton.onclick = async () => {
   if (state.saves.size) return toast("Wait for the current recruit changes to finish saving.", "error");
-  try { await api("/api/recruit-attendance/logout", mutation("POST")); } catch (_) { /* Session may already be expired. */ }
+  try { await api("/api/auth/logout", mutation("POST")); } catch (_) { /* Session may already be expired. */ }
   clearInterval(state.pollTimer);
   state.session = null;
   renderUnlock();
@@ -377,7 +382,8 @@ async function initialize() {
     state.landing = await api(`/api/public/recruit-attendance/${encodeURIComponent(token)}`);
     journeyLabel.textContent = state.landing.name;
     try {
-      const session = await api("/api/recruit-attendance/session");
+      const account = await api("/api/auth/session");
+      const session = await api(`/api/public/recruit-attendance/${encodeURIComponent(token)}/select`, { method: "POST", headers: { "X-CSRF-Token": account.csrfToken } });
       if (session.journeyId === state.landing.journeyId) {
         state.session = session;
         logoutButton.classList.remove("hidden");

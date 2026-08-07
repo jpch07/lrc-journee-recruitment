@@ -1,0 +1,49 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Response
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from .auth import UserContext, require_results
+from .db import get_db
+from .models import Journey, Recruit
+from .routes_admin import recruit_profile
+from .services import get_journey_or_404, result_snapshot, serialize_journey, serialize_recruit
+
+router = APIRouter(prefix="/api/view", tags=["read-only-management"])
+
+
+@router.get("/journeys")
+def journeys(context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
+    del context
+    return [serialize_journey(db, item) for item in db.scalars(
+        select(Journey).order_by(Journey.event_date.desc(), func.lower(Journey.name))
+    )]
+
+
+@router.get("/journeys/{journey_id}")
+def journey_view(journey_id: str, context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    recruits = list(db.scalars(select(Recruit).where(
+        Recruit.journey_id == journey.id, Recruit.active.is_(True)
+    ).order_by(func.lower(Recruit.name))))
+    return {"journey": serialize_journey(db, journey), "recruits": [serialize_recruit(item) for item in recruits], "results": result_snapshot(db, journey)}
+
+
+@router.get("/journeys/{journey_id}/recruits/{recruit_id}/profile")
+def profile_view(journey_id: str, recruit_id: str, context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
+    del context
+    payload = recruit_profile(journey_id, recruit_id, context=None, db=db)
+    if payload.get("photoUrl"):
+        payload["photoUrl"] = f"/api/view/journeys/{journey_id}/recruits/{recruit_id}/photo"
+    return payload
+
+
+@router.get("/journeys/{journey_id}/recruits/{recruit_id}/photo")
+def profile_photo(journey_id: str, recruit_id: str, context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
+    del context
+    recruit = db.get(Recruit, recruit_id)
+    if not recruit or recruit.journey_id != journey_id or not recruit.photo_data:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    return Response(recruit.photo_data, media_type=recruit.photo_type or "image/webp", headers={"Cache-Control": "private, no-store"})

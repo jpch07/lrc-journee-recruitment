@@ -7,10 +7,13 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import STATIC_DIR, settings
+from .auth import ensure_owner_account
 from .db import SessionLocal, initialize_database
 from .routes_admin import router as admin_router
 from .routes_evaluator import router as evaluator_router
 from .routes_attendance import router as attendance_router
+from .routes_auth import router as auth_router
+from .routes_viewer import router as viewer_router
 from .rubric import validate_rubrics
 
 
@@ -19,6 +22,9 @@ async def lifespan(_app: FastAPI):
     settings.validate_production()
     validate_rubrics()
     initialize_database()
+    with SessionLocal() as db:
+        ensure_owner_account(db)
+        db.commit()
     yield
 
 
@@ -32,6 +38,8 @@ app = FastAPI(
 app.include_router(admin_router)
 app.include_router(evaluator_router)
 app.include_router(attendance_router)
+app.include_router(auth_router)
+app.include_router(viewer_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -42,7 +50,7 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
     path = request.url.path
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
-    elif path == "/" or path == "/admin" or path.startswith("/admin/") or path == "/evaluate" or path.startswith("/j/") or path.startswith("/recruit-attendance/"):
+    elif path == "/" or path == "/admin" or path.startswith("/admin/") or path == "/view" or path == "/evaluate" or path.startswith("/j/") or path.startswith("/recruit-attendance/"):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -58,9 +66,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0008_general_assessment_notes":
+            if revision != "0009_accounts_admin_evaluations":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0008_general_assessment_notes'."
+                    f"Database migration is {revision!r}, expected '0009_accounts_admin_evaluations'."
                 )
         return {"status": "ready"}
     except Exception as exc:
@@ -88,6 +96,11 @@ def evaluator_app(token: str):
 @app.get("/evaluate", include_in_schema=False)
 def current_evaluator_app():
     return FileResponse(STATIC_DIR / "evaluator.html")
+
+
+@app.get("/view", include_in_schema=False)
+def read_only_management_app():
+    return FileResponse(STATIC_DIR / "viewer.html")
 
 
 @app.get("/recruit-attendance/{token}", include_in_schema=False)

@@ -54,7 +54,7 @@ def test_custom_evaluator_becomes_a_default_for_future_journeys(client):
     response = client.post(
         f"/api/admin/journeys/{first['id']}/evaluators",
         headers=headers,
-        json={"name": "Visiting Evaluator", "role": "dossard", "add_to_directory": True},
+        json={"name": "Visiting Evaluator", "role": "dossard", "add_to_directory": True, "password": "temporary-pass"},
     )
     assert response.status_code == 200, response.text
 

@@ -85,6 +85,7 @@ class Recruit(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     present: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     arrival_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    attendance_comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     photo_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     photo_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -101,6 +102,35 @@ class EvaluatorDirectory(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     default_role: Mapped[str] = mapped_column(String(20), nullable=False, default="dossard")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserAccount(Base):
+    __tablename__ = "user_accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    username: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+    directory_id: Mapped[str | None] = mapped_column(ForeignKey("evaluator_directory.id"), nullable=True, unique=True)
+    evaluator_role: Mapped[str] = mapped_column(String(20), nullable=False, default="dossard")
+    is_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_results: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class JourneyPermission(Base):
+    __tablename__ = "journey_permissions"
+    __table_args__ = (UniqueConstraint("account_id", "journey_id", name="uq_account_journey_permission"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    can_attendance: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -233,6 +263,27 @@ class EvaluationSubmission(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
+class AdminEvaluation(Base):
+    __tablename__ = "admin_evaluations"
+    __table_args__ = (
+        UniqueConstraint("journey_id", "recruit_id", "activity_code", name="uq_admin_evaluation_recruit_activity"),
+        Index("ix_admin_evaluation_journey_activity", "journey_id", "activity_code"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    recruit_id: Mapped[str] = mapped_column(ForeignKey("recruits.id", ondelete="CASCADE"), nullable=False)
+    activity_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    responses_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    raw_payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    comments: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    score: Mapped[Decimal] = mapped_column(Numeric(8, 5), nullable=False, default=Decimal("0"))
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class SubmissionVersion(Base):
     __tablename__ = "submission_versions"
     __table_args__ = (UniqueConstraint("submission_id", "version", name="uq_submission_version"),)
@@ -266,6 +317,16 @@ class AdminSession(Base):
 
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
     actor_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    csrf_token: Mapped[str] = mapped_column(String(80), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("user_accounts.id", ondelete="CASCADE"), nullable=False)
     csrf_token: Mapped[str] = mapped_column(String(80), nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

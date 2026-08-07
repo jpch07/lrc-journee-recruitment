@@ -8,17 +8,21 @@ from sqlalchemy.orm import Session
 
 from .auth import (
     RecruitAttendanceContext,
+    UserContext,
     clear_expired_sessions,
     create_recruit_attendance_session,
     logout_recruit_attendance,
     require_csrf,
     require_recruit_attendance,
+    require_user,
 )
+from .config import settings
 from .db import get_db
 from .models import (
     Assignment,
     GeneralAssessment,
     Journey,
+    JourneyPermission,
     Recruit,
     RecruitAttendanceAccess,
     RoomPlanRecruit,
@@ -87,6 +91,8 @@ def start_recruit_attendance_session(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    if settings.is_production:
+        raise HTTPException(status_code=404, detail="Named account login is required.")
     journey = _access_journey(db, token)
     clear_expired_sessions(db)
     session = create_recruit_attendance_session(db, response, journey.id, payload.display_name)
@@ -105,6 +111,41 @@ def start_recruit_attendance_session(
         "journeyName": journey.name,
         "displayName": session.actor_name,
         "csrfToken": session.csrf_token,
+    }
+
+
+@router.post("/api/public/recruit-attendance/{token}/select")
+def select_recruit_attendance_journey(
+    token: str,
+    response: Response,
+    context: UserContext = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    journey = _access_journey(db, token)
+    permission = db.scalar(
+        select(JourneyPermission).where(
+            JourneyPermission.account_id == context.account_id,
+            JourneyPermission.journey_id == journey.id,
+            JourneyPermission.can_attendance.is_(True),
+        )
+    )
+    if not (context.is_owner or context.can_admin or permission):
+        raise HTTPException(status_code=403, detail="You do not have attendance access for this Journee.")
+    response.set_cookie(
+        "lrc_attendance_journey",
+        journey.id,
+        max_age=settings.session_hours * 3600,
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+    return {
+        "authenticated": True,
+        "journeyId": journey.id,
+        "journeyName": journey.name,
+        "displayName": context.username,
+        "csrfToken": context.csrf_token,
     }
 
 
@@ -219,6 +260,7 @@ def save_recruit_attendance(
         recruit.phone_number = (item.phone_number or "").strip() or None
         if "date_of_birth" in item.model_fields_set:
             recruit.date_of_birth = item.date_of_birth
+        recruit.attendance_comment = item.attendance_comment.strip()
         recruit.active = item.active
         recruit.version += 1
         changed.append({"before": before, "after": serialize_recruit(recruit)})

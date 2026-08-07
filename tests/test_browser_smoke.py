@@ -22,7 +22,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "mandatorySearch" in admin_js
     assert 'class="active-check"' not in admin_js
     assert "data-photo-viewer" in admin_js
-    assert "Select your name" in evaluator_js
+    assert "Evaluator login" in evaluator_js
+    assert "/api/auth/login" in evaluator_js
     assert "Submit" in evaluator_js
     assert "sport-feedback" not in evaluator_js
     assert "Provisional Sport score" not in evaluator_js
@@ -42,10 +43,10 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "?v=20260807.2" in admin
-    assert "?v=20260807.2" in evaluator
-    assert "common.js?v=20260807.2" in admin_js
-    assert "common.js?v=20260807.2" in evaluator_js
+    assert "?v=20260807.3" in admin
+    assert "?v=20260807.3" in evaluator
+    assert "common.js?v=20260807.3" in admin_js
+    assert "common.js?v=20260807.3" in evaluator_js
 
 
 def test_frontend_responses_prevent_stale_release_mixing(client):

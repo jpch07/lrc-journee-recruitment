@@ -19,6 +19,35 @@ class AdminLoginRequest(BaseModel):
         return value
 
 
+class AccountLoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=1, max_length=500)
+
+
+class AccountCreateRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=200)
+    password: str = Field(min_length=8, max_length=500)
+    evaluator_role: Literal["overall", "dossard"] = "dossard"
+
+
+class AccountUpdateRequest(BaseModel):
+    can_admin: bool | None = None
+    can_results: bool | None = None
+    active: bool | None = None
+    evaluator_role: Literal["overall", "dossard"] | None = None
+    attendance_journey_ids: list[str] | None = None
+    base_version: int | None = Field(default=None, ge=1)
+
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=500)
+    new_password: str = Field(min_length=8, max_length=500)
+
+
+class PasswordResetRequest(BaseModel):
+    new_password: str = Field(min_length=8, max_length=500)
+
+
 class JourneyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     event_date: date
@@ -42,6 +71,7 @@ class EvaluatorCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     role: Literal["overall", "dossard"]
     add_to_directory: bool = True
+    password: str | None = Field(default=None, min_length=8, max_length=500)
 
 
 class RecruitAttendanceItem(BaseModel):
@@ -50,6 +80,7 @@ class RecruitAttendanceItem(BaseModel):
     arrival_time: datetime | None = None
     phone_number: str | None = Field(default=None, max_length=40)
     date_of_birth: date | None = None
+    attendance_comment: str = Field(default="", max_length=1000)
     active: bool = True
     base_version: int | None = None
 
@@ -72,6 +103,7 @@ class RecruitAttendancePatchRequest(BaseModel):
     arrival_time: datetime | None = None
     phone_number: str | None = Field(default=None, max_length=40)
     date_of_birth: date | None = None
+    attendance_comment: str | None = Field(default=None, max_length=1000)
 
     @model_validator(mode="after")
     def require_change(self):
@@ -168,4 +200,8 @@ class EvaluationPayload(BaseModel):
 
 
 class AdminCorrectionRequest(EvaluationPayload):
+    reason: str = Field(min_length=1, max_length=1000)
+
+
+class AdminEvaluationRequest(EvaluationPayload):
     reason: str = Field(min_length=1, max_length=1000)

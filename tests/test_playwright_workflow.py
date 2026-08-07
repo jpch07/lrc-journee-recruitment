@@ -60,7 +60,7 @@ def test_admin_create_and_mobile_layout(tmp_path):
                 browser = playwright.chromium.launch(channel="msedge", headless=True)
             page = browser.new_page(viewport={"width": 390, "height": 844}, is_mobile=True)
             page.goto(base + "/admin", wait_until="networkidle")
-            page.fill('input[name="displayName"]', "Browser Admin")
+            page.fill('input[name="username"]', "JP Chaaya")
             page.fill('input[name="password"]', "browser-secret")
             page.click("#loginForm button")
             page.wait_for_selector("#createJourneyButton:visible")
@@ -75,7 +75,7 @@ def test_admin_create_and_mobile_layout(tmp_path):
             page.click('#workspaceNav button[data-section="attendance"]')
             page.click('.tabs button[data-tab="evaluators"]')
             page.wait_for_selector('#attendanceSearch[placeholder="Type evaluator name and press Enter"]')
-            assert page.locator("#attendanceTable tbody tr").count() == 82
+            assert page.locator("#attendanceTable tbody tr").count() == 81
             page.fill("#attendanceSearch", "Wahle")
             page.press("#attendanceSearch", "Enter")
             page.fill("#attendanceSearch", "Andy")
@@ -108,7 +108,8 @@ def test_admin_create_and_mobile_layout(tmp_path):
             attendance_context = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
             attendance_page = attendance_context.new_page()
             attendance_page.goto(attendance_url, wait_until="networkidle")
-            attendance_page.fill('input[name="displayName"]', "Door Volunteer")
+            attendance_page.fill('input[name="username"]', "JP Chaaya")
+            attendance_page.fill('input[name="password"]', "browser-secret")
             attendance_page.click("#attendanceUnlockForm button")
             attendance_page.wait_for_selector("#attendanceAdd")
             assert attendance_page.locator("#attendanceSave").count() == 0

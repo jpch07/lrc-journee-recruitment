@@ -7,7 +7,7 @@ from openpyxl import load_workbook
 from sqlalchemy import func, select
 
 from app.db import SessionLocal
-from app.models import (ActivityState, Assignment, AssignmentRound, EvaluationSubmission,
+from app.models import (ActivityState, AdminEvaluation, Assignment, AssignmentRound, EvaluationSubmission,
                         Evaluator, GeneralAssessment, Journey, Recruit, SubmissionVersion)
 from app.rubric import ACTIVITY_ORDER, DIMENSION_ORDER, RUBRICS
 from app.services import create_journey, result_snapshot
@@ -127,7 +127,7 @@ def test_complete_sport_workflow_and_isolation(client):
         response = client.post(
             f"/api/admin/journeys/{journey['id']}/evaluators",
             headers=admin_headers(csrf),
-            json={"name": f"Evaluator {index + 1}", "role": role, "add_to_directory": True},
+                json={"name": f"Evaluator {index + 1}", "role": role, "add_to_directory": True, "password": f"temporary-pass-{index}"},
         )
         evaluators.append(response.json())
 
@@ -336,6 +336,57 @@ def test_received_submission_is_not_diluted_by_missing_co_evaluator():
         assert row["activities"]["sport"]["score"] == 4.0
         assert row["activities"]["sport"]["submitted"] == 1
         assert row["activities"]["sport"]["expected"] == 2
+
+
+def test_admin_evaluation_replaces_evaluator_average_and_dimension_inputs():
+    with SessionLocal() as db:
+        journey = create_journey(db, "Admin Override", date(2026, 9, 8), 1, "Test")
+        recruit = Recruit(journey_id=journey.id, name="Recruit", present=True)
+        evaluator = Evaluator(journey_id=journey.id, name="Evaluator", role="overall", present=True)
+        db.add_all([recruit, evaluator]); db.flush()
+        round_record = AssignmentRound(journey_id=journey.id, activity_code="escape_room", version=1,
+                                       status="published", seed="override", created_by="Test")
+        db.add(round_record); db.flush()
+        assignment = Assignment(round_id=round_record.id, evaluator_id=evaluator.id, recruit_id=recruit.id, slot=1)
+        db.add(assignment); db.flush()
+        evaluator_responses = {criterion.key: 1 for criterion in RUBRICS["escape_room"].criteria}
+        admin_responses = {criterion.key: 5 for criterion in RUBRICS["escape_room"].criteria}
+        db.add(EvaluationSubmission(assignment_id=assignment.id, journey_id=journey.id,
+                                    activity_code="escape_room", evaluator_id=evaluator.id,
+                                    recruit_id=recruit.id, status="locked", score=1,
+                                    responses_json=dumps(evaluator_responses)))
+        db.add(AdminEvaluation(journey_id=journey.id, recruit_id=recruit.id,
+                               activity_code="escape_room", score=5,
+                               responses_json=dumps(admin_responses), updated_by="JP Chaaya"))
+        state = db.scalar(select(ActivityState).where(ActivityState.journey_id == journey.id,
+                                                       ActivityState.code == "escape_room"))
+        state.assignment_round_id = round_record.id
+        db.flush()
+        row = result_snapshot(db, journey)["rows"][0]
+        assert row["activities"]["escape_room"]["score"] == 5.0
+        assert row["activities"]["escape_room"]["adminOverride"] is True
+        assert row["dimensions"]["willingness"]["score"] == 0.2
+
+
+def test_admin_can_create_an_evaluation_without_an_assignment(client):
+    csrf = admin_login(client)
+    headers = admin_headers(csrf)
+    journey = client.post("/api/admin/journeys", headers=headers,
+                          json={"name": "Manual Evaluation", "event_date": "2026-09-10"}).json()
+    recruit = client.post(f"/api/admin/journeys/{journey['id']}/recruits", headers=headers,
+                          json={"name": "Unassigned Recruit"}).json()
+    responses = {criterion.key: 4 for criterion in RUBRICS["negotiation"].criteria}
+    saved = client.put(
+        f"/api/admin/journeys/{journey['id']}/recruits/{recruit['id']}/admin-evaluations/negotiation",
+        headers=headers,
+        json={"responses": responses, "raw": {}, "comments": "Entered by administration",
+              "reason": "Paper form entered manually"},
+    )
+    assert saved.status_code == 200, saved.text
+    detail = client.get(
+        f"/api/admin/journeys/{journey['id']}/recruits/{recruit['id']}/admin-evaluations/negotiation"
+    ).json()
+    assert detail["evaluation"]["score"] == 4.0
 
 
 def test_six_dimension_results_reach_exact_overall_maximum():
