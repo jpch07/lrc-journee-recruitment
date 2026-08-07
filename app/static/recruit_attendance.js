@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, toast } from "/static/common.js";
+import { api, escapeHtml as h, toast } from "/static/common.js?v=20260807.2";
 
 const host = document.querySelector("#recruitAttendanceHost");
 const journeyLabel = document.querySelector("#attendanceJourneyName");

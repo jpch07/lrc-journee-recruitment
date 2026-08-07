@@ -704,7 +704,10 @@ def export_xlsx(
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}-full-report.xlsx"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}-full-report.xlsx"',
+            "Cache-Control": "no-store",
+        },
     )
 
 
@@ -723,7 +726,10 @@ def export_results_xlsx(
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}-results-and-profiles.xlsx"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}-results-and-profiles.xlsx"',
+            "Cache-Control": "no-store",
+        },
     )
 
 

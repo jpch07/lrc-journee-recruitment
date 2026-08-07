@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -33,6 +33,18 @@ app.include_router(admin_router)
 app.include_router(evaluator_router)
 app.include_router(attendance_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def prevent_stale_frontend_assets(request: Request, call_next):
+    """Keep deployments from mixing cached HTML/JS files from different releases."""
+    response = await call_next(request)
+    path = request.url.path
+    if path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    elif path == "/" or path == "/admin" or path.startswith("/admin/") or path == "/evaluate" or path.startswith("/j/") or path.startswith("/recruit-attendance/"):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/health/live", include_in_schema=False)

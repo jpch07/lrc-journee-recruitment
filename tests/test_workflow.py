@@ -60,6 +60,7 @@ def test_profile_notes_are_saved_audited_and_exported(client):
     assert profile["history"][0]["after"]["notes"] == "Private follow-up note"
 
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
+    assert exported.headers["cache-control"] == "no-store"
     workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
     profile_sheet = next(sheet for sheet in workbook.worksheets if sheet.title.startswith("Profile 01"))
     values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
