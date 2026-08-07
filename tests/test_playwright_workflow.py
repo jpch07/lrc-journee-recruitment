@@ -148,6 +148,16 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.click("#viewerMenu")
             viewer_page.click('#viewerNav button[data-tab="profiles"]')
             viewer_page.wait_for_selector(".dimension-card")
+            assert viewer_page.locator("#viewerGeneralAssessmentForm input:not([disabled])").count() == 3
+            assert viewer_page.locator("#viewerGeneralAssessmentForm textarea:not([disabled])").count() == 2
+            assert viewer_page.locator("#viewerHost input:not([disabled]), #viewerHost textarea:not([disabled])").count() == 5
+            viewer_page.fill('#viewerGeneralAssessmentForm input[name="punctuality"]', "0.8")
+            viewer_page.fill('#viewerGeneralAssessmentForm input[name="respect"]', "0.9")
+            viewer_page.fill('#viewerGeneralAssessmentForm input[name="seriousness"]', "1")
+            viewer_page.fill('#viewerGeneralAssessmentForm textarea[name="comment"]', "Management comment")
+            viewer_page.fill('#viewerGeneralAssessmentForm textarea[name="notes"]', "Management note")
+            viewer_page.click("#viewerSaveAssessment")
+            viewer_page.wait_for_function("document.querySelector('#viewerGeneralAssessmentForm textarea[name=notes]')?.value === 'Management note'")
             viewer_page.locator(".dimension-card").first.click()
             viewer_page.wait_for_selector("#viewerModal[open]")
             viewer_page.click("#closeViewerModal")

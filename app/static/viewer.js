@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, wireAccountPicker } from "/static/common.js?v=20260807.5";
+import { api, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, wireAccountPicker } from "/static/common.js?v=20260807.7";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
@@ -149,7 +149,7 @@ function profileHtml(profile) {
   return `<div class="panel"><div class="profile-header">${photo}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · ${profile.recruit.dateOfBirth ? `Date of birth: ${h(profile.recruit.dateOfBirth)}` : "Date of birth not recorded"} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${profile.recruit.arrivalTime ? h(localDateTime(profile.recruit.arrivalTime)) : "Not recorded"}${profile.recruit.attendanceComment ? `<small class="profile-attendance-note">${h(profile.recruit.attendanceComment)}</small>` : ""}</p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
     <div class="panel"><div class="panel-header"><div><h2>Dimension performance</h2><p class="muted">Select a dimension to inspect every criterion and evaluator grade.</p></div></div><div class="profile-performance"><div class="radar-wrap">${radar(result, dimensionItems, 1)}</div><div class="profile-dimension-grid">${dimensionOrder.map(code => { const item = result.dimensions[code]; return `<button class="profile-activity dimension-card" data-dimension="${code}"><small>${h(dimensionNames[code])}</small><strong>${fmt(item.score)} /1</strong><small>Rank ${item.rank ?? "—"} · ${item.complete ? "Complete" : "Incomplete"}</small><span class="dimension-card-action">View criteria →</span></button>`; }).join("")}</div></div></div>
     <div class="panel"><h2>Activity performance</h2><p class="muted">Select an activity to inspect its evaluator submissions.</p><div class="profile-performance"><div class="radar-wrap">${radar(result, activityItems, 5)}</div><div class="profile-activity-grid">${activities.map(activity => { const item = result.activities[activity.code]; return `<button class="profile-activity activity-card-button" data-activity="${activity.code}"><small>${h(activity.name)}</small><strong>${fmt(item.score)} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.submitted}/${item.expected}</small><span class="dimension-card-action">View evaluations →</span></button>`; }).join("")}</div></div></div>
-    <div class="two-column"><div class="panel"><h2>General assessment</h2><div class="three-column"><label>Punctuality<input disabled value="${profile.assessment.punctuality ?? "Not entered"}"></label><label>Respect to us<input disabled value="${profile.assessment.respect ?? "Not entered"}"></label><label>Seriousness<input disabled value="${profile.assessment.seriousness ?? "Not entered"}"></label></div>${profile.assessment.comment ? `<h3>Comment</h3><p>${h(profile.assessment.comment)}</p>` : ""}${profile.assessment.notes ? `<h3>Notes</h3><p>${h(profile.assessment.notes)}</p>` : ""}</div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p>${missing.length ? `<div class="member-list">${missing.map(item => `<span class="member-chip">${h(item)}</span>`).join("")}</div>` : `<p class="success-text">All activities and general grades are complete.</p>`}</div></div>
+    <div class="two-column"><div class="panel"><h2>General assessment</h2><form id="viewerGeneralAssessmentForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5">${h(profile.assessment.notes)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="viewerDiscardAssessment">Discard</button><button class="button primary" id="viewerSaveAssessment">Save general assessment</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p>${missing.length ? `<div class="member-list">${missing.map(item => `<span class="member-chip">${h(item)}</span>`).join("")}</div>` : `<p class="success-text">All activities and general grades are complete.</p>`}</div></div>
     <div class="panel"><h2>Evaluator breakdown</h2>${Object.entries(profile.evaluations).map(([code, entries]) => `<h3 style="margin-top:16px">${h(state.data.activities.find(item => item.code === code)?.name || statusLabel(code))}</h3>${entries.length ? `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Score</th><th>Status</th><th>Comment</th><th>Evaluation</th></tr></thead><tbody>${entries.map((entry, index) => `<tr><td>${h(entry.evaluatorName)}</td><td>${h(entry.evaluatorRole)}</td><td>${entry.submission ? fmt(entry.submission.score) : "—"}</td><td>${entry.submission ? h(statusLabel(entry.submission.status)) : "Missing"}</td><td>${h(entry.submission?.comments || "")}</td><td>${entry.submission ? `<button class="button secondary small view-evaluation" data-code="${code}" data-index="${index}">View evaluation</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No published evaluator assignment.</p>`}`).join("")}</div>
     <div class="panel"><h2>Profile audit history</h2>${profile.history.length ? `<div class="audit-list">${profile.history.map(auditItem).join("")}</div>` : `<p class="muted">No profile changes yet.</p>`}</div>`;
 }
@@ -157,12 +157,39 @@ function profileHtml(profile) {
 async function renderProfile() {
   const recruits = [...state.data.recruits].sort((a, b) => a.name.localeCompare(b.name));
   const profile = state.profileId ? await api(`/api/view/journeys/${state.journeyId}/recruits/${state.profileId}/profile`) : null;
-  host.innerHTML = `${sectionHeading("Individual record", "Recruit profile", "Grades, rankings, comments, and evaluation history in view-only mode.", `<select id="viewerRecruit">${recruits.map(item => `<option value="${item.id}" ${item.id === state.profileId ? "selected" : ""}>${h(item.name)}</option>`).join("")}</select>`)}${profile ? profileHtml(profile) : `<div class="empty-state"><h2>No recruits</h2></div>`}`;
+  host.innerHTML = `${sectionHeading("Individual record", "Recruit profile", "Grades, rankings, comments, and evaluation history.", `<select id="viewerRecruit">${recruits.map(item => `<option value="${item.id}" ${item.id === state.profileId ? "selected" : ""}>${h(item.name)}</option>`).join("")}</select>`)}${profile ? profileHtml(profile) : `<div class="empty-state"><h2>No recruits</h2></div>`}`;
   $("#viewerRecruit")?.addEventListener("change", async event => { state.profileId = event.target.value; await renderProfile(); });
   if (!profile) return;
   $$(".dimension-card", host).forEach(button => button.onclick = () => showDimension(profile, button.dataset.dimension));
   $$(".activity-card-button", host).forEach(button => button.onclick = () => showActivity(profile, button.dataset.activity));
   $$(".view-evaluation", host).forEach(button => button.onclick = () => showEvaluation(profile, button.dataset.code, Number(button.dataset.index)));
+  $("#viewerDiscardAssessment")?.addEventListener("click", () => renderProfile());
+  $("#viewerGeneralAssessmentForm")?.addEventListener("submit", async event => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const optionalGrade = name => form.get(name) === "" ? null : Number(form.get(name));
+    const saveButton = $("#viewerSaveAssessment");
+    saveButton.disabled = true;
+    try {
+      await api(`/api/view/journeys/${state.journeyId}/recruits/${profile.recruit.id}/profile`, {
+        method: "PUT",
+        headers: { "X-CSRF-Token": state.session.csrfToken },
+        body: {
+          punctuality: optionalGrade("punctuality"),
+          respect: optionalGrade("respect"),
+          seriousness: optionalGrade("seriousness"),
+          comment: form.get("comment"),
+          notes: form.get("notes"),
+          base_version: profile.assessment.version,
+        },
+      });
+      toast("General assessment saved.");
+      await loadJourney();
+    } catch (error) {
+      toast(error.message, "error");
+      saveButton.disabled = false;
+    }
+  });
 }
 
 function showDimension(profile, code) {

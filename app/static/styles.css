@@ -123,8 +123,19 @@ textarea { min-height: 105px; resize: vertical; }
 .account-search-picker > input { width: 100%; }
 .account-suggestions { top: calc(100% + 5px); right: 0; left: 0; max-height: 280px; overflow-y: auto; }
 .account-suggestions small { display: block; margin-top: 2px; color: var(--muted); text-transform: capitalize; }
-.managed-password { display: grid; grid-template-columns: minmax(145px, 1fr) auto auto; gap: 5px; min-width: 300px; }
+.managed-password { display: grid; grid-template-columns: minmax(105px, 1fr) auto auto; gap: 5px; min-width: 0; }
 .managed-password input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.permissions-table { min-width: 1100px; table-layout: fixed; }
+.permissions-table col.permissions-user { width: 13%; }
+.permissions-table col.permissions-password { width: 28%; }
+.permissions-table col.permissions-role { width: 9%; }
+.permissions-table col.permissions-toggle { width: 7%; }
+.permissions-table col.permissions-attendance { width: 15%; }
+.permissions-table col.permissions-actions-column { width: 14%; }
+.permissions-table th, .permissions-table td { white-space: normal; }
+.permissions-table .account-role { width: 100%; min-width: 88px; }
+.permissions-attendance-heading { overflow-wrap: anywhere; }
+.permissions-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .search-suggestions button:hover, .search-suggestions button:focus-visible { background: var(--red-soft); outline: none; }
 .search-suggestions button span:first-child { min-width: 0; }
 .search-suggestions button strong, .search-suggestions button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

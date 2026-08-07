@@ -1,13 +1,21 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from .auth import UserContext, require_results
+from .auth import UserContext, require_csrf, require_results
 from .db import get_db
 from .models import Evaluator, Journey, MandatoryRoomEvaluator, Recruit
-from .routes_admin import _activity_states, export_results_xlsx, export_xlsx, recruit_profile, submission_detail
+from .routes_admin import (
+    _activity_states,
+    export_results_xlsx,
+    export_xlsx,
+    recruit_profile,
+    save_general_assessment,
+    submission_detail,
+)
+from .schemas import GeneralAssessmentRequest
 from .services import (
     get_journey_or_404,
     result_snapshot,
@@ -63,6 +71,26 @@ def profile_view(journey_id: str, recruit_id: str, context: UserContext = Depend
     if payload.get("photoUrl"):
         payload["photoUrl"] = f"/api/view/journeys/{journey_id}/recruits/{recruit_id}/photo"
     return payload
+
+
+@router.put("/journeys/{journey_id}/recruits/{recruit_id}/profile")
+def update_profile_general_assessment(
+    journey_id: str,
+    recruit_id: str,
+    payload: GeneralAssessmentRequest,
+    request: Request,
+    context: UserContext = Depends(require_results),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    return save_general_assessment(
+        db,
+        journey_id=journey_id,
+        recruit_id=recruit_id,
+        payload=payload,
+        actor_name=context.username,
+        actor_type="results",
+    )
 
 
 @router.get("/journeys/{journey_id}/recruits/{recruit_id}/photo")

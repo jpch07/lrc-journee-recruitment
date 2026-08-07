@@ -334,14 +334,15 @@ def update_account(
         value = getattr(payload, field)
         if value is not None:
             setattr(account, field, value)
-    if payload.evaluator_role is not None and account.directory_id:
-        directory = db.get(EvaluatorDirectory, account.directory_id)
-        if directory:
-            directory.default_role = payload.evaluator_role
     if account.is_owner:
         account.can_admin = True
         account.can_results = True
         account.active = True
+        account.evaluator_role = "dossard"
+    if payload.evaluator_role is not None and account.directory_id:
+        directory = db.get(EvaluatorDirectory, account.directory_id)
+        if directory:
+            directory.default_role = account.evaluator_role
     if payload.attendance_journey_ids is not None:
         valid_ids = set(db.scalars(select(Journey.id).where(Journey.id.in_(payload.attendance_journey_ids)))) if payload.attendance_journey_ids else set()
         db.execute(delete(JourneyPermission).where(JourneyPermission.account_id == account.id))
