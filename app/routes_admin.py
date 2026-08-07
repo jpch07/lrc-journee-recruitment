@@ -65,6 +65,7 @@ from .rubric import (
     RUBRICS,
     public_rubric,
 )
+from .report_exports import build_report_workbook
 from .schemas import (
     ActivityActionRequest,
     AdminCorrectionRequest,
@@ -696,14 +697,33 @@ def export_xlsx(
 ):
     del context
     journey = get_journey_or_404(db, journey_id)
-    workbook = _full_export(db, journey)
+    workbook = build_report_workbook(db, journey, full=True)
     output = io.BytesIO()
     workbook.save(output)
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "journee"
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{safe_name}-export.xlsx"'},
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}-full-report.xlsx"'},
+    )
+
+
+@router.get("/journeys/{journey_id}/results.xlsx")
+def export_results_xlsx(
+    journey_id: str,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    workbook = build_report_workbook(db, journey, full=False)
+    output = io.BytesIO()
+    workbook.save(output)
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "journee"
+    return StreamingResponse(
+        io.BytesIO(output.getvalue()),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}-results-and-profiles.xlsx"'},
     )
 
 
@@ -1964,6 +1984,7 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                             "evaluatorId": evaluation["evaluatorId"],
                             "evaluatorName": evaluation["evaluatorName"],
                             "evaluatorRole": evaluation["evaluatorRole"],
+                            "submissionId": submission.get("id") if submission else None,
                             "status": submission.get("status") if submission else "missing",
                             "grade": float(grade) if grade is not None else None,
                             "rawValue": raw_value,
@@ -2193,9 +2214,11 @@ def correct_submission(
     )
     if not assignment or not round_record or not state:
         raise HTTPException(status_code=409, detail="The evaluation history is incomplete.")
-    if state.status != "closed":
-        raise HTTPException(status_code=409, detail="Admin corrections are available after the activity is closed.")
-    save_submission(
+    if payload.client_version is not None and payload.client_version != submission.version:
+        raise HTTPException(status_code=409, detail="This evaluation was changed by another user. Reload before saving.")
+    if not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="A correction reason is required.")
+    saved = save_submission(
         db,
         assignment=assignment,
         round_record=round_record,
@@ -2208,8 +2231,20 @@ def correct_submission(
         submit=True,
         reason=payload.reason,
     )
+    if state.status == "closed":
+        saved.status = "locked"
+        version_record = db.scalar(
+            select(SubmissionVersion).where(
+                SubmissionVersion.submission_id == saved.id,
+                SubmissionVersion.version == saved.version,
+            )
+        )
+        if version_record:
+            version_payload = loads(version_record.payload_json, {})
+            version_payload["status"] = "locked"
+            version_record.payload_json = dumps(version_payload)
     _commit(db)
-    return {"ok": True, "version": submission.version, "score": float(submission.score)}
+    return {"ok": True, "version": saved.version, "score": float(saved.score), "status": saved.status}
 
 
 @router.get("/journeys/{journey_id}/event-day-protection")

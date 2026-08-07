@@ -197,6 +197,8 @@ tr.inactive { opacity: .5; }
 .profile-activity { padding: 13px; border: 1px solid var(--line); border-radius: 10px; }
 .profile-activity strong { display: block; font-size: 1.25rem; }
 .profile-activity small { color: var(--muted); }
+.profile-activity-button { width: 100%; color: inherit; text-align: left; background: #fff; cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
+.profile-activity-button:hover, .profile-activity-button:focus-visible { border-color: var(--red); box-shadow: 0 7px 18px rgba(178,13,45,.12); transform: translateY(-1px); outline: none; }
 .dimension-card { width: 100%; color: inherit; text-align: left; background: #fff; cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
 .dimension-card:hover, .dimension-card:focus-visible { border-color: var(--red); box-shadow: 0 7px 18px rgba(178,13,45,.12); transform: translateY(-1px); outline: none; }
 .dimension-card-action { display: block; margin-top: 9px; color: var(--red); font-size: .75rem; font-weight: 800; }
@@ -224,6 +226,8 @@ tr.inactive { opacity: .5; }
 .dimension-modal-score { flex: 0 0 auto; padding: 10px 14px; border-radius: 12px; text-align: right; background: #fff1f4; }
 .dimension-modal-score strong { display: block; color: var(--red); font-size: 1.45rem; }
 .dimension-modal-score small { color: var(--muted); }
+.evaluation-editor-scroll { max-height: 52vh; padding-right: 5px; overflow: auto; }
+.criterion-evaluator-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .dimension-breakdown-scroll { display: grid; gap: 18px; max-height: 64vh; margin-top: 18px; padding-right: 4px; overflow-y: auto; }
 .dimension-activity-section { padding-top: 15px; border-top: 1px solid var(--line); }
 .dimension-activity-section:first-child { padding-top: 0; border-top: 0; }
@@ -242,6 +246,16 @@ tr.inactive { opacity: .5; }
 .criterion-grade { flex: 0 0 auto; text-align: right; }
 .criterion-grade strong, .criterion-grade small { display: block; }
 .criterion-grade small { color: var(--muted); font-size: .7rem; }
+.duration-picker { display: grid; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: #f7f8fa; }
+.duration-selector { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: end; gap: 7px; }
+.duration-selector > span { padding-bottom: 12px; color: var(--muted); font-size: 1.1rem; font-weight: 800; }
+.duration-selector label { display: grid; gap: 4px; min-width: 0; }
+.duration-selector label span { color: var(--muted); font-size: .68rem; font-weight: 750; text-align: center; }
+.duration-selector select { width: 100%; min-height: 46px; padding: 8px; font-size: 1rem; font-variant-numeric: tabular-nums; text-align: center; }
+.duration-picker-status { color: var(--muted); text-align: center; }
+.duration-picker-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.duration-picker-footer > span { display: flex; gap: 5px; }
+.duration-picker-footer button { padding: 3px 7px; border: 0; background: transparent; color: var(--red); font: inherit; font-size: .72rem; font-weight: 750; cursor: pointer; }
 .photo-viewer { width: min(920px, calc(100% - 28px)); max-width: none; max-height: 94vh; padding: 14px; border: 0; border-radius: 18px; background: #11151b; box-shadow: 0 30px 100px rgba(0,0,0,.48); overflow: visible; }
 .photo-viewer::backdrop { background: rgba(10,13,18,.84); backdrop-filter: blur(4px); }
 .photo-viewer img { display: block; max-width: 100%; max-height: calc(94vh - 70px); margin: 0 auto; border-radius: 11px; object-fit: contain; }
@@ -392,6 +406,7 @@ tr.inactive { opacity: .5; }
   .attendance-card-footer { align-items: flex-start; flex-direction: column; }
   .attendance-card-actions { width: 100%; justify-content: stretch; }
   .attendance-card-actions .button { flex: 1 1 auto; }
+  .duration-selector { gap: 4px; }
   .attendance-save-bar { grid-template-columns: 1fr 1fr; }
   .attendance-save-bar span { grid-column: 1 / -1; text-align: center; }
 }

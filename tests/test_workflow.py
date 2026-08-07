@@ -61,9 +61,9 @@ def test_profile_notes_are_saved_audited_and_exported(client):
 
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
-    rows = list(workbook["General assessments"].iter_rows(values_only=True))
-    assert "Notes" in rows[0]
-    assert rows[1][rows[0].index("Notes")] == "Private follow-up note"
+    profile_sheet = next(sheet for sheet in workbook.worksheets if sheet.title.startswith("Profile 01"))
+    values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
+    assert "Notes: Private follow-up note" in values
     workbook.close()
 
 
@@ -141,10 +141,10 @@ def test_complete_sport_workflow_and_isolation(client):
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     assert exported.status_code == 200
     workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
-    recruit_rows = list(workbook["Recruits"].iter_rows(values_only=True))
-    assert "Date of Birth" in recruit_rows[0]
-    dob_index = recruit_rows[0].index("Date of Birth")
-    assert recruit_rows[1][dob_index] == "2000-01-02"
+    recruit_rows = list(workbook["Recruit Attendance"].iter_rows(min_row=4, values_only=True))
+    assert "Date of birth" in recruit_rows[0]
+    dob_index = recruit_rows[0].index("Date of birth")
+    assert recruit_rows[1][dob_index].date().isoformat() == "2000-01-02"
     workbook.close()
     response = client.put(
         f"/api/admin/journeys/{journey['id']}/attendance/evaluators",
@@ -208,6 +208,7 @@ def test_complete_sport_workflow_and_isolation(client):
     response = client.post(f"/api/evaluator/tasks/{task['assignmentId']}/submit", headers=headers, json=payload)
     assert response.status_code == 200, response.text
     assert response.json()["submission"]["score"] == 5.0
+    submitted = response.json()["submission"]
     duplicate = client.post(f"/api/evaluator/tasks/{task['assignmentId']}/submit", headers=headers, json=payload)
     assert duplicate.status_code == 200
     with SessionLocal() as db:
@@ -233,12 +234,45 @@ def test_complete_sport_workflow_and_isolation(client):
     assert push_ups["evaluators"][0]["grade"] == 5.0
     assert push_ups["evaluators"][0]["rawValue"] == 30.0
 
+    correction_url = f"/api/admin/journeys/{journey['id']}/submissions/{submitted['id']}/correct"
+    corrected_payload = {
+        "responses": {},
+        "raw": {"push_ups": 15, "wall_sit": 60, "beep_test": 300, "plank": 60},
+        "comments": "Admin verified result",
+        "reason": "Corrected from the signed sport sheet",
+        "client_version": submitted["version"],
+    }
+    corrected = client.post(correction_url, headers=admin_headers(csrf), json=corrected_payload)
+    assert corrected.status_code == 200, corrected.text
+    assert corrected.json()["score"] == 2.5
+    assert corrected.json()["status"] == "submitted"
+    stale = client.post(correction_url, headers=admin_headers(csrf), json=corrected_payload)
+    assert stale.status_code == 409
+
+    results_export = client.get(f"/api/admin/journeys/{journey['id']}/results.xlsx")
+    assert results_export.status_code == 200
+    result_workbook = load_workbook(io.BytesIO(results_export.content), read_only=False, data_only=True)
+    assert {"Results Summary", "Dimension Rankings", "Activity Rankings"}.issubset(result_workbook.sheetnames)
+    profile_sheet = next(sheet for sheet in result_workbook.worksheets if sheet.title.startswith("Profile 01"))
+    assert len(profile_sheet._charts) == 2
+    profile_values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
+    assert "Criterion-level grading" in profile_values
+    result_workbook.close()
+
     response = client.post(
         f"/api/admin/journeys/{journey['id']}/activities/sport/close",
         headers=admin_headers(csrf),
         json={"reason": ""},
     )
     assert response.status_code == 200
+    closed_correction = client.post(
+        correction_url,
+        headers=admin_headers(csrf),
+        json={**payload, "reason": "Final admin verification after closure", "client_version": corrected.json()["version"]},
+    )
+    assert closed_correction.status_code == 200, closed_correction.text
+    assert closed_correction.json()["score"] == 5.0
+    assert closed_correction.json()["status"] == "locked"
     blocked = client.put(
         f"/api/evaluator/tasks/{task['assignmentId']}/draft",
         headers={"X-CSRF-Token": evaluator_csrf},

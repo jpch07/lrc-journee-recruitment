@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, fmt, statusLabel, toast, uid } from "/static/common.js";
+import { api, durationPickerHtml, escapeHtml as h, fmt, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const host = $("#evalHost");
@@ -152,6 +152,8 @@ function renderForm(payload) {
   </form>`;
   const form = $("#evaluationForm");
   form.dataset.version = payload.version ?? "";
+  wireDurationPickers(form);
+  wireBoundedNumberInputs(form);
   updateCompletion();
   if (!locked) {
     form.oninput = () => {
@@ -184,8 +186,8 @@ function criterionField(criterion, kind, payload, locked) {
   const input = criterion.inputType === "integer"
     ? `<input name="${criterion.key}" type="number" min="0" step="1" inputmode="numeric" value="${h(value)}" ${locked ? "disabled" : ""} required>`
     : criterion.inputType === "duration"
-      ? `<input name="${criterion.key}" type="text" inputmode="text" value="${h(value)}" placeholder="seconds, MM:SS, or 1m30s" ${locked ? "disabled" : ""} required>`
-      : `<input name="${criterion.key}" type="number" min="0" max="5" step="0.1" inputmode="decimal" value="${h(value)}" placeholder="0.0 to 5.0" ${locked ? "disabled" : ""} required>`;
+      ? durationPickerHtml(criterion.key, value, locked)
+      : `<input class="grade-input" name="${criterion.key}" type="number" min="0" max="5" step="0.1" inputmode="decimal" value="${h(value)}" placeholder="0.0 to 5.0" ${locked ? "disabled" : ""} required>`;
   return `<section class="criterion-card"><span class="dimension-tag">${h(criterion.dimension)}</span><h3>${h(criterion.name)}</h3><p>${h(criterion.explanation)}</p><label>${kind === "sport" ? criterion.inputType === "integer" ? "Result (repetitions)" : "Duration" : "Grade /5"}${input}</label></section>`;
 }
 
