@@ -936,6 +936,15 @@ def monitoring_snapshot(db: Session, journey: Journey, activity_code: str) -> di
                 "name": recruits[recruit_id].name if recruit_id in recruits else "Unknown",
                 "expected": len(items),
                 "submitted": sum(1 for item in items if item.id in submissions and submissions[item.id].status in {"submitted", "locked"}),
+                "tasks": [
+                    {
+                        "evaluatorName": evaluators[item.evaluator_id].name if item.evaluator_id in evaluators else "Unknown",
+                        "submissionId": submissions[item.id].id if item.id in submissions else None,
+                        "submissionStatus": submissions[item.id].status if item.id in submissions else None,
+                        "score": float(submissions[item.id].score) if item.id in submissions else None,
+                    }
+                    for item in items
+                ],
             }
             for recruit_id, items in recruit_groups.items()
         ],

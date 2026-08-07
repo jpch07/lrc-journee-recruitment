@@ -12,7 +12,10 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "Journee library" in admin
     assert "Rooms & assignments" in admin
     assert "Save attendance" in admin_js
-    assert "Full Excel" in admin_js
+    assert "Full Journee report" in admin_js
+    assert "Results & profiles report" in admin_js
+    assert "showSubmissionDetail" in admin_js
+    assert "Edit evaluation" in admin_js
     assert "attendance-check" in admin_js
     assert "Type evaluator name and press Enter" in admin_js
     assert "evaluatorAttendanceSort" in admin_js
@@ -24,6 +27,11 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "sport-feedback" not in evaluator_js
     assert "Provisional Sport score" not in evaluator_js
     assert "criterion.weight" not in evaluator_js
+    assert "durationPickerHtml" in evaluator_js
+    assert 'type="number" min="0" max="5"' in evaluator_js
+    common_js = (static / "common.js").read_text(encoding="utf-8")
+    assert "wireDurationPickers" in common_js
+    assert "data-duration-minutes" in common_js
     assert "Recruit attendance" in attendance
     assert "queueRecruitSave" in attendance_js
     assert "attendanceSave" not in attendance_js
