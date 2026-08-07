@@ -300,6 +300,7 @@ tr.inactive { opacity: .5; }
 .attendance-toggle span { font-size: .82rem; font-weight: 800; }
 .attendance-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; }
 .attendance-fields input { min-height: 44px; }
+.attendance-comment-field { grid-column: 1 / -1; }
 .attendance-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .attendance-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .attendance-photo-preview { display: block; width: min(100%, 360px); max-height: 360px; margin: 14px auto 0; border: 1px solid var(--line); border-radius: 14px; object-fit: contain; background: #f3f5f7; }
@@ -313,6 +314,18 @@ tr.inactive { opacity: .5; }
 .auto-save-status { min-width: min(520px, 100%); }
 .access-link-block + .access-link-block { padding-top: 18px; margin-top: 18px; border-top: 1px solid var(--line); }
 .access-link-block img { width: 150px; max-width: 100%; border: 1px solid var(--line); border-radius: 12px; }
+.viewer-shell { width: min(1180px, calc(100% - 28px)); margin: 0 auto; padding: 20px 0 60px; }
+.viewer-toolbar { position: sticky; z-index: 20; top: 74px; display: flex; align-items: end; justify-content: space-between; gap: 14px; padding: 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 13px; background: rgba(255,255,255,.97); }
+.viewer-toolbar label { min-width: min(380px, 100%); }
+.viewer-card-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.viewer-profile-select { margin-bottom: 12px; }
+.link-button { padding: 0; border: 0; color: var(--blue); background: transparent; font: inherit; font-weight: 750; cursor: pointer; }
+.clickable-card, .clickable-row { cursor: pointer; transition: transform .14s, border-color .14s, background .14s; }
+.clickable-card:hover { transform: translateY(-2px); border-color: #d38b9c; }
+.clickable-row:hover { background: var(--red-soft); }
+.profile-attendance-note { display: block; margin-top: 5px; color: var(--muted); font-weight: 500; }
+.audit-changes { margin: 6px 0; padding-left: 18px; font-size: .78rem; }
+.audit-item.detailed { align-items: start; }
 
 /* Evaluator */
 .evaluator-body { min-height: 100vh; padding-bottom: env(safe-area-inset-bottom); background: #f2f3f5; }
@@ -355,6 +368,8 @@ tr.inactive { opacity: .5; }
   .profile-performance { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
+  .viewer-toolbar { align-items: stretch; flex-direction: column; top: 72px; }
+  .viewer-card-grid { grid-template-columns: 1fr; }
   .protection-start { align-items: stretch; flex-direction: column; }
   .protection-metrics { grid-template-columns: 1fr; }
   .simulator-controls { grid-template-columns: 1fr; }
@@ -387,7 +402,8 @@ tr.inactive { opacity: .5; }
   .attendance-summary { align-items: stretch; }
   .attendance-count { min-width: 96px; }
   .attendance-fields { grid-template-columns: 1fr 1fr; }
-  .attendance-arrival-field { grid-column: 1 / -1; }
+.attendance-arrival-field { grid-column: 1 / -1; }
+  .attendance-comment-field { grid-column: 1 / -1; }
 }
 @media (max-width: 430px) {
   .metric-grid { grid-template-columns: 1fr 1fr; }
@@ -403,6 +419,7 @@ tr.inactive { opacity: .5; }
   .attendance-toggle { grid-column: 1 / -1; justify-content: center; }
   .attendance-fields { grid-template-columns: 1fr; }
   .attendance-arrival-field { grid-column: auto; }
+  .attendance-comment-field { grid-column: auto; }
   .attendance-card-footer { align-items: flex-start; flex-direction: column; }
   .attendance-card-actions { width: 100%; justify-content: stretch; }
   .attendance-card-actions .button { flex: 1 1 auto; }

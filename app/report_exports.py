@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from .models import (
     ActivityState,
+    AdminEvaluation,
     Assignment,
     AssignmentRound,
     AuditEvent,
@@ -189,6 +190,7 @@ def _collect(db: Session, journey: Journey) -> dict:
     assignment_activity = {item.id: rounds[item.round_id].activity_code for item in assignments if item.round_id in rounds}
     submission_rows = list(db.scalars(select(EvaluationSubmission).where(EvaluationSubmission.assignment_id.in_(list(assignment_by_id))))) if assignments else []
     submissions = {item.assignment_id: item for item in submission_rows}
+    admin_evaluations = list(db.scalars(select(AdminEvaluation).where(AdminEvaluation.journey_id == journey.id)))
     assessments = {item.recruit_id: item for item in db.scalars(select(GeneralAssessment).where(GeneralAssessment.recruit_id.in_(list(recruit_by_id))))} if recruits else {}
     results = result_snapshot(db, journey)
     result_by_recruit = {item["recruitId"]: item for item in results["rows"]}
@@ -202,6 +204,7 @@ def _collect(db: Session, journey: Journey) -> dict:
         "assignments": assignments,
         "assignment_activity": assignment_activity,
         "submissions": submissions,
+        "admin_evaluations": admin_evaluations,
         "assessments": assessments,
         "results": results,
         "result_by_recruit": result_by_recruit,
@@ -250,11 +253,11 @@ def _dashboard_sheet(workbook: Workbook, journey: Journey, data: dict) -> None:
 def _attendance_sheets(workbook: Workbook, journey: Journey, data: dict) -> None:
     recruits = _new_sheet(workbook, "Recruit Attendance", landscape=True)
     _title(recruits, "Recruit Attendance", journey.name, 8)
-    rows = [[item.name, "Present" if item.present else "Absent", _local_time(item.arrival_time), item.phone_number or "", item.date_of_birth, "Yes" if item.photo_data else "No"] for item in data["recruits"]]
-    _write_table(recruits, 4, ["Recruit", "Attendance", "Time of arrival (Beirut)", "Phone number", "Date of birth", "Photo"], rows, widths=[30, 14, 25, 18, 16, 10], auto_filter=True)
+    rows = [[item.name, "Present" if item.present else "Absent", _local_time(item.arrival_time), item.attendance_comment or "", item.phone_number or "", item.date_of_birth, "Yes" if item.photo_data else "No"] for item in data["recruits"]]
+    _write_table(recruits, 4, ["Recruit", "Attendance", "Time of arrival (Beirut)", "Attendance comment", "Phone number", "Date of birth", "Photo"], rows, widths=[30, 14, 25, 30, 18, 16, 10], auto_filter=True)
     for row in range(5, 5 + len(rows)):
         _status_fill(recruits.cell(row, 2), str(recruits.cell(row, 2).value))
-        recruits.cell(row, 5).number_format = "dd mmm yyyy"
+        recruits.cell(row, 6).number_format = "dd mmm yyyy"
 
     evaluators = _new_sheet(workbook, "Evaluator Attendance")
     _title(evaluators, "Evaluator Attendance", journey.name, 6)
@@ -321,6 +324,13 @@ def _evaluation_sheet(workbook: Workbook, journey: Journey, data: dict) -> None:
             grade = responses.get(criterion.key)
             result = raw.get(criterion.key, "")
             rows.append([RUBRICS[code].name, recruit.name if recruit else "Unknown", evaluator.name if evaluator else "Unknown", evaluator.role.title() if evaluator else "", _label(submission.status), float(submission.score), criterion.dimension, criterion.name, grade if grade is not None else "", f"{result} {criterion.unit}".strip() if result != "" else "", submission.comments])
+    for evaluation in data["admin_evaluations"]:
+        recruit = data["recruit_by_id"].get(evaluation.recruit_id)
+        responses = loads(evaluation.responses_json, {})
+        raw = loads(evaluation.raw_payload_json, {})
+        for criterion in RUBRICS[evaluation.activity_code].criteria:
+            result = raw.get(criterion.key, "")
+            rows.append([RUBRICS[evaluation.activity_code].name, recruit.name if recruit else "Unknown", evaluation.updated_by, "Admin", "Official admin evaluation", float(evaluation.score), criterion.dimension, criterion.name, responses.get(criterion.key, ""), f"{result} {criterion.unit}".strip() if result != "" else "", evaluation.comments])
     _write_table(sheet, 4, ["Activity", "Recruit", "Evaluator", "Role", "Status", "Evaluation /5", "Dimension", "Criterion", "Grade /5", "Sport result", "Comment"], rows, widths=[18, 26, 26, 12, 14, 15, 18, 38, 12, 16, 42], number_formats={6: "0.00", 9: "0.00"}, auto_filter=True)
 
 
@@ -375,6 +385,8 @@ def _profile_sheet(workbook: Workbook, journey: Journey, data: dict, recruit: Re
         ["Overall /20", (result or {}).get("overallScore", 0), "Overall rank", (result or {}).get("overallRank", "—")],
         ["Color grade", color.title(), "Missing components", (result or {}).get("missingCount", 9)],
     ]
+    if recruit.attendance_comment:
+        details.append(["Attendance comment", recruit.attendance_comment, "", ""])
     row = _write_table(sheet, 4, ["Profile field", "Value", "Profile field", "Value"], details, widths=[18, 25, 20, 25])
     _status_fill(sheet.cell(8, 2), color)
     if recruit.photo_data:
@@ -449,6 +461,15 @@ def _profile_sheet(workbook: Workbook, journey: Journey, data: dict, recruit: Re
             for criterion in RUBRICS[code].criteria:
                 result_value = raw.get(criterion.key, "")
                 criterion_rows.append([RUBRICS[code].name, criterion.dimension, criterion.name, evaluator.name if evaluator else "Unknown", responses.get(criterion.key, ""), f"{result_value} {criterion.unit}".strip() if result_value != "" else "", _label(submission.status)])
+    for evaluation in data["admin_evaluations"]:
+        if evaluation.recruit_id != recruit.id:
+            continue
+        responses = loads(evaluation.responses_json, {})
+        raw = loads(evaluation.raw_payload_json, {})
+        evaluator_rows.append([RUBRICS[evaluation.activity_code].name, evaluation.updated_by, "Admin", float(evaluation.score), "Official", evaluation.comments])
+        for criterion in RUBRICS[evaluation.activity_code].criteria:
+            result_value = raw.get(criterion.key, "")
+            criterion_rows.append([RUBRICS[evaluation.activity_code].name, criterion.dimension, criterion.name, evaluation.updated_by, responses.get(criterion.key, ""), f"{result_value} {criterion.unit}".strip() if result_value != "" else "", "Official admin evaluation"])
     row = _write_table(sheet, row, ["Activity", "Evaluator", "Role", "Score /5", "Status", "Comment"], evaluator_rows, widths=[18, 26, 13, 13, 15, 42], number_formats={4: "0.00"})
     row = _section(sheet, row, "Criterion-level grading", 12)
     _write_table(sheet, row, ["Activity", "Dimension / theme", "Criterion", "Evaluator", "Grade /5", "Sport result", "Status"], criterion_rows, widths=[18, 19, 38, 25, 13, 16, 14], number_formats={5: "0.00"}, auto_filter=True)
@@ -458,8 +479,8 @@ def _audit_sheet(workbook: Workbook, journey: Journey, db: Session) -> None:
     sheet = _new_sheet(workbook, "Audit History", landscape=True)
     _title(sheet, "Administrative History", f"Readable change history · {journey.name}", 8)
     events = list(db.scalars(select(AuditEvent).where(AuditEvent.journey_id == journey.id).order_by(AuditEvent.created_at.desc())))
-    rows = [[_local_time(item.created_at), item.actor_name, _label(item.actor_type), _label(item.action), _label(item.entity_type), item.reason or ""] for item in events]
-    _write_table(sheet, 4, ["Date and time (Beirut)", "Actor", "Actor type", "Action", "Record type", "Reason"], rows, widths=[25, 25, 15, 34, 20, 50], auto_filter=True)
+    rows = [[_local_time(item.created_at), item.actor_name, _label(item.actor_type), _label(item.action), _label(item.entity_type), item.entity_id or "", item.before_json or "", item.after_json or "", item.reason or ""] for item in events]
+    _write_table(sheet, 4, ["Date and time (Beirut)", "Username", "Account type", "Action", "Location", "Record ID", "Before", "After", "Reason"], rows, widths=[25, 25, 15, 34, 20, 38, 55, 55, 45], auto_filter=True)
 
 
 def build_report_workbook(db: Session, journey: Journey, *, full: bool) -> Workbook:

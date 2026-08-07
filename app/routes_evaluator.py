@@ -15,6 +15,7 @@ from .auth import (
     require_evaluator,
 )
 from .db import get_db
+from .config import settings
 from .models import (
     ActivityState,
     Assignment,
@@ -114,6 +115,8 @@ def start_evaluator_session(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    if settings.is_production:
+        raise HTTPException(status_code=404, detail="Named account login is required.")
     journey = _public_journey(db, token)
     evaluator = db.get(Evaluator, payload.evaluator_id)
     if (
@@ -139,6 +142,8 @@ def start_current_evaluator_session(
     response: Response,
     db: Session = Depends(get_db),
 ):
+    if settings.is_production:
+        raise HTTPException(status_code=404, detail="Named account login is required.")
     journey = _current_journey(db)
     evaluator = db.get(Evaluator, payload.evaluator_id)
     if not evaluator or evaluator.journey_id != journey.id or not evaluator.active or not evaluator.present:

@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.2";
+import { api, durationPickerHtml, escapeHtml as h, fmt, statusLabel, toast, uid, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.3";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const host = $("#evalHost");
@@ -58,17 +58,25 @@ async function showLanding() {
   state.view = "landing";
   $("#evalLogout").classList.add("hidden");
   try {
-    state.landing = await api(publicBase);
-    $("#journeyName").textContent = state.landing.name;
-    host.innerHTML = `<section class="eval-welcome"><p class="eyebrow">Evaluator access</p><h1>${h(state.landing.name)}</h1><p>${h(state.landing.eventDate)}</p><p style="margin-bottom:0">Select your name to see only your assigned recruits.</p></section>
-      <section class="panel" style="margin-top:14px"><h2>Who are you?</h2><label>Search evaluators<input id="nameSearch" type="search" placeholder="Start typing your name" autocomplete="off"></label><div id="nameList" class="name-list"></div></section>`;
-    renderNameList(state.landing.evaluators);
-    $("#nameSearch").oninput = (event) => {
-      const query = event.target.value.toLowerCase().trim();
-      renderNameList(state.landing.evaluators.filter((item) => item.name.toLowerCase().includes(query)));
+    const accounts = await api("/api/auth/usernames");
+    $("#journeyName").textContent = "Evaluator workspace";
+    host.innerHTML = `<section class="eval-welcome"><p class="eyebrow">Secure access</p><h1>Evaluator login</h1></section><form id="evaluatorLoginForm" class="panel stack" style="margin-top:14px"><label>Username<input name="username" list="evaluatorUsernames" autocomplete="username" placeholder="Type your name" required></label><datalist id="evaluatorUsernames">${accounts.map((item) => `<option value="${h(item.username)}"></option>`).join("")}</datalist><label>Password<input name="password" type="password" autocomplete="current-password" required></label><button class="button primary wide">Log in</button><p id="evaluatorLoginError" class="form-error"></p></form>`;
+    $("#evaluatorLoginForm").onsubmit = async (event) => {
+      event.preventDefault();
+      const data = new FormData(event.currentTarget);
+      const error = $("#evaluatorLoginError");
+      error.textContent = "";
+      try {
+        const login = await api("/api/auth/login", { method: "POST", body: { username: data.get("username"), password: data.get("password") } });
+        state.csrf = login.csrfToken;
+        const evaluatorSession = await api("/api/evaluator/session");
+        state.csrf = evaluatorSession.csrfToken;
+        $("#evalLogout").classList.remove("hidden");
+        await loadHome();
+      } catch (problem) { error.textContent = problem.message; }
     };
   } catch (error) {
-    host.innerHTML = `<div class="loading-card"><h2>Link unavailable</h2><p class="muted">${h(error.message)}</p></div>`;
+    host.innerHTML = `<div class="loading-card"><h2>Login unavailable</h2><p class="muted">${h(error.message)}</p></div>`;
   }
 }
 
@@ -286,7 +294,7 @@ $("#evalLogout").onclick = async () => {
     clearTimeout(state.debounce);
     await queueServerDraft(true);
   }
-  try { await api("/api/evaluator/logout", mutation("POST", {})); } catch { /* session may already be gone */ }
+  try { await api("/api/auth/logout", mutation("POST", {})); } catch { /* session may already be gone */ }
   state.csrf = "";
   state.home = null;
   await showLanding();

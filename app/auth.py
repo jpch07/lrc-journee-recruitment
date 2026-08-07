@@ -16,15 +16,22 @@ from .config import settings
 from .db import get_db
 from .models import (
     AdminSession,
+    Evaluator,
+    EvaluatorDirectory,
     EvaluatorSession,
     IdempotencyRecord,
+    Journey,
+    JourneyPermission,
     RecruitAttendanceSession,
+    UserAccount,
+    UserSession,
 )
 
 
 ADMIN_COOKIE = "lrc_journee_admin"
 EVALUATOR_COOKIE = "lrc_journee_evaluator"
 RECRUIT_ATTENDANCE_COOKIE = "lrc_journee_recruit_attendance"
+USER_COOKIE = "lrc_journee_user"
 _password_hasher = PasswordHasher()
 _login_attempts: dict[str, list[float]] = {}
 
@@ -44,6 +51,47 @@ def verify_admin_password(password: str) -> bool:
         except (VerifyMismatchError, InvalidHashError):
             return False
     return secrets.compare_digest(password, settings.admin_password)
+
+
+def hash_password(password: str) -> str:
+    return _password_hasher.hash(password)
+
+
+def verify_password(password_hash: str, password: str) -> bool:
+    try:
+        return _password_hasher.verify(password_hash, password)
+    except (VerifyMismatchError, InvalidHashError):
+        return False
+
+
+def ensure_owner_account(db: Session) -> UserAccount:
+    marita = db.scalar(select(EvaluatorDirectory).where(EvaluatorDirectory.name.ilike("Marita")))
+    if marita:
+        marita.active = False
+    owner_directory = db.scalar(select(EvaluatorDirectory).where(EvaluatorDirectory.name.ilike("JP Chaaya")))
+    account = db.scalar(select(UserAccount).where(UserAccount.username.ilike("JP Chaaya")))
+    if account:
+        account.is_owner = True
+        account.can_admin = True
+        account.can_results = True
+        account.active = True
+        if owner_directory and not account.directory_id:
+            account.directory_id = owner_directory.id
+        return account
+    password_hash = settings.admin_password_hash or hash_password(settings.admin_password)
+    account = UserAccount(
+        username="JP Chaaya",
+        password_hash=password_hash,
+        directory_id=owner_directory.id if owner_directory else None,
+        evaluator_role="overall",
+        is_owner=True,
+        can_admin=True,
+        can_results=True,
+        active=True,
+        must_change_password=False,
+    )
+    db.add(account)
+    return account
 
 
 def enforce_login_rate_limit(request: Request) -> None:
@@ -83,6 +131,19 @@ def create_admin_session(db: Session, response: Response, actor_name: str) -> Ad
     )
     db.add(session)
     _set_cookie(response, ADMIN_COOKIE, token)
+    return session
+
+
+def create_user_session(db: Session, response: Response, account: UserAccount) -> UserSession:
+    token = secrets.token_urlsafe(40)
+    session = UserSession(
+        token_hash=_token_hash(token),
+        account_id=account.id,
+        csrf_token=secrets.token_urlsafe(32),
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=settings.session_hours),
+    )
+    db.add(session)
+    _set_cookie(response, USER_COOKIE, token)
     return session
 
 
@@ -147,7 +208,71 @@ class RecruitAttendanceContext:
     token_hash: str
 
 
+@dataclass(frozen=True)
+class UserContext:
+    account_id: str
+    username: str
+    csrf_token: str
+    token_hash: str
+    is_owner: bool
+    can_admin: bool
+    can_results: bool
+    directory_id: str | None
+    evaluator_role: str
+
+
+def _user_context(request: Request, db: Session) -> UserContext | None:
+    token = request.cookies.get(USER_COOKIE, "")
+    if not token:
+        return None
+    session = db.get(UserSession, _token_hash(token))
+    if not session or _aware(session.expires_at) <= datetime.now(timezone.utc):
+        return None
+    account = db.get(UserAccount, session.account_id)
+    if not account or not account.active:
+        return None
+    return UserContext(
+        account.id,
+        account.username,
+        session.csrf_token,
+        session.token_hash,
+        account.is_owner,
+        account.can_admin,
+        account.can_results,
+        account.directory_id,
+        account.evaluator_role,
+    )
+
+
+def require_user(request: Request, db: Session = Depends(get_db)) -> UserContext:
+    context = _user_context(request, db)
+    if not context:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login required.")
+    return context
+
+
+def require_owner(request: Request, db: Session = Depends(get_db)) -> UserContext:
+    context = require_user(request, db)
+    if not context.is_owner:
+        raise HTTPException(status_code=403, detail="Owner access is required.")
+    return context
+
+
+def require_results(request: Request, db: Session = Depends(get_db)) -> UserContext:
+    context = require_user(request, db)
+    if not (context.is_owner or context.can_admin or context.can_results):
+        raise HTTPException(status_code=403, detail="Results access is not permitted.")
+    return context
+
+
 def require_admin(request: Request, db: Session = Depends(get_db)) -> AdminContext:
+    user = _user_context(request, db)
+    if user:
+        if not (user.is_owner or user.can_admin):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Administration access is not permitted.")
+        return AdminContext(user.username, user.csrf_token, user.token_hash)
+    if settings.is_production:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Named admin login required.")
     token = request.cookies.get(ADMIN_COOKIE, "")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Admin login required.")
@@ -158,6 +283,35 @@ def require_admin(request: Request, db: Session = Depends(get_db)) -> AdminConte
 
 
 def require_evaluator(request: Request, db: Session = Depends(get_db)) -> EvaluatorContext:
+    user = _user_context(request, db)
+    if user:
+        journey = db.scalar(select(Journey).where(Journey.status == "active"))
+        if not journey:
+            raise HTTPException(status_code=404, detail="No Journee is currently active.")
+        evaluator = None
+        if user.directory_id:
+            evaluator = db.scalar(
+                select(Evaluator).where(
+                    Evaluator.journey_id == journey.id,
+                    Evaluator.directory_id == user.directory_id,
+                    Evaluator.active.is_(True),
+                    Evaluator.present.is_(True),
+                )
+            )
+        if not evaluator:
+            evaluator = db.scalar(
+                select(Evaluator).where(
+                    Evaluator.journey_id == journey.id,
+                    Evaluator.name.ilike(user.username),
+                    Evaluator.active.is_(True),
+                    Evaluator.present.is_(True),
+                )
+            )
+        if not evaluator:
+            raise HTTPException(status_code=403, detail="Your account is not marked present for the active Journee.")
+        return EvaluatorContext(journey.id, evaluator.id, user.csrf_token, user.token_hash)
+    if settings.is_production:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Named evaluator login required.")
     token = request.cookies.get(EVALUATOR_COOKIE, "")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Evaluator session required.")
@@ -171,6 +325,25 @@ def require_recruit_attendance(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RecruitAttendanceContext:
+    user = _user_context(request, db)
+    if user:
+        journey_id = str(request.path_params.get("journey_id") or request.query_params.get("journey_id") or "")
+        if not journey_id:
+            journey_id = request.cookies.get("lrc_attendance_journey", "")
+        permission = db.scalar(
+            select(JourneyPermission).where(
+                JourneyPermission.account_id == user.account_id,
+                JourneyPermission.journey_id == journey_id,
+                JourneyPermission.can_attendance.is_(True),
+            )
+        ) if journey_id else None
+        if not (user.is_owner or user.can_admin or permission):
+            raise HTTPException(status_code=403, detail="Recruit attendance access is not permitted for this Journee.")
+        if not journey_id:
+            raise HTTPException(status_code=400, detail="A Journee is required for attendance access.")
+        return RecruitAttendanceContext(journey_id, user.username, user.csrf_token, user.token_hash)
+    if settings.is_production:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Named attendance login required.")
     token = request.cookies.get(RECRUIT_ATTENDANCE_COOKIE, "")
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Recruit attendance session required.")
@@ -192,11 +365,19 @@ def require_csrf(request: Request, expected: str) -> None:
 
 
 def logout_admin(db: Session, response: Response, context: AdminContext) -> None:
+    if db.get(UserSession, context.token_hash):
+        db.execute(delete(UserSession).where(UserSession.token_hash == context.token_hash))
+        response.delete_cookie(USER_COOKIE, path="/")
+        return
     db.execute(delete(AdminSession).where(AdminSession.token_hash == context.token_hash))
     response.delete_cookie(ADMIN_COOKIE, path="/")
 
 
 def logout_evaluator(db: Session, response: Response, context: EvaluatorContext) -> None:
+    if db.get(UserSession, context.token_hash):
+        db.execute(delete(UserSession).where(UserSession.token_hash == context.token_hash))
+        response.delete_cookie(USER_COOKIE, path="/")
+        return
     db.execute(delete(EvaluatorSession).where(EvaluatorSession.token_hash == context.token_hash))
     response.delete_cookie(EVALUATOR_COOKIE, path="/")
 
@@ -206,6 +387,10 @@ def logout_recruit_attendance(
     response: Response,
     context: RecruitAttendanceContext,
 ) -> None:
+    if db.get(UserSession, context.token_hash):
+        db.execute(delete(UserSession).where(UserSession.token_hash == context.token_hash))
+        response.delete_cookie(USER_COOKIE, path="/")
+        return
     db.execute(
         delete(RecruitAttendanceSession).where(
             RecruitAttendanceSession.token_hash == context.token_hash
@@ -219,4 +404,5 @@ def clear_expired_sessions(db: Session) -> None:
     db.execute(delete(AdminSession).where(AdminSession.expires_at < now))
     db.execute(delete(EvaluatorSession).where(EvaluatorSession.expires_at < now))
     db.execute(delete(RecruitAttendanceSession).where(RecruitAttendanceSession.expires_at < now))
+    db.execute(delete(UserSession).where(UserSession.expires_at < now))
     db.execute(delete(IdempotencyRecord).where(IdempotencyRecord.created_at < now - timedelta(days=7)))

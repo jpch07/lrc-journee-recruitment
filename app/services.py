@@ -20,6 +20,7 @@ from .assignments import (
 )
 from .models import (
     ActivityState,
+    AdminEvaluation,
     Assignment,
     AssignmentRound,
     EvaluationSubmission,
@@ -193,6 +194,7 @@ def serialize_recruit(recruit: Recruit) -> dict:
         "name": recruit.name,
         "present": recruit.present,
         "arrivalTime": recruit.arrival_time.isoformat() if recruit.arrival_time else None,
+        "attendanceComment": recruit.attendance_comment or "",
         "active": recruit.active,
         "hasPhoto": bool(recruit.photo_data),
         "version": recruit.version,
@@ -230,6 +232,8 @@ def update_recruit_attendance_fields(
         values["phone_number"] = (changes["phone_number"] or "").strip() or None
     if "date_of_birth" in changes:
         values["date_of_birth"] = changes["date_of_birth"]
+    if "attendance_comment" in changes:
+        values["attendance_comment"] = (changes["attendance_comment"] or "").strip()
     effective_present = values.get("present", recruit.present)
     if not effective_present:
         values["arrival_time"] = None
@@ -754,6 +758,15 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             select(GeneralAssessment).where(GeneralAssessment.recruit_id.in_([recruit.id for recruit in recruits]))
         )
     } if recruits else {}
+    admin_evaluations = {
+        (item.recruit_id, item.activity_code): item
+        for item in db.scalars(
+            select(AdminEvaluation).where(
+                AdminEvaluation.journey_id == journey.id,
+                AdminEvaluation.recruit_id.in_([recruit.id for recruit in recruits]),
+            )
+        )
+    } if recruits else {}
 
     rows: list[dict] = []
     activity_rank_inputs: dict[str, list[tuple[str, Decimal]]] = {code: [] for code in ACTIVITY_ORDER}
@@ -776,14 +789,19 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             submitted = len(submitted_values)
             # Missing expected submissions stay visible/incomplete, while the
             # available evaluator scores are averaged without adding a zero.
-            value = sum(submitted_values, Decimal("0")) / Decimal(submitted) if submitted else Decimal("0")
+            admin_evaluation = admin_evaluations.get((recruit.id, code))
+            value = Decimal(admin_evaluation.score) if admin_evaluation else (
+                sum(submitted_values, Decimal("0")) / Decimal(submitted) if submitted else Decimal("0")
+            )
             activity_values[code] = value
             activity_rank_inputs[code].append((recruit.id, value))
             activities_payload[code] = {
                 "score": float(value),
                 "expected": expected,
                 "submitted": submitted,
-                "complete": expected > 0 and submitted == expected,
+                "complete": bool(admin_evaluation) or (expected > 0 and submitted == expected),
+                "adminOverride": bool(admin_evaluation),
+                "adminEvaluationId": admin_evaluation.id if admin_evaluation else None,
             }
 
         dimensions_payload: dict[str, dict] = {}
@@ -796,10 +814,15 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             criterion_count = 0
             for code in DIMENSION_ACTIVITIES:
                 expected_assignments = assignments_by_recruit_activity.get((recruit.id, code), [])
+                admin_evaluation = admin_evaluations.get((recruit.id, code))
                 submitted_records = submitted_by_activity[code]
-                if not expected_assignments or len(submitted_records) != len(expected_assignments):
+                if not admin_evaluation and (not expected_assignments or len(submitted_records) != len(expected_assignments)):
                     complete = False
-                response_payloads = [loads(item.responses_json, {}) for item in submitted_records]
+                response_payloads = (
+                    [loads(admin_evaluation.responses_json, {})]
+                    if admin_evaluation
+                    else [loads(item.responses_json, {}) for item in submitted_records]
+                )
                 for criterion in RUBRICS[code].criteria:
                     if criterion.dimension.casefold() != dimension:
                         continue
@@ -856,6 +879,13 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
         overall_rank_inputs.append((recruit.id, overall))
         missing_dimensions = sum(1 for item in dimensions_payload.values() if not item["complete"])
         missing = missing_dimensions + general_missing
+        missing_components = [
+            item["name"] for item in dimensions_payload.values() if not item["complete"]
+        ] + [
+            label
+            for key, label in (("punctuality", "Punctuality"), ("respect", "Respect to us"), ("seriousness", "Seriousness"))
+            if general_values[key] is None
+        ]
         rows.append(
             {
                 "recruitId": recruit.id,
@@ -868,6 +898,7 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                 "overallScore": float(overall),
                 "color": color_grade(overall),
                 "missingCount": missing,
+                "missingComponents": missing_components,
                 "missingDimensionCount": missing_dimensions,
                 "missingGeneralCount": general_missing,
                 "complete": missing == 0,
@@ -910,9 +941,7 @@ def monitoring_snapshot(db: Session, journey: Journey, activity_code: str) -> di
     if not state:
         raise HTTPException(status_code=404, detail="Activity not found.")
     round_record = db.get(AssignmentRound, state.assignment_round_id) if state.assignment_round_id else None
-    if not round_record:
-        return {"activityCode": activity_code, "status": state.status, "recruits": [], "evaluators": []}
-    assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
+    assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id))) if round_record else []
     assignment_ids = [item.id for item in assignments]
     submissions = {
         item.assignment_id: item
@@ -925,17 +954,35 @@ def monitoring_snapshot(db: Session, journey: Journey, activity_code: str) -> di
     for item in assignments:
         recruit_groups[item.recruit_id].append(item)
         evaluator_groups[item.evaluator_id].append(item)
+    admin_evaluations = {
+        item.recruit_id: item
+        for item in db.scalars(
+            select(AdminEvaluation).where(
+                AdminEvaluation.journey_id == journey.id,
+                AdminEvaluation.activity_code == activity_code,
+            )
+        )
+    }
+    visible_recruits = [
+        item for item in recruits.values() if item.active and item.present
+    ]
     return {
         "activityCode": activity_code,
         "activityName": RUBRICS[activity_code].name,
         "status": state.status,
-        "roundVersion": round_record.version,
+        "roundVersion": round_record.version if round_record else None,
         "recruits": [
             {
-                "id": recruit_id,
-                "name": recruits[recruit_id].name if recruit_id in recruits else "Unknown",
+                "id": recruit.id,
+                "name": recruit.name,
                 "expected": len(items),
                 "submitted": sum(1 for item in items if item.id in submissions and submissions[item.id].status in {"submitted", "locked"}),
+                "adminEvaluation": ({
+                    "id": admin_evaluations[recruit.id].id,
+                    "score": float(admin_evaluations[recruit.id].score),
+                    "version": admin_evaluations[recruit.id].version,
+                    "updatedBy": admin_evaluations[recruit.id].updated_by,
+                } if recruit.id in admin_evaluations else None),
                 "tasks": [
                     {
                         "evaluatorName": evaluators[item.evaluator_id].name if item.evaluator_id in evaluators else "Unknown",
@@ -946,7 +993,8 @@ def monitoring_snapshot(db: Session, journey: Journey, activity_code: str) -> di
                     for item in items
                 ],
             }
-            for recruit_id, items in recruit_groups.items()
+            for recruit in sorted(visible_recruits, key=lambda value: value.name.casefold())
+            for items in [recruit_groups.get(recruit.id, [])]
         ],
         "evaluators": [
             {

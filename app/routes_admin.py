@@ -28,12 +28,14 @@ from .auth import (
     require_admin,
     require_csrf,
     verify_admin_password,
+    hash_password,
 )
 from .db import get_db
 from .config import settings
 from .event_day import ProtectionControlError, cancel_monitor, dispatch_monitor, find_monitor_run, is_configured
 from .models import (
     ActivityState,
+    AdminEvaluation,
     Assignment,
     AssignmentRound,
     AuditEvent,
@@ -52,6 +54,7 @@ from .models import (
     RoomPlanEvaluator,
     RoomPlanRecruit,
     SubmissionVersion,
+    UserAccount,
     new_id,
     utcnow,
 )
@@ -69,6 +72,7 @@ from .report_exports import build_report_workbook
 from .schemas import (
     ActivityActionRequest,
     AdminCorrectionRequest,
+    AdminEvaluationRequest,
     AdminLoginRequest,
     AssignmentEditRequest,
     EvaluatorAttendanceRequest,
@@ -105,6 +109,7 @@ from .services import (
     result_snapshot,
     room_plan_payload,
     save_submission,
+    score_evaluation,
     serialize_evaluator,
     serialize_journey,
     serialize_recruit,
@@ -600,8 +605,8 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
     _append_sheet(
         workbook,
         "Recruits",
-        ["Recruit UUID", "Name", "Phone Number", "Date of Birth", "Active", "Present", "Arrival UTC", "Has photo"],
-        [[item.id, item.name, item.phone_number or "", item.date_of_birth.isoformat() if item.date_of_birth else "", item.active, item.present, item.arrival_time.isoformat() if item.arrival_time else "", bool(item.photo_data)] for item in recruits],
+        ["Recruit UUID", "Name", "Phone Number", "Date of Birth", "Active", "Present", "Arrival UTC", "Attendance Comment", "Has photo"],
+        [[item.id, item.name, item.phone_number or "", item.date_of_birth.isoformat() if item.date_of_birth else "", item.active, item.present, item.arrival_time.isoformat() if item.arrival_time else "", item.attendance_comment or "", bool(item.photo_data)] for item in recruits],
     )
     _append_sheet(
         workbook,
@@ -643,6 +648,13 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
         "Evaluations",
         ["Activity", "Evaluator", "Recruit", "Status", "Score /5", "Responses JSON", "Raw JSON", "Comments", "Version", "Submitted UTC", "Submission UUID"],
         [[item.activity_code, evaluator_by_id.get(item.evaluator_id).name if evaluator_by_id.get(item.evaluator_id) else "", recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", item.status, float(item.score), item.responses_json, item.raw_payload_json, item.comments, item.version, item.submitted_at.isoformat() if item.submitted_at else "", item.id] for item in submissions],
+    )
+    admin_evaluations = list(db.scalars(select(AdminEvaluation).where(AdminEvaluation.journey_id == journey.id)))
+    _append_sheet(
+        workbook,
+        "Admin Evaluations",
+        ["Activity", "Recruit", "Official score /5", "Responses JSON", "Raw JSON", "Comments", "Updated by", "Version", "Updated UTC"],
+        [[item.activity_code, recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", float(item.score), item.responses_json, item.raw_payload_json, item.comments, item.updated_by, item.version, item.updated_at.isoformat()] for item in admin_evaluations],
     )
     results = result_snapshot(db, journey)
     _append_sheet(
@@ -919,7 +931,8 @@ def duplicate_journey(
     evaluator_id_map: dict[str, str] = {}
     for item in db.scalars(select(Recruit).where(Recruit.journey_id == source.id, Recruit.active.is_(True))):
         db.add(Recruit(journey_id=clone.id, name=item.name, phone_number=item.phone_number,
-                       date_of_birth=item.date_of_birth, photo_data=item.photo_data, photo_type=item.photo_type))
+                       date_of_birth=item.date_of_birth, attendance_comment=item.attendance_comment,
+                       photo_data=item.photo_data, photo_type=item.photo_type))
     clone_evaluators = list(db.scalars(select(Evaluator).where(Evaluator.journey_id == clone.id)))
     clone_by_directory = {item.directory_id: item for item in clone_evaluators if item.directory_id}
     clone_by_name = {item.name.casefold(): item for item in clone_evaluators}
@@ -1092,6 +1105,21 @@ def add_evaluator(
             directory.name = clean_name
             directory.default_role = payload.role
             directory.active = True
+    account = db.scalar(select(UserAccount).where(func.lower(UserAccount.username) == clean_name.lower()))
+    if payload.add_to_directory and not account:
+        if not payload.password:
+            raise HTTPException(status_code=422, detail="A password is required for a new evaluator account.")
+        account = UserAccount(
+            username=clean_name,
+            password_hash=hash_password(payload.password),
+            directory_id=directory.id,
+            evaluator_role=payload.role,
+            must_change_password=True,
+        )
+        db.add(account)
+    elif account:
+        account.active = True
+        account.evaluator_role = payload.role
     evaluator = Evaluator(journey_id=journey.id, directory_id=directory.id if directory else None, name=clean_name, role=payload.role)
     db.add(evaluator)
     db.flush()
@@ -1121,6 +1149,7 @@ def save_recruit_attendance(
         recruit.phone_number = (item.phone_number or "").strip() or None
         if "date_of_birth" in item.model_fields_set:
             recruit.date_of_birth = item.date_of_birth
+        recruit.attendance_comment = item.attendance_comment.strip()
         recruit.active = item.active
         recruit.version += 1
         changed.append({"before": before, "after": serialize_recruit(recruit)})
@@ -1943,6 +1972,138 @@ def _submission_payload(db: Session, submission: EvaluationSubmission, evaluator
     }
 
 
+def _admin_evaluation_payload(item: AdminEvaluation | None) -> dict | None:
+    if not item:
+        return None
+    return {
+        "id": item.id,
+        "activityCode": item.activity_code,
+        "score": float(item.score),
+        "responses": loads(item.responses_json, {}),
+        "raw": loads(item.raw_payload_json, {}),
+        "comments": item.comments,
+        "version": item.version,
+        "updatedBy": item.updated_by,
+        "updatedAt": item.updated_at.isoformat(),
+    }
+
+
+@router.get("/journeys/{journey_id}/recruits/{recruit_id}/admin-evaluations/{activity_code}")
+def admin_evaluation_detail(
+    journey_id: str,
+    recruit_id: str,
+    activity_code: str,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    recruit = get_recruit_or_404(db, journey.id, recruit_id)
+    if activity_code not in RUBRICS:
+        raise HTTPException(status_code=404, detail="Unknown activity.")
+    item = db.scalar(select(AdminEvaluation).where(
+        AdminEvaluation.journey_id == journey.id,
+        AdminEvaluation.recruit_id == recruit.id,
+        AdminEvaluation.activity_code == activity_code,
+    ))
+    return {
+        "recruit": serialize_recruit(recruit),
+        "activityCode": activity_code,
+        "activityName": RUBRICS[activity_code].name,
+        "rubric": public_rubric(activity_code),
+        "evaluation": _admin_evaluation_payload(item),
+    }
+
+
+@router.put("/journeys/{journey_id}/recruits/{recruit_id}/admin-evaluations/{activity_code}")
+def save_admin_evaluation(
+    journey_id: str,
+    recruit_id: str,
+    activity_code: str,
+    payload: AdminEvaluationRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    recruit = get_recruit_or_404(db, journey.id, recruit_id)
+    if activity_code not in RUBRICS:
+        raise HTTPException(status_code=404, detail="Unknown activity.")
+    item = db.scalar(select(AdminEvaluation).where(
+        AdminEvaluation.journey_id == journey.id,
+        AdminEvaluation.recruit_id == recruit.id,
+        AdminEvaluation.activity_code == activity_code,
+    ))
+    if item and payload.client_version is not None and payload.client_version != item.version:
+        raise HTTPException(status_code=409, detail="This admin evaluation changed elsewhere. Reload before saving.")
+    score, normalized, normalized_raw = score_evaluation(activity_code, payload.responses, payload.raw)
+    before = _admin_evaluation_payload(item)
+    if not item:
+        item = AdminEvaluation(
+            journey_id=journey.id,
+            recruit_id=recruit.id,
+            activity_code=activity_code,
+            updated_by=context.actor_name,
+        )
+        db.add(item)
+    else:
+        item.version += 1
+    item.responses_json = dumps(normalized)
+    item.raw_payload_json = dumps(normalized_raw)
+    item.comments = payload.comments.strip()
+    item.score = score
+    item.updated_by = context.actor_name
+    item.updated_at = utcnow()
+    db.flush()
+    after = _admin_evaluation_payload(item)
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="evaluation.admin_override_saved",
+        entity_type="admin_evaluation",
+        entity_id=item.id,
+        before=before,
+        after={**(after or {}), "recruitId": recruit.id, "recruitName": recruit.name},
+        reason=payload.reason,
+    )
+    _commit(db)
+    return {"ok": True, "evaluation": _admin_evaluation_payload(item)}
+
+
+@router.delete("/journeys/{journey_id}/recruits/{recruit_id}/admin-evaluations/{activity_code}")
+def delete_admin_evaluation(
+    journey_id: str,
+    recruit_id: str,
+    activity_code: str,
+    request: Request,
+    reason: str = Query(min_length=1, max_length=1000),
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    recruit = get_recruit_or_404(db, journey.id, recruit_id)
+    item = db.scalar(select(AdminEvaluation).where(
+        AdminEvaluation.journey_id == journey.id,
+        AdminEvaluation.recruit_id == recruit.id,
+        AdminEvaluation.activity_code == activity_code,
+    ))
+    if not item:
+        raise HTTPException(status_code=404, detail="Admin evaluation not found.")
+    before = _admin_evaluation_payload(item)
+    item_id = item.id
+    db.delete(item)
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="evaluation.admin_override_removed", entity_type="admin_evaluation", entity_id=item_id,
+          before=before, after={"recruitId": recruit.id, "recruitName": recruit.name, "activityCode": activity_code},
+          reason=reason)
+    _commit(db)
+    return {"ok": True}
+
+
 def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | None) -> dict[str, dict]:
     """Build an admin-only, evaluator-attributed explanation of every dimension score."""
     result_dimensions = (result_row or {}).get("dimensions", {})
@@ -1994,8 +2155,16 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                             "status": submission.get("status") if submission else "missing",
                             "grade": float(grade) if grade is not None else None,
                             "rawValue": raw_value,
+                            "isAdmin": bool(evaluation.get("isAdmin")),
                         }
                     )
+                admin_grades = [
+                    Decimal(str(item["grade"]))
+                    for item in evaluator_payload
+                    if item.get("isAdmin") and item.get("grade") is not None
+                ]
+                if admin_grades:
+                    grades = admin_grades
                 average = sum(grades, Decimal("0")) / Decimal(len(grades)) if grades else None
                 contribution = (
                     average / Decimal("5") * criterion.weight / total_weight
@@ -2069,6 +2238,21 @@ def recruit_profile(
     recruit = get_recruit_or_404(db, journey.id, recruit_id)
     results = result_snapshot(db, journey)
     result_row = next((item for item in results["rows"] if item["recruitId"] == recruit.id), None)
+    if result_row is None:
+        result_row = {
+            "recruitId": recruit.id,
+            "name": recruit.name,
+            "activities": {code: {"score": 0.0, "expected": 0, "submitted": 0, "complete": False, "rank": None, "adminOverride": False} for code in ACTIVITY_ORDER},
+            "dimensions": {code: {"name": DIMENSION_NAMES[code], "score": 0.0, "complete": False, "availableWeight": 0.0, "rank": None} for code in DIMENSION_ORDER},
+            "generalAverage": 0.0,
+            "generalComplete": False,
+            "overallScore": 0.0,
+            "overallRank": None,
+            "color": "red",
+            "missingCount": len(DIMENSION_ORDER) + 3,
+            "missingComponents": [DIMENSION_NAMES[code] for code in DIMENSION_ORDER] + ["Punctuality", "Respect to us", "Seriousness"],
+            "complete": False,
+        }
     assessment = db.get(GeneralAssessment, recruit.id)
     evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
     states = list(db.scalars(select(ActivityState).where(ActivityState.journey_id == journey.id)))
@@ -2102,6 +2286,27 @@ def recruit_profile(
                     else None,
                 }
             )
+    admin_evaluations = list(db.scalars(select(AdminEvaluation).where(
+        AdminEvaluation.journey_id == journey.id,
+        AdminEvaluation.recruit_id == recruit.id,
+    )))
+    for item in admin_evaluations:
+        details[item.activity_code].insert(0, {
+            "assignmentId": None,
+            "slot": 0,
+            "roomNumber": None,
+            "evaluatorId": None,
+            "evaluatorName": f"Admin: {item.updated_by}",
+            "evaluatorRole": "admin",
+            "isAdmin": True,
+            "submission": {
+                **(_admin_evaluation_payload(item) or {}),
+                "id": None,
+                "status": "admin_override",
+                "submittedAt": item.updated_at.isoformat(),
+                "history": [],
+            },
+        })
     history = list(
         db.scalars(
             select(AuditEvent)
@@ -2125,6 +2330,7 @@ def recruit_profile(
             "version": assessment.version if assessment else 0,
         },
         "evaluations": details,
+        "adminEvaluations": {item.activity_code: _admin_evaluation_payload(item) for item in admin_evaluations},
         "history": [
             {
                 "action": item.action,
