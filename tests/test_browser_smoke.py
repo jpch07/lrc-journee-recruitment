@@ -35,6 +35,7 @@ def test_frontend_assets_contain_the_two_workspaces():
     common_js = (static / "common.js").read_text(encoding="utf-8")
     assert "wireDurationPickers" in common_js
     assert "wireAccountPicker" in common_js
+    assert "wireRecruitDirectoryPicker" in common_js
     assert "selectedAccount" in common_js
     assert "data-duration-minutes" in common_js
     assert "Recruit attendance" in attendance
@@ -42,6 +43,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "attendanceSave" not in attendance_js
     assert "checking for updates every 5 seconds" in attendance_js
     assert "attendance-photo-change" in attendance_js
+    assert "/api/recruit-attendance/recruits/from-directory" in attendance_js
+    assert "Only administrators can add someone who is not in the master recruit list." in attendance_js
     assert "removePhoto" in attendance_js
     assert "data-photo-viewer" in evaluator_js
     assert "Search your name" in admin

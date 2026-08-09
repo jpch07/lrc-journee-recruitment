@@ -32,8 +32,9 @@ from .schemas import (
     RecruitAttendanceRequest,
     RecruitAttendancePatchRequest,
     RecruitAttendanceSessionRequest,
-    RecruitCreateRequest,
+    RecruitFromDirectoryRequest,
 )
+from .recruit_directory import create_recruit_from_directory, ensure_recruit_directory
 from .services import (
     get_recruit_or_404,
     process_photo,
@@ -197,38 +198,31 @@ def recruit_attendance_recruits(
     }
 
 
-@router.post("/api/recruit-attendance/recruits")
+@router.get("/api/recruit-attendance/directory")
+def recruit_attendance_directory(
+    context: RecruitAttendanceContext = Depends(require_recruit_attendance),
+    db: Session = Depends(get_db),
+):
+    _session_journey(db, context)
+    return ensure_recruit_directory(db)
+
+
+@router.post("/api/recruit-attendance/recruits/from-directory")
 def add_recruit_from_attendance(
-    payload: RecruitCreateRequest,
+    payload: RecruitFromDirectoryRequest,
     request: Request,
     context: RecruitAttendanceContext = Depends(require_recruit_attendance),
     db: Session = Depends(get_db),
 ):
     require_csrf(request, context.csrf_token)
     journey = _session_journey(db, context)
-    clean_name = " ".join(payload.name.split())
-    duplicate = db.scalar(
-        select(Recruit).where(
-            Recruit.journey_id == journey.id,
-            func.lower(Recruit.name) == clean_name.lower(),
-        )
-    )
-    if duplicate:
-        raise HTTPException(status_code=409, detail="A recruit with this name already exists in the Journee.")
-    recruit = Recruit(
-        journey_id=journey.id,
-        name=clean_name,
-        phone_number=(payload.phone_number or "").strip() or None,
-        date_of_birth=payload.date_of_birth,
-    )
-    db.add(recruit)
-    db.flush()
+    recruit = create_recruit_from_directory(db, journey.id, payload.directory_id)
     audit(
         db,
         journey_id=journey.id,
         actor_type="attendance",
         actor_name=context.actor_name,
-        action="recruit.added",
+        action="recruit.added_from_directory",
         entity_type="recruit",
         entity_id=recruit.id,
         after=serialize_recruit(recruit),

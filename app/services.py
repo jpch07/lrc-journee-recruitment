@@ -189,6 +189,7 @@ def serialize_journey(db: Session, journey: Journey, *, include_token: bool = Fa
 def serialize_recruit(recruit: Recruit) -> dict:
     return {
         "id": recruit.id,
+        "directoryId": recruit.directory_id,
         "phoneNumber": recruit.phone_number or "",
         "dateOfBirth": recruit.date_of_birth.isoformat() if recruit.date_of_birth else None,
         "name": recruit.name,

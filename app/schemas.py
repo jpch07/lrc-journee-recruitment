@@ -67,6 +67,10 @@ class RecruitCreateRequest(BaseModel):
     date_of_birth: date | None = None
 
 
+class RecruitFromDirectoryRequest(BaseModel):
+    directory_id: str = Field(min_length=1, max_length=36)
+
+
 class EvaluatorCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     role: Literal["overall", "dossard"]

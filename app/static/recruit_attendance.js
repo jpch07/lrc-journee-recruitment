@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, selectedAccount, toast, wireAccountPicker } from "/static/common.js?v=20260807.5";
+import { api, escapeHtml as h, selectedAccount, toast, wireAccountPicker, wireRecruitDirectoryPicker } from "/static/common.js?v=20260807.7";
 
 const host = document.querySelector("#recruitAttendanceHost");
 const journeyLabel = document.querySelector("#attendanceJourneyName");
@@ -262,30 +262,42 @@ async function loadRoster({ background = false, force = false } = {}) {
   }
 }
 
-function openAddDialog() {
-  modalBody.innerHTML = `<form id="attendanceAddForm"><p class="eyebrow">Recruit roster</p><h2>Add recruit</h2><div class="stack"><label>Full name<input name="name" autocomplete="name" required maxlength="200"></label><label>Phone number (optional)<input name="phone" inputmode="tel" autocomplete="tel" maxlength="40"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label></div><div class="modal-actions"><button type="button" class="button ghost" id="attendanceModalCancel">Cancel</button><button class="button primary">Add recruit</button></div></form>`;
+async function openAddDialog() {
+  modalBody.innerHTML = `<div class="directory-dialog"><p class="eyebrow">Recruit roster</p><h2>Add recruit</h2><div class="loading-card">Loading the master recruit listâ€¦</div></div>`;
   modal.className = "modal";
   modal.showModal();
-  document.querySelector("#attendanceModalCancel").onclick = () => modal.close();
-  document.querySelector("#attendanceAddForm").onsubmit = async (event) => {
-    event.preventDefault();
-    const button = event.currentTarget.querySelector("button.primary");
-    const data = new FormData(event.currentTarget);
-    button.disabled = true;
-    try {
-      await api("/api/recruit-attendance/recruits", mutation("POST", {
-        name: data.get("name"),
-        phone_number: data.get("phone") || null,
-        date_of_birth: data.get("dateOfBirth") || null,
-      }));
-      modal.close();
-      toast("Recruit added.");
-      await loadRoster();
-    } catch (problem) {
-      toast(problem.message, "error");
+  try {
+    const directory = await api("/api/recruit-attendance/directory");
+    let selected = null;
+    modalBody.innerHTML = `<form id="attendanceAddForm" class="directory-dialog stack"><p class="eyebrow">Recruit roster</p><h2>Add recruit</h2><label>Search the master recruit list<div class="account-search-picker"><input id="attendanceDirectorySearch" autocomplete="off" placeholder="Type a recruit name and press Enter" required autofocus><div id="attendanceDirectorySuggestions" class="search-suggestions directory-suggestions" role="listbox"></div></div></label><div id="attendanceDirectorySelection" class="directory-selection empty">Select a recruit to copy their phone number and date of birth.</div><p class="muted compact-note">Only administrators can add someone who is not in the master recruit list.</p><div class="modal-actions"><button type="button" class="button ghost" id="attendanceModalCancel">Cancel</button><button class="button primary" disabled>Add selected recruit</button></div></form>`;
+    const button = document.querySelector("#attendanceAddForm button.primary");
+    const selection = document.querySelector("#attendanceDirectorySelection");
+    wireRecruitDirectoryPicker(document.querySelector("#attendanceDirectorySearch"), document.querySelector("#attendanceDirectorySuggestions"), directory.items, { onSelect: (item) => {
+      selected = item;
       button.disabled = false;
-    }
-  };
+      selection.classList.remove("empty");
+      selection.innerHTML = `<strong>${h(item.name)}</strong><span>${h(item.phoneNumber || "Phone not recorded")}</span><span>${h(item.dateOfBirthSource || item.dateOfBirth || "Date of birth not recorded")}</span>`;
+    }});
+    document.querySelector("#attendanceModalCancel").onclick = () => modal.close();
+    document.querySelector("#attendanceAddForm").onsubmit = async (event) => {
+      event.preventDefault();
+      if (!selected) return toast("Select a recruit from the master list.", "error");
+      button.disabled = true;
+      try {
+        await api("/api/recruit-attendance/recruits/from-directory", mutation("POST", { directory_id: selected.id }));
+        modal.close();
+        toast(`${selected.name} added with their saved details.`);
+        await loadRoster();
+      } catch (problem) {
+        toast(problem.message, "error");
+        button.disabled = false;
+      }
+    };
+    if (directory.stale) toast("Using the last saved recruit list because Google Sheets is temporarily unavailable.", "error");
+  } catch (problem) {
+    modalBody.innerHTML = `<div class="directory-dialog"><h2>Master list unavailable</h2><p class="danger-text">${h(problem.message)}</p><p class="muted">Ask an administrator to add the recruit if they are not in the list.</p><div class="modal-actions"><button type="button" class="button ghost" id="attendanceModalCancel">Close</button></div></div>`;
+    document.querySelector("#attendanceModalCancel").onclick = () => modal.close();
+  }
 }
 
 function applyRecruitSnapshot(saved) {
