@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.7";
+import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260807.7";
 
 const state = {
   csrf: "",
@@ -664,17 +664,82 @@ async function saveAttendance() {
 }
 
 function addPersonDialog(isRecruit) {
-  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add ${isRecruit ? "recruit" : "evaluator not in the default list"}</h2><div class="stack"><label>Full name<input name="name" required></label>${isRecruit ? `<label>Phone number (optional)<input name="phone" inputmode="tel"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label>` : `<label>Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label>`}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
+  if (isRecruit) return openRecruitDirectoryDialog();
+  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add evaluator not in the default list</h2><div class="stack"><label>Full name<input name="name" required></label><label>Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#personForm").onsubmit = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const body = isRecruit ? { name: form.get("name"), phone_number: form.get("phone") || null, date_of_birth: form.get("dateOfBirth") || null } : { name: form.get("name"), password: form.get("password"), role: form.get("role"), add_to_directory: true };
+    const body = { name: form.get("name"), password: form.get("password"), role: form.get("role"), add_to_directory: true };
     try {
-      await api(`/api/admin/journeys/${state.journey.id}/${isRecruit ? "recruits" : "evaluators"}`, mutation("POST", body));
+      await api(`/api/admin/journeys/${state.journey.id}/evaluators`, mutation("POST", body));
       closeModal(); toast("Person added to the roster."); await renderAttendance();
     } catch (error) { toast(error.message, "error"); }
   };
+}
+
+async function openRecruitDirectoryDialog() {
+  openModal(`<div class="directory-dialog"><p class="eyebrow">Recruit roster</p><h2>Add recruit</h2><div class="loading-card">Loading the master recruit listâ€¦</div></div>`);
+  try {
+    const directory = await api("/api/admin/recruit-directory");
+    let selected = null;
+    $("#modalBody").innerHTML = `<div class="directory-dialog"><p class="eyebrow">Recruit roster</p><div class="panel-header"><h2>Add recruit</h2><button type="button" class="button ghost small" id="refreshRecruitDirectory">Refresh list</button></div>
+      <form id="directoryRecruitForm" class="stack"><label>Search the master recruit list<div class="account-search-picker"><input id="recruitDirectorySearch" autocomplete="off" placeholder="Type a recruit name and press Enter" required><div id="recruitDirectorySuggestions" class="search-suggestions directory-suggestions" role="listbox"></div></div></label><div id="selectedRecruitDirectory" class="directory-selection empty">Select a recruit to copy their phone number and date of birth.</div><div class="modal-actions"><button type="button" class="button ghost cancel-recruit-modal">Cancel</button><button class="button primary" disabled>Add selected recruit</button></div></form>
+      <div class="directory-divider"><span>Recruit not in the Google Sheet</span></div>
+      <form id="manualRecruitForm" class="stack"><label>Full name<input name="name" required maxlength="200"></label><label>Phone number (optional)<input name="phone" inputmode="tel" maxlength="40"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label><div class="modal-actions"><button type="button" class="button ghost cancel-recruit-modal">Cancel</button><button class="button secondary">Add off-list recruit</button></div></form></div>`;
+    modal.classList.add("wide");
+    const input = $("#recruitDirectorySearch");
+    const selection = $("#selectedRecruitDirectory");
+    const addButton = $("#directoryRecruitForm button.primary");
+    wireRecruitDirectoryPicker(input, $("#recruitDirectorySuggestions"), directory.items, { onSelect: (item) => {
+      selected = item;
+      addButton.disabled = false;
+      selection.classList.remove("empty");
+      selection.innerHTML = `<strong>${h(item.name)}</strong><span>${h(item.phoneNumber || "Phone not recorded")}</span><span>${h(item.dateOfBirthSource || item.dateOfBirth || "Date of birth not recorded")}</span>`;
+    }});
+    $$(".cancel-recruit-modal").forEach((button) => button.onclick = closeModal);
+    $("#refreshRecruitDirectory").onclick = async () => {
+      try {
+        await api("/api/admin/recruit-directory/sync", mutation("POST"));
+        toast("Master recruit list refreshed.");
+        closeModal();
+        await openRecruitDirectoryDialog();
+      } catch (error) { toast(error.message, "error"); }
+    };
+    $("#directoryRecruitForm").onsubmit = async (event) => {
+      event.preventDefault();
+      if (!selected) return toast("Select a recruit from the master list.", "error");
+      addButton.disabled = true;
+      try {
+        await api(`/api/admin/journeys/${state.journey.id}/recruits/from-directory`, mutation("POST", { directory_id: selected.id }));
+        closeModal(); toast(`${selected.name} added with their saved details.`); await renderAttendance();
+      } catch (error) { toast(error.message, "error"); addButton.disabled = false; }
+    };
+    $("#manualRecruitForm").onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const button = event.currentTarget.querySelector("button.secondary");
+      button.disabled = true;
+      try {
+        await api(`/api/admin/journeys/${state.journey.id}/recruits`, mutation("POST", { name: form.get("name"), phone_number: form.get("phone") || null, date_of_birth: form.get("dateOfBirth") || null }));
+        closeModal(); toast("Off-list recruit added."); await renderAttendance();
+      } catch (error) { toast(error.message, "error"); button.disabled = false; }
+    };
+    if (directory.stale) toast("Using the last saved recruit list because Google Sheets is temporarily unavailable.", "error");
+  } catch (error) {
+    $("#modalBody").innerHTML = `<div class="directory-dialog"><p class="eyebrow">Recruit roster</p><h2>Master list unavailable</h2><p class="danger-text">${h(error.message)}</p><p class="muted">Administrators can still add a recruit manually.</p><form id="manualRecruitForm" class="stack"><label>Full name<input name="name" required maxlength="200"></label><label>Phone number (optional)<input name="phone" inputmode="tel" maxlength="40"></label><label>Date of birth (optional)<input name="dateOfBirth" type="date"></label><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button secondary">Add off-list recruit</button></div></form></div>`;
+    $("#cancelModal").onclick = closeModal;
+    $("#manualRecruitForm").onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const button = event.currentTarget.querySelector("button.secondary");
+      button.disabled = true;
+      try {
+        await api(`/api/admin/journeys/${state.journey.id}/recruits`, mutation("POST", { name: form.get("name"), phone_number: form.get("phone") || null, date_of_birth: form.get("dateOfBirth") || null }));
+        closeModal(); toast("Off-list recruit added."); await renderAttendance();
+      } catch (problem) { toast(problem.message, "error"); button.disabled = false; }
+    };
+  }
 }
 
 function importDialog(kind) {

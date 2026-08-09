@@ -12,6 +12,7 @@ Digital administration and evaluator system for Lebanese Red Cross recruitment J
 
 - Independent Journee workspaces and lifecycle management.
 - Saved recruit/evaluator rosters and attendance with arrival times.
+- Searchable recruit master directory synchronized from the approved Google Sheet, with phone and birth-date autofill.
 - Reproducible room and evaluator assignment previews with explicit publication.
 - Mobile evaluator tasks for Sport, Escape Room, Negotiation, Skills, and Simulation.
 - Fixed 2026 dimension-weighted rubric, live monitoring, six-dimension profiles/rankings, activity statistics, comments, and exports.
@@ -19,8 +20,9 @@ Digital administration and evaluator system for Lebanese Red Cross recruitment J
 
 The production application is at `https://lrc-journee-recruitment.onrender.com`. The admin
 application is served at `/admin`. The permanent evaluator URL at `/evaluate` and its QR code
-automatically resolve the single Active Journee. PostgreSQL is authoritative in production; no Google Sheets
-connection or persistent container filesystem is used.
+automatically resolve the single Active Journee. PostgreSQL remains authoritative in production. The Google Sheet
+is used only as the source for the cached recruit directory; Journee attendance and all operational data stay in
+PostgreSQL, and no persistent container filesystem is used.
 
 ## Local run
 
@@ -73,6 +75,9 @@ use that fallback in a shared or production environment.
 - `LRC_GITHUB_ACTIONS_TOKEN`: private token allowed to dispatch and cancel Actions workflows in
   `jpch07/lrc-journee-recruitment`. It is used only by authenticated admin event-day controls and
   is never returned to the browser.
+- `LRC_RECRUIT_SHEET_ID`: public Google Sheet ID for the master recruit directory.
+- `LRC_RECRUIT_SHEET_NAME`: source tab name (defaults to `List of Recruits`).
+- `LRC_RECRUIT_SHEET_SYNC_SECONDS`: cache refresh interval (defaults to 300 seconds).
 
 Generate an Argon2 password hash locally:
 

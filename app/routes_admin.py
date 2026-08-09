@@ -88,10 +88,12 @@ from .schemas import (
     RecruitAttendanceRequest,
     RecruitAttendancePatchRequest,
     RecruitCreateRequest,
+    RecruitFromDirectoryRequest,
     RoomCountRequest,
     RoomPlanEditRequest,
 )
 from .scoring import ScoringError, validate_general_grade
+from .recruit_directory import create_recruit_from_directory, ensure_recruit_directory
 from .services import (
     assignment_round_payload,
     create_assignment_preview,
@@ -1072,6 +1074,61 @@ def add_recruit(
     db.add(recruit)
     db.flush()
     audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name, action="recruit.added", entity_type="recruit", entity_id=recruit.id, after=serialize_recruit(recruit))
+    _commit(db)
+    return serialize_recruit(recruit)
+
+
+@router.get("/recruit-directory")
+def recruit_directory(
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    return ensure_recruit_directory(db)
+
+
+@router.post("/recruit-directory/sync")
+def sync_recruit_directory(
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    result = ensure_recruit_directory(db, force=True)
+    audit(
+        db,
+        journey_id=None,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="recruit_directory.synced",
+        entity_type="recruit_directory",
+        after={"count": len(result["items"]), "syncedAt": result["syncedAt"]},
+    )
+    _commit(db)
+    return result
+
+
+@router.post("/journeys/{journey_id}/recruits/from-directory")
+def add_recruit_from_master_directory(
+    journey_id: str,
+    payload: RecruitFromDirectoryRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    recruit = create_recruit_from_directory(db, journey.id, payload.directory_id)
+    audit(
+        db,
+        journey_id=journey.id,
+        actor_type="admin",
+        actor_name=context.actor_name,
+        action="recruit.added_from_directory",
+        entity_type="recruit",
+        entity_id=recruit.id,
+        after=serialize_recruit(recruit),
+    )
     _commit(db)
     return serialize_recruit(recruit)
 

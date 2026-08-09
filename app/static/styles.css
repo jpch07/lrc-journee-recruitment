@@ -147,6 +147,16 @@ textarea { min-height: 105px; resize: vertical; }
 .search-suggestions button span:first-child { min-width: 0; }
 .search-suggestions button strong, .search-suggestions button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .search-suggestions button small { color: var(--muted); font-size: .72rem; }
+.directory-suggestions button { align-items: flex-start; }
+.directory-suggestions .directory-birth-date { flex: 0 0 auto; color: var(--muted); font-size: .76rem; white-space: nowrap; }
+.directory-dialog { width: min(620px, calc(100vw - 48px)); max-width: 100%; min-width: 0; }
+.directory-selection { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 13px 14px; border: 1px solid #cfd5dd; border-radius: 10px; background: #f7f8fa; }
+.directory-selection strong { flex: 1 0 100%; }
+.directory-selection span { color: var(--muted); }
+.directory-selection.empty { color: var(--muted); border-style: dashed; }
+.directory-divider { display: flex; align-items: center; gap: 12px; margin: 22px 0 16px; color: var(--muted); font-size: .8rem; font-weight: 750; text-transform: uppercase; }
+.directory-divider::before, .directory-divider::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.compact-note { margin: 0; font-size: .82rem; }
 .table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 11px; }
 table { width: 100%; border-collapse: collapse; background: #fff; }
 th, td { padding: 11px 12px; border-bottom: 1px solid #e9ebee; text-align: left; vertical-align: middle; white-space: nowrap; }

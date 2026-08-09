@@ -70,6 +70,18 @@ def test_admin_create_and_mobile_layout(tmp_path):
             page.wait_for_selector("#workspaceView:not(.hidden)")
             assert page.locator("#journeyCrumb").inner_text() == "Mobile Acceptance"
             assert page.evaluate("document.documentElement.scrollWidth") == page.evaluate("window.innerWidth")
+            page.evaluate("""async () => {
+              const session = await fetch('/api/auth/session').then(response => response.json());
+              const journeys = await fetch('/api/admin/journeys').then(response => response.json());
+              const journey = journeys.find(item => item.name === 'Mobile Acceptance');
+              const response = await fetch(`/api/admin/journeys/${journey.id}/recruits`, {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: {'Content-Type': 'application/json', 'X-CSRF-Token': session.csrfToken},
+                body: JSON.stringify({name: 'Mobile Recruit'})
+              });
+              if (!response.ok) throw new Error(await response.text());
+            }""")
 
             page.click("#menuButton")
             page.click('#workspaceNav button[data-section="attendance"]')
@@ -113,9 +125,6 @@ def test_admin_create_and_mobile_layout(tmp_path):
             attendance_page.click("#attendanceLoginSubmit")
             attendance_page.wait_for_selector("#attendanceAdd")
             assert attendance_page.locator("#attendanceSave").count() == 0
-            attendance_page.click("#attendanceAdd")
-            attendance_page.fill('#attendanceAddForm input[name="name"]', "Mobile Recruit")
-            attendance_page.click("#attendanceAddForm button.primary")
             recruit_card = attendance_page.locator('.attendance-recruit-card:has-text("Mobile Recruit")')
             recruit_card.wait_for()
             recruit_card.locator(".attendance-phone").fill("70123456")

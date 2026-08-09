@@ -24,6 +24,9 @@ class Settings:
     github_actions_token: str = ""
     github_repository: str = "jpch07/lrc-journee-recruitment"
     github_workflow: str = "event-day-watchdog.yml"
+    recruit_sheet_id: str = "1jlVdC5Hwqy78ivZ2JhxEBcJv3SUWsJ6F"
+    recruit_sheet_name: str = "List of Recruits"
+    recruit_sheet_sync_seconds: int = 300
     timezone: str = "Asia/Beirut"
 
     @property
@@ -79,6 +82,9 @@ def load_settings() -> Settings:
         github_actions_token=os.getenv("LRC_GITHUB_ACTIONS_TOKEN", ""),
         github_repository=os.getenv("LRC_GITHUB_REPOSITORY", "jpch07/lrc-journee-recruitment"),
         github_workflow=os.getenv("LRC_GITHUB_WORKFLOW", "event-day-watchdog.yml"),
+        recruit_sheet_id=os.getenv("LRC_RECRUIT_SHEET_ID", "1jlVdC5Hwqy78ivZ2JhxEBcJv3SUWsJ6F").strip(),
+        recruit_sheet_name=os.getenv("LRC_RECRUIT_SHEET_NAME", "List of Recruits").strip(),
+        recruit_sheet_sync_seconds=max(60, int(os.getenv("LRC_RECRUIT_SHEET_SYNC_SECONDS", "300"))),
     )
 
 

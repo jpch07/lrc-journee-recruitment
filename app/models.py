@@ -79,6 +79,7 @@ class Recruit(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    directory_id: Mapped[str | None] = mapped_column(ForeignKey("recruit_directory.id"), nullable=True)
     external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -93,6 +94,32 @@ class Recruit(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class RecruitDirectory(Base):
+    __tablename__ = "recruit_directory"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    source_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    source_row: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    phone_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_of_birth_raw: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class RecruitDirectoryState(Base):
+    __tablename__ = "recruit_directory_state"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default="google_sheet")
+    source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
 
 class EvaluatorDirectory(Base):

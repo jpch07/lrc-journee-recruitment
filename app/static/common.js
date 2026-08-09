@@ -68,6 +68,53 @@ export function wireAccountPicker(input, suggestions, accounts, { onSelect } = {
   input.addEventListener("blur", () => setTimeout(() => suggestions.classList.remove("visible"), 150));
 }
 
+function normalizedRecruitSearch(value) {
+  return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+export function wireRecruitDirectoryPicker(input, suggestions, recruits, { onSelect } = {}) {
+  const ordered = [...recruits].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+  const matches = () => {
+    const query = normalizedRecruitSearch(input.value);
+    if (!query) return [];
+    const digits = query.replace(/\D/g, "");
+    return ordered.filter((item) => {
+      const searchable = normalizedRecruitSearch(`${item.name} ${item.phoneNumber || ""} ${item.dateOfBirthSource || ""}`);
+      return searchable.includes(query) || (digits.length >= 3 && String(item.phoneNumber || "").replace(/\D/g, "").includes(digits));
+    }).slice(0, 10);
+  };
+  const choose = (item) => {
+    if (!item) return;
+    input.value = item.name;
+    input.dataset.selectedDirectoryId = item.id;
+    suggestions.classList.remove("visible");
+    suggestions.innerHTML = "";
+    onSelect?.(item);
+  };
+  const draw = () => {
+    delete input.dataset.selectedDirectoryId;
+    const items = matches();
+    suggestions.innerHTML = items.map((item) => {
+      const birthDate = item.dateOfBirthSource || item.dateOfBirth || "Birth date not recorded";
+      return `<button type="button" role="option" data-directory-id="${escapeHtml(item.id)}"><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(item.phoneNumber || "Phone not recorded")}</small></span><span class="directory-birth-date">${escapeHtml(birthDate)}</span></button>`;
+    }).join("");
+    suggestions.classList.toggle("visible", Boolean(input.value.trim() && items.length));
+    suggestions.querySelectorAll("button").forEach((button) => {
+      button.onclick = () => choose(ordered.find((item) => item.id === button.dataset.directoryId));
+    });
+  };
+  input.addEventListener("input", draw);
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    const first = matches()[0];
+    if (!first) return;
+    event.preventDefault();
+    choose(first);
+  });
+  input.addEventListener("focus", draw);
+  input.addEventListener("blur", () => setTimeout(() => suggestions.classList.remove("visible"), 150));
+}
+
 export function fmt(value, digits = 2) {
   return Number(value || 0).toFixed(digits);
 }

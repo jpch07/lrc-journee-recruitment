@@ -66,9 +66,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0010_visible_managed_passwords":
+            if revision != "0011_recruit_directory":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0010_visible_managed_passwords'."
+                    f"Database migration is {revision!r}, expected '0011_recruit_directory'."
                 )
         return {"status": "ready"}
     except Exception as exc:
