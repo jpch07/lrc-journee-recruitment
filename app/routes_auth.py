@@ -62,10 +62,15 @@ def account_payload(
     *,
     include_permissions: bool = True,
     include_managed_password: bool = False,
+    include_contact: bool = False,
+    directory: EvaluatorDirectory | None = None,
 ) -> dict:
+    if directory is None and account.directory_id:
+        directory = db.get(EvaluatorDirectory, account.directory_id)
     payload = {
         "id": account.id,
         "username": account.username,
+        "fullName": directory.full_name if directory and directory.full_name else "",
         "evaluatorRole": account.evaluator_role,
         "isOwner": account.is_owner,
         "canAdmin": account.can_admin,
@@ -78,6 +83,8 @@ def account_payload(
     }
     if include_managed_password:
         payload["managedPassword"] = account.managed_password
+    if include_contact:
+        payload["phoneNumber"] = directory.phone_number if directory and directory.phone_number else ""
     return payload
 
 
@@ -97,9 +104,16 @@ def _current_account(db: Session, context: UserContext) -> UserAccount:
 @router.get("/usernames")
 def usernames(db: Session = Depends(get_db)):
     return [
-        {"username": item.username, "role": item.evaluator_role}
-        for item in db.scalars(
-            select(UserAccount).where(UserAccount.active.is_(True)).order_by(func.lower(UserAccount.username))
+        {
+            "username": account.username,
+            "fullName": directory.full_name if directory and directory.full_name else "",
+            "role": account.evaluator_role,
+        }
+        for account, directory in db.execute(
+            select(UserAccount, EvaluatorDirectory)
+            .outerjoin(EvaluatorDirectory, UserAccount.directory_id == EvaluatorDirectory.id)
+            .where(UserAccount.active.is_(True))
+            .order_by(func.lower(UserAccount.username))
         )
     ]
 
@@ -170,19 +184,38 @@ def change_password(
     return {"ok": True, "version": account.version}
 
 
-def create_account_record(db: Session, username: str, password: str, evaluator_role: str) -> UserAccount:
+def create_account_record(
+    db: Session,
+    username: str,
+    password: str,
+    evaluator_role: str,
+    full_name: str | None = None,
+    phone_number: str | None = None,
+) -> UserAccount:
     clean = " ".join(username.split())
+    clean_full_name = " ".join((full_name or "").split()) or None
+    clean_phone = (phone_number or "").strip() or None
     existing = db.scalar(select(UserAccount).where(func.lower(UserAccount.username) == clean.lower()))
     if existing:
         raise HTTPException(status_code=409, detail="This username already has an account.")
     directory = db.scalar(select(EvaluatorDirectory).where(func.lower(EvaluatorDirectory.name) == clean.lower()))
     if not directory:
-        directory = EvaluatorDirectory(name=clean, default_role=evaluator_role, active=True)
+        directory = EvaluatorDirectory(
+            name=clean,
+            default_role=evaluator_role,
+            full_name=clean_full_name,
+            phone_number=clean_phone,
+            active=True,
+        )
         db.add(directory)
         db.flush()
     else:
         directory.active = True
         directory.default_role = evaluator_role
+        if full_name is not None:
+            directory.full_name = clean_full_name
+        if phone_number is not None:
+            directory.phone_number = clean_phone
     account = UserAccount(
         username=clean,
         password_hash=hash_password(password),
@@ -203,8 +236,18 @@ def accounts(
 ):
     del context
     return [
-        account_payload(db, item, include_managed_password=True)
-        for item in db.scalars(select(UserAccount).order_by(UserAccount.is_owner.desc(), func.lower(UserAccount.username)))
+        account_payload(
+            db,
+            account,
+            include_managed_password=True,
+            include_contact=True,
+            directory=directory,
+        )
+        for account, directory in db.execute(
+            select(UserAccount, EvaluatorDirectory)
+            .outerjoin(EvaluatorDirectory, UserAccount.directory_id == EvaluatorDirectory.id)
+            .order_by(UserAccount.is_owner.desc(), func.lower(UserAccount.username))
+        )
     ]
 
 
@@ -236,10 +279,22 @@ def add_account(
     if not (context.is_owner or context.can_admin):
         raise HTTPException(status_code=403, detail="Admin access is required to add accounts.")
     require_csrf(request, context.csrf_token)
-    account = create_account_record(db, payload.username, payload.password, payload.evaluator_role)
+    account = create_account_record(
+        db,
+        payload.username,
+        payload.password,
+        payload.evaluator_role,
+        payload.full_name,
+        payload.phone_number,
+    )
     audit(db, journey_id=None, actor_type="account", actor_name=context.username,
           action="account.created", entity_type="user_account", entity_id=account.id,
-          after={"username": account.username, "evaluatorRole": account.evaluator_role})
+          after={
+              "username": account.username,
+              "evaluatorRole": account.evaluator_role,
+              "fullName": " ".join((payload.full_name or "").split()),
+              "phoneNumber": (payload.phone_number or "").strip(),
+          })
     _commit(db)
     return account_payload(db, account)
 

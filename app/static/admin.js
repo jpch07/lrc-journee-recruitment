@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260807.7";
+import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
 
 const state = {
   csrf: "",
@@ -371,13 +371,16 @@ function evaluatorAttendanceSort(a, b) {
 function evaluatorSearchMatches(evaluators, query) {
   const normalized = normalizedName(query);
   if (!normalized) return [];
-  return evaluators.filter((item) => normalizedName(item.name).includes(normalized)).sort(evaluatorAttendanceSort);
+  return evaluators.filter((item) => normalizedName(`${item.name} ${item.fullName || ""}`).includes(normalized)).sort(evaluatorAttendanceSort);
 }
 
 function resolveEvaluatorSearch(evaluators, query) {
   const normalized = normalizedName(query);
-  const exact = evaluators.find((item) => normalizedName(item.name) === normalized);
-  if (exact) return exact;
+  const nicknameExact = evaluators.find((item) => normalizedName(item.name) === normalized);
+  if (nicknameExact) return nicknameExact;
+  const fullNameExact = evaluators.filter((item) => item.fullName && normalizedName(item.fullName) === normalized);
+  if (fullNameExact.length === 1) return fullNameExact[0];
+  if (fullNameExact.length > 1) return null;
   const matches = evaluatorSearchMatches(evaluators, query);
   return matches.length === 1 ? matches[0] : null;
 }
@@ -448,7 +451,7 @@ function wireEvaluatorAttendanceSearch() {
   const evaluators = evaluatorAttendanceRows();
   const drawSuggestions = () => {
     const matches = evaluatorSearchMatches(evaluators, input.value).slice(0, 8);
-    suggestions.innerHTML = matches.map((item) => `<button type="button" data-id="${item.id}" role="option"><span><strong>${h(item.name)}</strong><small>${item.present ? "Present" : "Absent"}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
+    suggestions.innerHTML = matches.map((item) => `<button type="button" data-id="${item.id}" role="option"><span><strong>${h(item.name)}</strong><small>${h(item.fullName || "Full name not recorded")} · ${item.present ? "Present" : "Absent"}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
     suggestions.classList.toggle("visible", Boolean(input.value.trim() && matches.length));
     $$("button", suggestions).forEach((button) => button.onclick = () => {
       toggleEvaluatorAttendance(state.attendanceDraft[button.dataset.id]);
@@ -665,12 +668,12 @@ async function saveAttendance() {
 
 function addPersonDialog(isRecruit) {
   if (isRecruit) return openRecruitDirectoryDialog();
-  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add evaluator not in the default list</h2><div class="stack"><label>Full name<input name="name" required></label><label>Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
+  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add evaluator not in the default list</h2><div class="stack"><label>Username / nickname<input name="name" required maxlength="200"></label><label>Full name (optional)<input name="fullName" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" inputmode="tel" maxlength="40"></label><label>Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#personForm").onsubmit = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const body = { name: form.get("name"), password: form.get("password"), role: form.get("role"), add_to_directory: true };
+    const body = { name: form.get("name"), full_name: form.get("fullName") || null, phone_number: form.get("phoneNumber") || null, password: form.get("password"), role: form.get("role"), add_to_directory: true };
     try {
       await api(`/api/admin/journeys/${state.journey.id}/evaluators`, mutation("POST", body));
       closeModal(); toast("Person added to the roster."); await renderAttendance();
@@ -914,7 +917,7 @@ function mandatoryRoomsDialog() {
       const roleB = b.role === "overall" ? 0 : 1;
       return roomA - roomB || roleA - roleB || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
-    $("#mandatoryList").innerHTML = ordered.map((item) => `<div class="mandatory-row ${item.present ? "" : "absent"}" data-id="${item.id}"><div><strong>${h(item.name)}</strong><small>${item.present ? "Present" : "Absent"}</small></div><span class="role-badge ${item.role}">${h(item.role)}</span><select aria-label="Mandatory room for ${h(item.name)}">${roomOptions(placements[item.id])}</select></div>`).join("");
+    $("#mandatoryList").innerHTML = ordered.map((item) => `<div class="mandatory-row ${item.present ? "" : "absent"}" data-id="${item.id}"><div><strong>${h(item.name)}</strong><small>${h(item.fullName || "Full name not recorded")} · ${item.present ? "Present" : "Absent"}</small></div><span class="role-badge ${item.role}">${h(item.role)}</span><select aria-label="Mandatory room for ${h(item.name)}">${roomOptions(placements[item.id])}</select></div>`).join("");
     $$(".mandatory-row", $("#mandatoryList")).forEach((row) => {
       $("select", row).onchange = (event) => {
         if (event.target.value) placements[row.dataset.id] = Number(event.target.value);
@@ -942,7 +945,7 @@ function mandatoryRoomsDialog() {
   };
   const drawSuggestions = () => {
     const matches = evaluatorSearchMatches(evaluators, input.value).slice(0, 8);
-    suggestions.innerHTML = matches.map((item) => `<button type="button" data-id="${item.id}" role="option"><span><strong>${h(item.name)}</strong><small>${item.present ? "Present" : "Absent"}${placements[item.id] ? ` · Room ${placements[item.id]}` : ""}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
+    suggestions.innerHTML = matches.map((item) => `<button type="button" data-id="${item.id}" role="option"><span><strong>${h(item.name)}</strong><small>${h(item.fullName || "Full name not recorded")} · ${item.present ? "Present" : "Absent"}${placements[item.id] ? ` · Room ${placements[item.id]}` : ""}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
     suggestions.classList.toggle("visible", Boolean(input.value.trim() && matches.length));
     $$("button", suggestions).forEach((button) => button.onclick = () => togglePlacement(evaluators.find((item) => item.id === button.dataset.id)));
   };
@@ -1291,11 +1294,91 @@ async function showAdminEvaluationEditor(recruitId, activityCode) {
   } catch (error) { toast(error.message, "error"); }
 }
 
+function normalizedWhatsAppPhone(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  let digits = raw.replace(/\D/g, "");
+  if (raw.startsWith("+")) {
+    // Already in international format.
+  } else if (digits.startsWith("00")) {
+    digits = digits.slice(2);
+  } else if (!digits.startsWith("961") && digits.length <= 8) {
+    digits = `961${digits.replace(/^0/, "")}`;
+  }
+  return /^\d{8,15}$/.test(digits) ? digits : null;
+}
+
+function whatsAppAccountReady(account) {
+  return Boolean(account?.managedPassword && normalizedWhatsAppPhone(account.phoneNumber));
+}
+
+function accountWhatsAppUrl(account) {
+  if (!whatsAppAccountReady(account)) return null;
+  const message = `Username: ${account.username}\nPassword: ${account.managedPassword}`;
+  return `https://wa.me/${normalizedWhatsAppPhone(account.phoneNumber)}?text=${encodeURIComponent(message)}`;
+}
+
+function openAccountWhatsApp(account) {
+  const url = accountWhatsAppUrl(account);
+  if (!url) return toast("A phone number and visible password are required.", "error");
+  window.open(url, "_blank", "noopener,noreferrer");
+  toast(`WhatsApp opened for ${account.username}. Press Send in WhatsApp to deliver it.`);
+}
+
+function presentWhatsAppAccounts(accounts) {
+  const byUsername = new Map(accounts.map((account) => [normalizedName(account.username), account]));
+  return state.journey.evaluators
+    .filter((evaluator) => evaluator.present && evaluator.active)
+    .sort(evaluatorAttendanceSort)
+    .map((evaluator) => byUsername.get(normalizedName(evaluator.name)))
+    .filter((account) => whatsAppAccountReady(account));
+}
+
+function openPresentWhatsAppQueue(eligible) {
+  const presentCount = state.journey.evaluators.filter((item) => item.present && item.active).length;
+  const unavailable = Math.max(presentCount - eligible.length, 0);
+  if (!eligible.length) return toast("No present evaluator has both a phone number and visible password.", "error");
+  let index = 0;
+  openModal(`<div class="whatsapp-queue"><p class="eyebrow">Present evaluators</p><h2>WhatsApp credentials</h2><p>Open each chat, then press Send in WhatsApp. The app never marks a message as sent because WhatsApp must confirm delivery.</p><div id="whatsappQueueProgress" class="formula-note"></div><div id="whatsappQueueRecipient" class="directory-selection"></div>${unavailable ? `<p class="warning-box">${unavailable} present evaluator${unavailable === 1 ? " is" : "s are"} skipped because a phone number or visible password is missing.</p>` : ""}<div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Close</button><button type="button" class="button whatsapp" id="whatsappQueueNext">Open next in WhatsApp</button></div></div>`);
+  $("#cancelModal").onclick = closeModal;
+  const draw = () => {
+    const account = eligible[index];
+    $("#whatsappQueueProgress").textContent = index < eligible.length ? `${index + 1} of ${eligible.length}` : `${eligible.length} chats opened`;
+    $("#whatsappQueueRecipient").innerHTML = account ? `<strong>${h(account.username)}</strong><span>${h(account.fullName || "Full name not recorded")}</span><span>${h(account.phoneNumber)}</span>` : `<strong>Queue complete</strong><span>All available chats have been opened.</span>`;
+    $("#whatsappQueueNext").disabled = !account;
+    $("#whatsappQueueNext").textContent = account ? `Open ${account.username}` : "Complete";
+  };
+  $("#whatsappQueueNext").onclick = () => {
+    if (index >= eligible.length) return;
+    openAccountWhatsApp(eligible[index]);
+    index += 1;
+    draw();
+  };
+  draw();
+}
+
 async function renderPermissions() {
   if (!state.isOwner) throw new Error("Owner access is required.");
+  await refreshJourney();
   const [accounts, accountAudit] = await Promise.all([api("/api/auth/accounts"), api("/api/auth/account-audit")]);
-  host.innerHTML = `${sectionHeading("Security", "Access & permissions", "", `<button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
-    <div class="panel permissions-panel"><div class="table-wrap"><table class="permissions-table"><colgroup><col class="permissions-user"><col class="permissions-password"><col class="permissions-role"><col class="permissions-toggle"><col class="permissions-toggle"><col class="permissions-attendance"><col class="permissions-toggle"><col class="permissions-actions-column"></colgroup><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th class="permissions-attendance-heading">${h(state.journey.name)} attendance</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}"><td><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text"> Owner</small>` : ""}</td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-attendance attendance-check" type="checkbox" ${account.attendanceJourneyIds.includes(state.journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}></td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="permissions-actions"><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save</button><button class="button ghost small reset-account">Reset password</button></div></td></tr>`).join("")}</tbody></table></div></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
+  const eligibleWhatsApp = presentWhatsAppAccounts(accounts);
+  host.innerHTML = `${sectionHeading("Security", "Access & permissions", "", `<button class="button whatsapp" id="sharePresentCredentials" ${eligibleWhatsApp.length ? "" : "disabled"}>WhatsApp present evaluators (${eligibleWhatsApp.length})</button><button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
+    <div class="panel permissions-panel"><div class="permissions-toolbar"><label class="permissions-search-label" for="permissionsSearch">Find an account</label><input id="permissionsSearch" class="search-input" type="search" autocomplete="off" placeholder="Search username, full name, or phone"></div><div class="table-wrap"><table class="permissions-table"><colgroup><col class="permissions-user"><col class="permissions-password"><col class="permissions-role"><col class="permissions-toggle"><col class="permissions-toggle"><col class="permissions-attendance"><col class="permissions-toggle"><col class="permissions-actions-column"></colgroup><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th class="permissions-attendance-heading">${h(state.journey.name)} attendance</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}" data-account-search="${h(normalizedName(`${account.username} ${account.fullName || ""} ${account.phoneNumber || ""}`))}"><td><div class="account-identity"><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text">Owner</small>` : ""}<small>${h(account.fullName || "Full name not recorded")}</small>${account.phoneNumber ? `<small>${h(account.phoneNumber)}</small>` : ""}</div></td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-attendance attendance-check" type="checkbox" ${account.attendanceJourneyIds.includes(state.journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}></td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="permissions-actions"><button class="button whatsapp small whatsapp-account" ${whatsAppAccountReady(account) ? "" : "disabled"} title="${h(whatsAppAccountReady(account) ? `Open WhatsApp for ${account.username}` : "A phone number and visible password are required")}">WhatsApp</button><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save</button><button class="button ghost small reset-account">Reset password</button></div></td></tr>`).join("")}</tbody></table></div><p id="permissionsNoResults" class="muted hidden">No account matches this search.</p></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
+  $("#permissionsSearch").oninput = (event) => {
+    const query = normalizedName(event.currentTarget.value);
+    let visible = 0;
+    $$(`.permissions-table tbody tr`, host).forEach((row) => {
+      const matches = !query || row.dataset.accountSearch.includes(query);
+      row.classList.toggle("hidden", !matches);
+      if (matches) visible += 1;
+    });
+    $("#permissionsNoResults").classList.toggle("hidden", visible > 0);
+  };
+  $$(".whatsapp-account", host).forEach((button) => button.onclick = () => {
+    const account = accounts.find((item) => item.id === button.closest("tr").dataset.accountId);
+    openAccountWhatsApp(account);
+  });
+  $("#sharePresentCredentials").onclick = () => openPresentWhatsAppQueue(eligibleWhatsApp);
   $$(".save-account", host).forEach((button) => button.onclick = async () => {
     const row = button.closest("tr");
     const account = accounts.find((item) => item.id === row.dataset.accountId);
@@ -1367,13 +1450,13 @@ async function renderPermissions() {
 }
 
 function addAccountDialog() {
-  openModal(`<form id="accountForm"><h2>Add account</h2><div class="stack"><label>Username<input name="username" required maxlength="200"></label><label>Temporary password<input name="password" type="password" minlength="8" required></label><label>Evaluator role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add account</button></div></form>`);
+  openModal(`<form id="accountForm"><h2>Add account</h2><div class="stack"><label>Username / nickname<input name="username" required maxlength="200"></label><label>Full name (optional)<input name="fullName" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" inputmode="tel" maxlength="40"></label><label>Temporary password<input name="password" type="password" minlength="8" required></label><label>Evaluator role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add account</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#accountForm").onsubmit = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await api("/api/auth/accounts", mutation("POST", { username: form.get("username"), password: form.get("password"), evaluator_role: form.get("role") }));
+      await api("/api/auth/accounts", mutation("POST", { username: form.get("username"), full_name: form.get("fullName") || null, phone_number: form.get("phoneNumber") || null, password: form.get("password"), evaluator_role: form.get("role") }));
       closeModal(); toast("Account added."); await renderPermissions();
     } catch (error) { toast(error.message, "error"); }
   };

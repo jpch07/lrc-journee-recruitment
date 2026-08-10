@@ -133,12 +133,12 @@ textarea { min-height: 105px; resize: vertical; }
 .managed-password { display: grid; grid-template-columns: minmax(105px, 1fr) auto auto; gap: 5px; min-width: 0; }
 .managed-password input { min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
 .permissions-table { min-width: 1100px; table-layout: fixed; }
-.permissions-table col.permissions-user { width: 13%; }
-.permissions-table col.permissions-password { width: 28%; }
-.permissions-table col.permissions-role { width: 9%; }
-.permissions-table col.permissions-toggle { width: 7%; }
-.permissions-table col.permissions-attendance { width: 15%; }
-.permissions-table col.permissions-actions-column { width: 14%; }
+.permissions-table col.permissions-user { width: 17%; }
+.permissions-table col.permissions-password { width: 25%; }
+.permissions-table col.permissions-role { width: 8%; }
+.permissions-table col.permissions-toggle { width: 6%; }
+.permissions-table col.permissions-attendance { width: 13%; }
+.permissions-table col.permissions-actions-column { width: 19%; }
 .permissions-table th, .permissions-table td { white-space: normal; }
 .permissions-table .account-role { width: 100%; min-width: 88px; }
 .permissions-attendance-heading { overflow-wrap: anywhere; }
@@ -931,6 +931,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--red); box-shadow
 .button.secondary { color: #9f0c27; border: 1px solid #d35269; background: #fff; }
 .button.ghost { background: #fff; }
 .button.danger { border-color: #550011; box-shadow: 3px 3px 0 #550011; }
+.button.whatsapp { color: #fff; border-color: #087a45; background: #128c5a; box-shadow: 3px 3px 0 #075c34; }
+.button.whatsapp:hover { border-color: #075c34; background: #0b7448; box-shadow: 4px 4px 0 #054a2a; }
 .icon-button { border-radius: 3px; }
 
 /* Modular surfaces */
@@ -986,6 +988,14 @@ th {
 tbody tr:nth-child(even) { background: #f3f2f0; }
 tbody tr:hover { background: #ffedf1; }
 .rank-number { color: #fff; border-color: #171d28; border-radius: 3px; background: #171d28; }
+.permissions-toolbar { display: flex; align-items: end; gap: 12px; margin-bottom: 16px; }
+.permissions-search-label { width: min(460px, 100%); }
+.permissions-search-label .search-input { max-width: none; }
+.account-identity { display: grid; gap: 2px; }
+.account-identity small { display: block; overflow-wrap: anywhere; color: var(--muted); font-size: .72rem; line-height: 1.3; }
+.account-identity .success-text { color: var(--green); font-weight: 800; text-transform: uppercase; }
+.whatsapp-queue { width: min(560px, calc(100vw - 48px)); max-width: 100%; }
+.whatsapp-queue .directory-selection { margin: 14px 0; }
 
 /* Operational states */
 .status-pill, .role-badge { border-width: 1px; border-radius: 3px; font-weight: 830; text-transform: uppercase; letter-spacing: .045em; }

@@ -1,4 +1,4 @@
-import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260807.5";
+import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260810.1";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const host = $("#evalHost");

@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, wireAccountPicker } from "/static/common.js?v=20260807.7";
+import { api, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, wireAccountPicker } from "/static/common.js?v=20260810.1";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];

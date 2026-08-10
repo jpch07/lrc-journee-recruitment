@@ -1,4 +1,4 @@
-import { api, escapeHtml as h, selectedAccount, toast, wireAccountPicker, wireRecruitDirectoryPicker } from "/static/common.js?v=20260807.7";
+import { api, escapeHtml as h, selectedAccount, toast, wireAccountPicker, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
 
 const host = document.querySelector("#recruitAttendanceHost");
 const journeyLabel = document.querySelector("#attendanceJourneyName");
