@@ -33,6 +33,9 @@ class AccountCreateRequest(BaseModel):
 
 
 class AccountUpdateRequest(BaseModel):
+    username: str | None = Field(default=None, min_length=1, max_length=200)
+    full_name: str | None = Field(default=None, max_length=200)
+    phone_number: str | None = Field(default=None, max_length=40)
     can_admin: bool | None = None
     can_results: bool | None = None
     active: bool | None = None
