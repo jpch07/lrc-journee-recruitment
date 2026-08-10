@@ -66,9 +66,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0011_recruit_directory":
+            if revision != "0012_evaluator_contacts":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0011_recruit_directory'."
+                    f"Database migration is {revision!r}, expected '0012_evaluator_contacts'."
                 )
         return {"status": "ready"}
     except Exception as exc:

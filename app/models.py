@@ -128,6 +128,8 @@ class EvaluatorDirectory(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
     default_role: Mapped[str] = mapped_column(String(20), nullable=False, default="dossard")
+    full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    phone_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

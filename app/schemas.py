@@ -28,6 +28,8 @@ class AccountCreateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=8, max_length=500)
     evaluator_role: Literal["overall", "dossard"] = "dossard"
+    full_name: str | None = Field(default=None, max_length=200)
+    phone_number: str | None = Field(default=None, max_length=40)
 
 
 class AccountUpdateRequest(BaseModel):
@@ -76,6 +78,8 @@ class EvaluatorCreateRequest(BaseModel):
     role: Literal["overall", "dossard"]
     add_to_directory: bool = True
     password: str | None = Field(default=None, min_length=8, max_length=500)
+    full_name: str | None = Field(default=None, max_length=200)
+    phone_number: str | None = Field(default=None, max_length=40)
 
 
 class RecruitAttendanceItem(BaseModel):

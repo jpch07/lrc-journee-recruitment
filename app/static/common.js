@@ -37,7 +37,7 @@ export function wireAccountPicker(input, suggestions, accounts, { onSelect } = {
   const ordered = [...accounts].sort((a, b) => a.username.localeCompare(b.username, undefined, { sensitivity: "base" }));
   const matches = () => {
     const query = normalizedAccountName(input.value);
-    return query ? ordered.filter((item) => normalizedAccountName(item.username).includes(query)).slice(0, 8) : [];
+    return query ? ordered.filter((item) => normalizedAccountName(`${item.username} ${item.fullName || ""}`).includes(query)).slice(0, 8) : [];
   };
   const choose = (item) => {
     input.value = item.username;
@@ -49,7 +49,7 @@ export function wireAccountPicker(input, suggestions, accounts, { onSelect } = {
   const draw = () => {
     delete input.dataset.selectedUsername;
     const items = matches();
-    suggestions.innerHTML = items.map((item) => `<button type="button" role="option" data-username="${escapeHtml(item.username)}"><span><strong>${escapeHtml(item.username)}</strong><small>${escapeHtml(item.role || "account")}</small></span><span class="role-badge ${escapeHtml(item.role || "")}">${escapeHtml(item.role || "")}</span></button>`).join("");
+    suggestions.innerHTML = items.map((item) => `<button type="button" role="option" data-username="${escapeHtml(item.username)}"><span><strong>${escapeHtml(item.username)}</strong><small>${escapeHtml(item.fullName || "Full name not recorded")}</small></span><span class="role-badge ${escapeHtml(item.role || "")}">${escapeHtml(item.role || "")}</span></button>`).join("");
     suggestions.classList.toggle("visible", Boolean(input.value.trim() && items.length));
     suggestions.querySelectorAll("button").forEach((button) => button.onclick = () => choose(
       ordered.find((item) => item.username === button.dataset.username),

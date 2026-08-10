@@ -279,7 +279,13 @@ def evaluator_directory(
 ):
     del context
     return [
-        {"id": item.id, "name": item.name, "defaultRole": item.default_role}
+        {
+            "id": item.id,
+            "name": item.name,
+            "defaultRole": item.default_role,
+            "fullName": item.full_name or "",
+            "phoneNumber": item.phone_number or "",
+        }
         for item in db.scalars(
             select(EvaluatorDirectory)
             .where(EvaluatorDirectory.active.is_(True))
@@ -403,7 +409,7 @@ def import_people(
     created: list[dict] = []
     skipped: list[str] = []
     for number, row in enumerate(rows, start=2):
-        name = _first_value(row, ("name", "full name", "recruit", "recruit name", "evaluator", "evaluator name"))
+        name = _first_value(row, ("name", "nickname", "full name", "recruit", "recruit name", "evaluator", "evaluator name"))
         if not name:
             skipped.append(f"Row {number}: missing name")
             continue
@@ -437,6 +443,8 @@ def import_people(
         else:
             role_text = _first_value(row, ("role", "type")).lower()
             role = "overall" if role_text in {"overall", "o", "general"} else "dossard"
+            full_name = _first_value(row, ("full name", "official name")) or None
+            phone_number = _first_value(row, ("phone", "phone number", "mobile", "mobile number")) or None
             duplicate = db.scalar(
                 select(Evaluator).where(
                     Evaluator.journey_id == journey.id,
@@ -450,9 +458,20 @@ def import_people(
                 select(EvaluatorDirectory).where(func.lower(EvaluatorDirectory.name) == clean_name.lower())
             )
             if not directory:
-                directory = EvaluatorDirectory(name=clean_name, default_role=role)
+                directory = EvaluatorDirectory(
+                    name=clean_name,
+                    default_role=role,
+                    full_name=full_name,
+                    phone_number=phone_number,
+                )
                 db.add(directory)
                 db.flush()
+            else:
+                directory.default_role = role
+                if full_name is not None:
+                    directory.full_name = " ".join(full_name.split())
+                if phone_number is not None:
+                    directory.phone_number = phone_number.strip()
             item = Evaluator(journey_id=journey.id, directory_id=directory.id, name=clean_name, role=role)
             db.add(item)
             db.flush()
@@ -857,11 +876,20 @@ def journey_detail(
         )
     }
     evaluator_payload = []
-    for item in db.scalars(
+    evaluator_items = list(db.scalars(
         select(Evaluator).where(Evaluator.journey_id == journey.id)
         .order_by((Evaluator.role == "dossard"), func.lower(Evaluator.name))
-    ):
+    ))
+    directory_ids = {item.directory_id for item in evaluator_items if item.directory_id}
+    directories = {
+        item.id: item for item in db.scalars(
+            select(EvaluatorDirectory).where(EvaluatorDirectory.id.in_(directory_ids))
+        )
+    } if directory_ids else {}
+    for item in evaluator_items:
         value = serialize_evaluator(item)
+        directory = directories.get(item.directory_id)
+        value["fullName"] = directory.full_name if directory and directory.full_name else ""
         value["mandatoryRoom"] = mandatory_rooms.get(item.id)
         evaluator_payload.append(value)
     return {
@@ -1153,15 +1181,26 @@ def add_evaluator(
     if existing:
         raise HTTPException(status_code=409, detail="This evaluator is already in the Journee directory.")
     directory = db.scalar(select(EvaluatorDirectory).where(func.lower(EvaluatorDirectory.name) == clean_name.lower()))
+    clean_full_name = " ".join((payload.full_name or "").split()) or None
+    clean_phone = (payload.phone_number or "").strip() or None
     if payload.add_to_directory:
         if not directory:
-            directory = EvaluatorDirectory(name=clean_name, default_role=payload.role)
+            directory = EvaluatorDirectory(
+                name=clean_name,
+                default_role=payload.role,
+                full_name=clean_full_name,
+                phone_number=clean_phone,
+            )
             db.add(directory)
             db.flush()
-        elif not directory.active:
+        else:
             directory.name = clean_name
             directory.default_role = payload.role
             directory.active = True
+            if payload.full_name is not None:
+                directory.full_name = clean_full_name
+            if payload.phone_number is not None:
+                directory.phone_number = clean_phone
     account = db.scalar(select(UserAccount).where(func.lower(UserAccount.username) == clean_name.lower()))
     if payload.add_to_directory and not account:
         if not payload.password:
@@ -1169,6 +1208,7 @@ def add_evaluator(
         account = UserAccount(
             username=clean_name,
             password_hash=hash_password(payload.password),
+            managed_password=payload.password,
             directory_id=directory.id,
             evaluator_role=payload.role,
             must_change_password=True,

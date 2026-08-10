@@ -27,6 +27,8 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
     created = client.post("/api/auth/accounts", headers=headers, json={
         "username": "Permission Tester", "password": "temporary-password",
         "evaluator_role": "dossard",
+        "full_name": "Test Person Full Name",
+        "phone_number": "70123456",
     })
     assert created.status_code == 200, created.text
     account = created.json()
@@ -34,6 +36,14 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
     owner_accounts = client.get("/api/auth/accounts").json()
     visible = next(item for item in owner_accounts if item["username"] == "Permission Tester")
     assert visible["managedPassword"] == "temporary-password"
+    assert visible["fullName"] == "Test Person Full Name"
+    assert visible["phoneNumber"] == "70123456"
+    picker_account = next(
+        item for item in client.get("/api/auth/usernames").json()
+        if item["username"] == "Permission Tester"
+    )
+    assert picker_account["fullName"] == "Test Person Full Name"
+    assert "phoneNumber" not in picker_account
     updated = client.patch(f"/api/auth/accounts/{account['id']}", headers=headers, json={
         "can_results": True,
         "attendance_journey_ids": [journey["id"]],
