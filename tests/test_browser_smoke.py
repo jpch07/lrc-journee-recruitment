@@ -24,6 +24,8 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "mandatorySearch" in admin_js
     assert "permissionsSearch" in admin_js
     assert "WhatsApp present evaluators" in admin_js
+    assert "Edit info" in admin_js
+    assert "delete-account" in admin_js
     assert "Username: ${account.username}\\nPassword: ${account.managedPassword}" in admin_js
     assert "item.fullName" in admin_js
     assert 'class="active-check"' not in admin_js
@@ -67,7 +69,7 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "?v=20260810.1" in admin
+    assert "?v=20260810.2" in admin
     assert "?v=20260810.1" in evaluator
     assert "common.js?v=20260810.1" in admin_js
     assert "common.js?v=20260810.1" in evaluator_js

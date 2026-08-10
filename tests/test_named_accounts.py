@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import date
 import re
 
 from app.db import SessionLocal
 from app.auth import hash_password
-from app.models import EvaluatorDirectory, UserAccount
+from app.models import Evaluator, EvaluatorDirectory, Journey, UserAccount
 
 
 def _login(client, username="JP Chaaya", password="test-password"):
@@ -110,6 +111,75 @@ def test_owner_is_always_a_dossard_in_permissions(client):
     )
     assert changed.status_code == 200, changed.text
     assert changed.json()["evaluatorRole"] == "dossard"
+
+
+def test_owner_can_edit_and_safely_delete_account(client):
+    owner = _login(client)
+    headers = {"X-CSRF-Token": owner["csrfToken"]}
+    created = client.post("/api/auth/accounts", headers=headers, json={
+        "username": "Editable Nickname",
+        "password": "temporary-password",
+        "evaluator_role": "dossard",
+        "full_name": "Editable Full Name",
+        "phone_number": "70111222",
+    }).json()
+    updated = client.patch(f"/api/auth/accounts/{created['id']}", headers=headers, json={
+        "username": "Updated Nickname",
+        "full_name": "Updated Full Name",
+        "phone_number": "70999888",
+        "evaluator_role": "overall",
+        "base_version": created["version"],
+    })
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["username"] == "Updated Nickname"
+    assert updated.json()["fullName"] == "Updated Full Name"
+    assert updated.json()["phoneNumber"] == "70999888"
+    assert _login(client, "Updated Nickname", "temporary-password")["evaluatorRole"] == "overall"
+
+    owner = _login(client)
+    headers = {"X-CSRF-Token": owner["csrfToken"]}
+    with SessionLocal() as db:
+        account = db.get(UserAccount, created["id"])
+        journey = Journey(
+            name="Active deletion guard",
+            event_date=date(2026, 9, 10),
+            status="active",
+            public_token="active-deletion-guard-token",
+        )
+        db.add(journey)
+        db.flush()
+        evaluator = Evaluator(
+            journey_id=journey.id,
+            directory_id=account.directory_id,
+            name=account.username,
+            role=account.evaluator_role,
+            present=True,
+            active=True,
+        )
+        db.add(evaluator)
+        db.commit()
+        evaluator_id = evaluator.id
+        directory_id = account.directory_id
+
+    blocked = client.delete(f"/api/auth/accounts/{created['id']}", headers=headers)
+    assert blocked.status_code == 409
+    with SessionLocal() as db:
+        evaluator = db.get(Evaluator, evaluator_id)
+        evaluator.present = False
+        db.commit()
+
+    deleted = client.delete(f"/api/auth/accounts/{created['id']}", headers=headers)
+    assert deleted.status_code == 200, deleted.text
+    assert client.post("/api/auth/login", json={
+        "username": "Updated Nickname", "password": "temporary-password",
+    }).status_code in {401, 403}
+    with SessionLocal() as db:
+        assert db.get(UserAccount, created["id"]) is None
+        assert db.get(EvaluatorDirectory, directory_id).active is False
+        assert db.get(Evaluator, evaluator_id) is not None
+
+    owner_account = next(item for item in client.get("/api/auth/accounts").json() if item["isOwner"])
+    assert client.delete(f"/api/auth/accounts/{owner_account['id']}", headers=headers).status_code == 409
 
 
 def test_missing_accounts_are_generated_in_short_repeatable_batches(client):

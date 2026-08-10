@@ -21,7 +21,7 @@ from .auth import (
 )
 from .db import get_db
 from .config import settings
-from .models import AuditEvent, EvaluatorDirectory, Journey, JourneyPermission, UserAccount, UserSession, utcnow
+from .models import AuditEvent, Evaluator, EvaluatorDirectory, Journey, JourneyPermission, UserAccount, UserSession, utcnow
 from .schemas import (
     AccountCreateRequest,
     AccountLoginRequest,
@@ -384,7 +384,45 @@ def update_account(
         raise HTTPException(status_code=409, detail="The owner account cannot be changed here.")
     if payload.base_version is not None and payload.base_version != account.version:
         raise HTTPException(status_code=409, detail="This account changed elsewhere. Reload before saving.")
-    before = account_payload(db, account)
+    before = account_payload(db, account, include_contact=True)
+    directory = db.get(EvaluatorDirectory, account.directory_id) if account.directory_id else None
+    if "username" in payload.model_fields_set and payload.username is not None:
+        clean_username = " ".join(payload.username.split())
+        if account.is_owner and clean_username.casefold() != account.username.casefold():
+            raise HTTPException(status_code=409, detail="The owner username cannot be changed.")
+        duplicate_account = db.scalar(
+            select(UserAccount).where(
+                func.lower(UserAccount.username) == clean_username.lower(),
+                UserAccount.id != account.id,
+            )
+        )
+        if duplicate_account:
+            raise HTTPException(status_code=409, detail="This username is already in use.")
+        if directory:
+            duplicate_directory = db.scalar(
+                select(EvaluatorDirectory).where(
+                    func.lower(EvaluatorDirectory.name) == clean_username.lower(),
+                    EvaluatorDirectory.id != directory.id,
+                )
+            )
+            if duplicate_directory:
+                raise HTTPException(status_code=409, detail="This evaluator username is already in the directory.")
+            directory.name = clean_username
+        account.username = clean_username
+    if not directory and account.directory_id is None:
+        directory = EvaluatorDirectory(
+            name=account.username,
+            default_role=account.evaluator_role,
+            active=True,
+        )
+        db.add(directory)
+        db.flush()
+        account.directory_id = directory.id
+    if directory:
+        if "full_name" in payload.model_fields_set:
+            directory.full_name = " ".join((payload.full_name or "").split()) or None
+        if "phone_number" in payload.model_fields_set:
+            directory.phone_number = (payload.phone_number or "").strip() or None
     for field in ("can_admin", "can_results", "active", "evaluator_role"):
         value = getattr(payload, field)
         if value is not None:
@@ -394,10 +432,8 @@ def update_account(
         account.can_results = True
         account.active = True
         account.evaluator_role = "dossard"
-    if payload.evaluator_role is not None and account.directory_id:
-        directory = db.get(EvaluatorDirectory, account.directory_id)
-        if directory:
-            directory.default_role = account.evaluator_role
+    if payload.evaluator_role is not None and directory:
+        directory.default_role = account.evaluator_role
     if payload.attendance_journey_ids is not None:
         valid_ids = set(db.scalars(select(Journey.id).where(Journey.id.in_(payload.attendance_journey_ids)))) if payload.attendance_journey_ids else set()
         db.execute(delete(JourneyPermission).where(JourneyPermission.account_id == account.id))
@@ -405,10 +441,62 @@ def update_account(
             db.add(JourneyPermission(account_id=account.id, journey_id=journey_id, can_attendance=True))
     account.version += 1
     audit(db, journey_id=None, actor_type="owner", actor_name=context.username,
-          action="account.permissions_updated", entity_type="user_account", entity_id=account.id,
-          before=before, after=account_payload(db, account))
+          action="account.updated", entity_type="user_account", entity_id=account.id,
+          before=before, after=account_payload(db, account, include_contact=True))
     _commit(db)
-    return account_payload(db, account)
+    return account_payload(db, account, include_contact=True)
+
+
+@router.delete("/accounts/{account_id}")
+def delete_account(
+    account_id: str,
+    request: Request,
+    context: UserContext = Depends(require_owner),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    account = db.get(UserAccount, account_id)
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found.")
+    if account.is_owner:
+        raise HTTPException(status_code=409, detail="The owner account cannot be deleted.")
+    if account.directory_id:
+        active_evaluator = db.scalar(
+            select(Evaluator.id)
+            .join(Journey, Journey.id == Evaluator.journey_id)
+            .where(
+                Evaluator.directory_id == account.directory_id,
+                Evaluator.active.is_(True),
+                Evaluator.present.is_(True),
+                Journey.status == "active",
+            )
+            .limit(1)
+        )
+        if active_evaluator:
+            raise HTTPException(
+                status_code=409,
+                detail="This evaluator is present in the active Journee. Mark them absent before deleting the account.",
+            )
+    before = account_payload(db, account, include_contact=True)
+    directory = db.get(EvaluatorDirectory, account.directory_id) if account.directory_id else None
+    if directory:
+        directory.active = False
+    db.execute(delete(UserSession).where(UserSession.account_id == account.id))
+    db.execute(delete(JourneyPermission).where(JourneyPermission.account_id == account.id))
+    db.delete(account)
+    audit(
+        db,
+        journey_id=None,
+        actor_type="owner",
+        actor_name=context.username,
+        action="account.deleted",
+        entity_type="user_account",
+        entity_id=account.id,
+        before=before,
+        after={"deleted": True, "historicalJourneeDataPreserved": True},
+    )
+    _commit(db)
+    return {"ok": True}
 
 
 @router.post("/accounts/{account_id}/reset-password")
