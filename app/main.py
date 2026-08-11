@@ -3,7 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import STATIC_DIR, settings
@@ -77,7 +77,7 @@ def health_ready():
 
 @app.get("/", include_in_schema=False)
 def root():
-    return RedirectResponse("/admin")
+    return FileResponse(STATIC_DIR / "home.html")
 
 
 @app.get("/admin", include_in_schema=False)

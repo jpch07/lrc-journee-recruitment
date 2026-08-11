@@ -1,8 +1,9 @@
 from pathlib import Path
 
 
-def test_frontend_assets_contain_the_two_workspaces():
+def test_frontend_assets_contain_the_application_workspaces():
     static = Path(__file__).parents[1] / "app" / "static"
+    home = (static / "home.html").read_text(encoding="utf-8")
     admin = (static / "admin.html").read_text(encoding="utf-8")
     evaluator = (static / "evaluator.html").read_text(encoding="utf-8")
     admin_js = (static / "admin.js").read_text(encoding="utf-8")
@@ -14,8 +15,7 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "Journee library" in admin
     assert "Rooms & assignments" in admin
     assert "Save attendance" in admin_js
-    assert "Full Journee report" in admin_js
-    assert "Results & profiles report" in admin_js
+    assert "Interactive management report" in admin_js
     assert "showSubmissionDetail" in admin_js
     assert "Edit evaluation" in admin_js
     assert "attendance-check" in admin_js
@@ -64,8 +64,10 @@ def test_frontend_assets_contain_the_two_workspaces():
     assert "View criteria" in viewer_js
     assert "View evaluations" in viewer_js
     assert "Evaluator breakdown" in viewer_js
-    assert "Results & profiles report" in viewer_js
-    assert "viewer.js?v=20260810.1" in viewer
+    assert "Download interactive Excel report" in viewer_js
+    assert "All completed Journees" in viewer_js
+    assert "viewer.js?v=20260811.1" in viewer
+    assert all(path in home for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
