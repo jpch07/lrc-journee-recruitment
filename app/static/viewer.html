@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#b20d2d">
   <title>LRC Journee · Management view</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260811.1&theme=command-grid-1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260811.2&theme=command-grid-2">
 </head>
 <body class="admin-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -26,7 +26,7 @@
     <header class="topbar">
       <button id="viewerMenu" class="icon-button mobile-only" aria-label="Open menu">☰</button>
       <div class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Management view</small></span></div>
-      <label class="journey-crumb">View <select id="viewerJourney"></select></label>
+      <label class="viewer-scope-control"><span>Reporting scope</span><select id="viewerJourney"></select></label>
       <div class="top-actions"><span id="viewerName" class="muted"></span><button id="viewerLogout" class="button ghost small">Log out</button></div>
     </header>
     <div class="workspace">
@@ -36,6 +36,7 @@
           <button data-tab="results" class="active"><span>↗</span> Results</button>
           <button data-tab="profiles"><span>♟</span> Recruit profiles</button>
         </nav>
+        <a class="button primary viewer-report-download" href="/api/view/report.xlsx">Download Excel Report</a>
         <span class="subtle">General assessment editable</span>
       </aside>
       <main id="viewerHost" class="content"><div class="loading-card">Loading…</div></main>
@@ -43,6 +44,6 @@
   </div>
   <dialog id="viewerModal" class="modal"><div id="viewerModalBody"></div></dialog>
   <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
-  <script type="module" src="/static/viewer.js?v=20260811.1"></script>
+  <script type="module" src="/static/viewer.js?v=20260811.2"></script>
 </body>
 </html>

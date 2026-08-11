@@ -123,7 +123,7 @@ function renderResults() {
   if (state.resultsActivity === "overall") { rows.sort((a, b) => a.overallRank - b.overallRank); table = overallTable(rows); }
   else if (state.resultsActivity.startsWith("dimension:")) { const code = state.resultsActivity.split(":")[1]; rows.sort((a, b) => a.dimensions[code].rank - b.dimensions[code].rank); table = dimensionTable(rows, code, results.dimensionAverages[code]); }
   else { const code = state.resultsActivity.split(":")[1]; rows.sort((a, b) => a.activities[code].rank - b.activities[code].rank); table = activityTable(rows, code, results.activityAverages[code]); }
-  host.innerHTML = `${sectionHeading("Scores", "Results & rankings", state.journeyId === COMPLETED_SCOPE ? "Shared rankings across every completed Journee." : "Rankings for this Journee.", `<a class="button primary" href="/api/view/report.xlsx">Download interactive Excel report</a>`)}<div class="panel"><div class="tabs">${tabs}</div>${table}</div>`;
+  host.innerHTML = `${sectionHeading("Scores", "Results & rankings", state.journeyId === COMPLETED_SCOPE ? "Shared rankings across every completed Journee." : "Rankings for this Journee.")}<div class="panel"><div class="tabs">${tabs}</div>${table}</div>`;
   $$('[data-result]', host).forEach(button => button.onclick = () => { state.resultsActivity = button.dataset.result; renderResults(); });
   $$(".result-profile", host).forEach(button => button.onclick = async () => { state.profileKey = button.dataset.key; state.tab = "profiles"; await render(); });
 }

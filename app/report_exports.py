@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
 from openpyxl.chart import RadarChart, Reference
+from openpyxl.formatting.rule import FormulaRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -28,7 +29,6 @@ from .models import (
     Evaluator,
     GeneralAssessment,
     Journey,
-    MandatoryRoomEvaluator,
     Recruit,
     RoomPlanEvaluator,
     RoomPlanRecruit,
@@ -69,6 +69,7 @@ def _local_time(value: datetime | None) -> str:
 
 def _new_sheet(workbook: Workbook, title: str, *, landscape: bool = False):
     sheet = workbook.create_sheet(title=title)
+    sheet.sheet_properties.tabColor = {"Attendance": RED, "Results": GREEN, "Recruit Profiles": YELLOW}.get(title, NAVY)
     sheet.sheet_view.showGridLines = False
     sheet.sheet_view.zoomScale = 90
     sheet.freeze_panes = "A4"
@@ -98,8 +99,17 @@ def _title(sheet, title: str, subtitle: str, span: int = 10) -> None:
 def _section(sheet, row: int, title: str, span: int = 10) -> int:
     sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
     cell = sheet.cell(row, 1, title)
-    cell.fill = PatternFill("solid", fgColor=RED_LIGHT)
-    cell.font = Font(name="Aptos", size=11, bold=True, color=RED)
+    fill, color = RED_LIGHT, RED
+    if "Dimension" in title or "Criterion" in title:
+        fill, color = BLUE_LIGHT, NAVY
+    elif "Activity" in title:
+        fill, color = GREEN_LIGHT, GREEN
+    elif "General" in title:
+        fill, color = YELLOW_LIGHT, "745300"
+    elif "audit" in title.casefold():
+        fill, color = GRAY_LIGHT, NAVY
+    cell.fill = PatternFill("solid", fgColor=fill)
+    cell.font = Font(name="Aptos", size=11, bold=True, color=color)
     cell.alignment = Alignment(vertical="center")
     sheet.row_dimensions[row].height = 25
     return row + 1
@@ -524,25 +534,61 @@ def _combined_results(journey_data: list[tuple[Journey, dict]]) -> dict:
 
 
 def _management_data(db: Session) -> tuple[list[Journey], dict[str, dict], dict]:
-    journeys = list(db.scalars(select(Journey).order_by(Journey.event_date.desc(), Journey.name)))
+    journeys = list(db.scalars(
+        select(Journey)
+        .where(Journey.status == "completed")
+        .order_by(Journey.event_date.desc(), Journey.name)
+    ))
     by_id: dict[str, dict] = {}
     completed: list[tuple[Journey, dict]] = []
     for journey in journeys:
         data = _collect(db, journey)
         data["db"] = db
         by_id[journey.id] = data
-        if journey.status == "completed":
-            completed.append((journey, data))
+        completed.append((journey, data))
     return journeys, by_id, _combined_results(completed)
 
 
 def _style_selector(sheet, label_cell: str, value_cell: str, label: str) -> None:
     sheet[label_cell] = label
     sheet[label_cell].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
-    sheet[value_cell].fill = PatternFill("solid", fgColor=WHITE)
+    sheet[value_cell].fill = PatternFill("solid", fgColor=BLUE_LIGHT)
     sheet[value_cell].font = Font(name="Aptos", size=10, bold=True, color=NAVY)
-    sheet[value_cell].border = Border(left=THIN_LINE, right=THIN_LINE, top=THIN_LINE, bottom=THIN_LINE)
+    sheet[value_cell].border = Border(
+        left=Side(style="medium", color=RED), right=THIN_LINE, top=THIN_LINE, bottom=THIN_LINE
+    )
     sheet[value_cell].alignment = Alignment(vertical="center")
+
+
+def _style_formula_rows(sheet, start_row: int, count: int, columns: int) -> None:
+    for row in range(start_row, start_row + max(1, count)):
+        for column in range(1, columns + 1):
+            cell = sheet.cell(row, column)
+            cell.font = Font(name="Aptos", size=9, color="20252B")
+            cell.alignment = Alignment(vertical="center", wrap_text=column >= 6)
+            cell.border = Border(bottom=THIN_LINE)
+            if row % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor="F7F9FC")
+        sheet.row_dimensions[row].height = 23
+
+
+def _add_text_color_rules(sheet, cell_range: str, first_cell: str) -> None:
+    rules = (
+        ("Present", GREEN_LIGHT, GREEN), ("Complete", GREEN_LIGHT, GREEN), ("Green", GREEN_LIGHT, GREEN),
+        ("Absent", RED_LIGHT, RED), ("Incomplete", YELLOW_LIGHT, "745300"), ("Red", RED_LIGHT, RED),
+        ("Yellow", YELLOW_LIGHT, "745300"),
+    )
+    column = re.sub(r"\d", "", first_cell)
+    row = re.sub(r"\D", "", first_cell)
+    for value, fill, font in rules:
+        sheet.conditional_formatting.add(
+            cell_range,
+            FormulaRule(
+                formula=[f'${column}{row}="{value}"'],
+                fill=PatternFill("solid", fgColor=fill),
+                font=Font(name="Aptos", size=9, bold=True, color=font),
+            ),
+        )
 
 
 def _validation(sheet, cell: str, source_column: str, count: int) -> None:
@@ -600,46 +646,41 @@ def _scalar_lookup_formula(key_expression: str, lookup_range: str, result_range:
 def _management_attendance_sheet(workbook: Workbook, db: Session, journeys: list[Journey], by_id: dict[str, dict]) -> None:
     sheet = _new_sheet(workbook, "Attendance", landscape=True)
     sheet.freeze_panes = "A6"
-    _title(sheet, "Attendance", "Confirmed recruit and evaluator attendance", 9)
+    _title(sheet, "Recruit attendance", "Confirmed recruit attendance for completed Journees", 7)
     _style_selector(sheet, "A3", "B3", "Journee view")
-    _style_selector(sheet, "D3", "E3", "Roster")
     scopes = [ALL_COMPLETED, *[journey.name for journey in journeys]]
     sheet["B3"] = ALL_COMPLETED
-    sheet["E3"] = "Recruits"
     rows: list[list] = []
     for journey in journeys:
         data = by_id[journey.id]
-        record_scopes = [journey.name] + ([ALL_COMPLETED] if journey.status == "completed" else [])
+        record_scopes = [journey.name, ALL_COMPLETED]
         for scope in record_scopes:
             for recruit in data["recruits"]:
-                rows.append([scope, "Recruits", journey.name, recruit.name, recruit.phone_number or "", recruit.date_of_birth, "Present" if recruit.present else "Absent", _local_time(recruit.arrival_time) if recruit.arrival_time else "", recruit.attendance_comment or "", "", ""])
-            mandatory = {item.evaluator_id: item.room_number for item in db.scalars(select(MandatoryRoomEvaluator).where(MandatoryRoomEvaluator.journey_id == journey.id))}
-            for evaluator in data["evaluators"]:
-                rows.append([scope, "Evaluators", journey.name, evaluator.name, "", "", "Present" if evaluator.present else "Absent", "", "", evaluator.role.title(), f"Room {mandatory[evaluator.id]}" if evaluator.id in mandatory else ""])
-    rows = _with_lookup_keys(rows, 0, 1)
-    start, end = _write_hidden_rows(sheet, 13, ["Scope", "Roster", "Journee", "Name", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment", "Role", "Mandatory room", "Lookup key"], rows)
-    scope_col = 25
+                rows.append([scope, journey.name, recruit.name, recruit.phone_number or "", recruit.date_of_birth, "Present" if recruit.present else "Absent", _local_time(recruit.arrival_time) if recruit.arrival_time else "", recruit.attendance_comment or ""])
+    rows = _with_lookup_keys(rows, 0)
+    start, end = _write_hidden_rows(sheet, 13, ["Scope", "Journee", "Name", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment", "Lookup key"], rows)
+    scope_col = 23
     for index, value in enumerate(scopes, 2):
         sheet.cell(index, scope_col, value)
     sheet.cell(1, scope_col, "Scope options")
     sheet.column_dimensions[get_column_letter(scope_col)].hidden = True
-    sheet["Z1"] = "Roster options"; sheet["Z2"] = "Recruits"; sheet["Z3"] = "Evaluators"; sheet.column_dimensions["Z"].hidden = True
-    _validation(sheet, "B3", "Y", len(scopes))
-    _validation(sheet, "E3", "Z", 2)
-    headers = ["Journee", "Name", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment", "Role", "Mandatory room"]
+    _validation(sheet, "B3", "W", len(scopes))
+    headers = ["Journee", "Recruit", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment"]
     for column, header in enumerate(headers, 1):
         cell = sheet.cell(5, column, header); cell.fill = PatternFill("solid", fgColor=NAVY); cell.font = Font(name="Aptos", size=9, bold=True, color=WHITE)
-    maximum_rows = max(Counter((row[0], row[1]) for row in rows).values(), default=1)
+    maximum_rows = max(Counter(row[0] for row in rows).values(), default=1)
     for visible_row in range(6, 6 + maximum_rows):
-        for column, source_column in enumerate(("O", "P", "Q", "R", "S", "T", "U", "V", "W"), 1):
+        for column, source_column in enumerate(("N", "O", "P", "Q", "R", "S", "T"), 1):
             sheet.cell(visible_row, column, _lookup_value_formula(
-                key_expression=f'$B$3&"|"&$E$3&"|"&ROWS($A$6:$A{visible_row})',
-                lookup_column="X", result_column=source_column, start=start, end=end,
+                key_expression=f'$B$3&"|"&ROWS($A$6:$A{visible_row})',
+                lookup_column="U", result_column=source_column, start=start, end=end,
             ))
-    for column, width in enumerate([27, 28, 18, 16, 12, 24, 34, 14, 18], 1): sheet.column_dimensions[get_column_letter(column)].width = width
+    _style_formula_rows(sheet, 6, maximum_rows, len(headers))
+    _add_text_color_rules(sheet, f"E6:E{5 + maximum_rows}", "E6")
+    for column, width in enumerate([29, 28, 19, 17, 13, 24, 38], 1): sheet.column_dimensions[get_column_letter(column)].width = width
     for visible_row in range(6, 6 + maximum_rows):
         sheet.cell(visible_row, 4).number_format = "dd mmm yyyy"
-    sheet.auto_filter.ref = "A5:I5"
+    sheet.auto_filter.ref = "A5:G5"
 
 
 def _result_rows(scope: str, journey_name: str, results: dict) -> list[list]:
@@ -685,6 +726,9 @@ def _management_results_sheet(workbook: Workbook, journeys: list[Journey], by_id
                 key_expression=f'$B$3&"|"&$E$3&"|"&ROWS($A$6:$A{visible_row})',
                 lookup_column="W", result_column=source_column, start=start, end=end,
             ))
+    _style_formula_rows(sheet, 6, maximum_rows, len(headers))
+    _add_text_color_rules(sheet, f"G6:G{5 + maximum_rows}", "G6")
+    _add_text_color_rules(sheet, f"H6:H{5 + maximum_rows}", "H6")
     for column, width in enumerate([10, 30, 27, 14, 10, 23, 15, 12], 1): sheet.column_dimensions[get_column_letter(column)].width = width
     for visible_row in range(6, 6 + maximum_rows):
         sheet.cell(visible_row, 4).number_format = "0.00"
@@ -700,9 +744,11 @@ def _fallback_result(recruit: Recruit) -> dict:
     }
 
 
-def _profile_label(recruit: Recruit, journey: Journey, duplicates: dict[tuple[str, str], int]) -> str:
-    suffix = f" · {recruit.id[:6]}" if duplicates[(journey.id, recruit.name.casefold())] > 1 else ""
-    return f"{recruit.name}{suffix} · {journey.name}"
+def _profile_label(recruit: Recruit, totals: Counter[str], seen: defaultdict[str, int]) -> str:
+    name = recruit.name.strip()
+    key = name.casefold()
+    seen[key] += 1
+    return name if totals[key] == 1 else f"{name} ({seen[key]})"
 
 
 def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Journey], by_id: dict[str, dict], combined: dict) -> None:
@@ -711,9 +757,12 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     _title(sheet, "Recruit profile", "Complete view-only recruit record", 12)
     _style_selector(sheet, "A3", "B3", "Journee view")
     _style_selector(sheet, "D3", "E3", "Recruit")
-    duplicates: defaultdict[tuple[str, str], int] = defaultdict(int)
-    for journey in journeys:
-        for recruit in by_id[journey.id]["recruits"]: duplicates[(journey.id, recruit.name.casefold())] += 1
+    name_totals: Counter[str] = Counter(
+        recruit.name.strip().casefold()
+        for journey in journeys
+        for recruit in by_id[journey.id]["recruits"]
+    )
+    name_seen: defaultdict[str, int] = defaultdict(int)
     combined_by_key = {row["profileKey"]: row for row in combined["rows"]}
     summary_rows: list[list] = []; dimension_rows: list[list] = []; activity_rows: list[list] = []
     evaluator_rows: list[list] = []; criterion_rows: list[list] = []; audit_rows: list[list] = []
@@ -723,11 +772,11 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
         data = by_id[journey.id]
         for recruit in data["recruits"]:
             profile_key = f"{journey.id}:{recruit.id}"
-            label = _profile_label(recruit, journey, duplicates)
+            label = _profile_label(recruit, name_totals, name_seen)
             selector_labels.append(label)
             base_result = data["result_by_recruit"].get(recruit.id) or _fallback_result(recruit)
             scoped = [(journey.name, base_result)]
-            if journey.status == "completed": scoped.append((ALL_COMPLETED, combined_by_key.get(profile_key, base_result)))
+            scoped.append((ALL_COMPLETED, combined_by_key.get(profile_key, base_result)))
             assessment = data["assessments"].get(recruit.id)
             for scope, result in scoped:
                 selection_key = f"{scope}|{label}"
@@ -788,6 +837,14 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     sheet["E6"].number_format = "dd mmm yyyy"
     sheet["H5"].number_format = "dd mmm yyyy"
     sheet["K6"] = f'=IFERROR(TEXT(_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AK$2:$AK${last_summary}),"0.00")&" /20 · rank "&_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AL$2:$AL${last_summary}),"—")'
+    sheet["J7"] = "Color grade:"
+    sheet["J7"].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
+    sheet.merge_cells("K7:L7")
+    sheet["K7"] = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"$AM$2:$AM${last_summary}")
+    sheet["K7"].font = Font(name="Aptos", size=10, bold=True, color=WHITE)
+    sheet["K7"].alignment = Alignment(horizontal="center", vertical="center")
+    sheet.row_dimensions[7].height = 27
+    _add_text_color_rules(sheet, "K7:L7", "K7")
     row = _section(sheet, 8, "Dimension performance", 12)
     for col, header in enumerate(["Dimension", "Score /1", "Rank", "Status", "Coverage"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
@@ -799,8 +856,10 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
                 f'$AW$2:$AW${last_dimension}&"|"&$AX$2:$AX${last_dimension}',
                 f'${source_col}$2:${source_col}${last_dimension}',
             ))
+    _style_formula_rows(sheet, row + 1, len(DIMENSION_ORDER), 5)
+    _add_text_color_rules(sheet, f"D{row + 1}:D{row + len(DIMENSION_ORDER)}", f"D{row + 1}")
     _add_radar(sheet, row + 1, row + len(DIMENSION_ORDER), 1, 2, "G8", "Dimension performance", 1)
-    activity_section = 18
+    activity_section = 26
     row = _section(sheet, activity_section, "Activity performance", 12)
     for col, header in enumerate(["Activity", "Score /5", "Rank", "Submissions", "Status"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
@@ -812,15 +871,20 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
                 f'$BD$2:$BD${last_activity}&"|"&$BE$2:$BE${last_activity}',
                 f'${source_col}$2:${source_col}${last_activity}',
             ))
-    _add_radar(sheet, row + 1, row + len(ACTIVITY_ORDER), 1, 2, "G18", "Activity performance", 5)
-    row = _section(sheet, 28, "General assessment and completion", 12)
-    labels = [("Punctuality /1", "AO"), ("Respect to us /1", "AP"), ("Seriousness /1", "AQ"), ("General average /1", "AR"), ("Color grade", "AM"), ("Missing components", "AN"), ("General comment", "AS"), ("Notes", "AT")]
+    _style_formula_rows(sheet, row + 1, len(ACTIVITY_ORDER), 5)
+    _add_text_color_rules(sheet, f"E{row + 1}:E{row + len(ACTIVITY_ORDER)}", f"E{row + 1}")
+    _add_radar(sheet, row + 1, row + len(ACTIVITY_ORDER), 1, 2, "G26", "Activity performance", 5)
+    row = _section(sheet, 44, "General assessment and completion", 12)
+    labels = [("Punctuality /1", "AO"), ("Respect to us /1", "AP"), ("Seriousness /1", "AQ"), ("General average /1", "AR"), ("Missing components", "AN"), ("General comment", "AS"), ("Notes", "AT")]
     for index, (label, source) in enumerate(labels):
         target = row + index; sheet.cell(target, 1, label); sheet.cell(target, 1).font = Font(name="Aptos", size=9, bold=True, color=GRAY)
         sheet.merge_cells(start_row=target, start_column=2, end_row=target, end_column=12)
         sheet.cell(target, 2, _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"${source}$2:${source}${last_summary}"))
         sheet.cell(target, 2).alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
-    row = _section(sheet, 39, "Evaluator breakdown", 12)
+        sheet.cell(target, 2).fill = PatternFill("solid", fgColor="FBFCFE")
+        sheet.cell(target, 2).border = Border(bottom=THIN_LINE)
+        sheet.row_dimensions[target].height = 24 if index < 5 else 38
+    row = _section(sheet, 55, "Evaluator breakdown", 12)
     evaluator_headers = ["Activity", "Evaluator", "Role", "Score /5", "Status", "Comment"]
     for col, header in enumerate(evaluator_headers, 1): sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     evaluator_end = max(2, len(evaluator_rows) + 1)
@@ -832,7 +896,9 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
                 key_expression=f'$H$3&"|"&ROWS($A${evaluator_visible_start}:$A{visible_row})',
                 lookup_column="BR", result_column=source_column, start=2, end=evaluator_end,
             ))
-    row = _section(sheet, 61, "Criterion-level grading", 12)
+    _style_formula_rows(sheet, evaluator_visible_start, evaluator_maximum, len(evaluator_headers))
+    _add_text_color_rules(sheet, f"E{evaluator_visible_start}:E{evaluator_visible_start + evaluator_maximum - 1}", f"E{evaluator_visible_start}")
+    row = _section(sheet, 79, "Criterion-level grading", 12)
     criterion_headers = ["Activity", "Dimension", "Criterion", "Explanation", "Evaluator", "Grade /5", "Sport result", "Status"]
     for col, header in enumerate(criterion_headers, 1): sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     criterion_end = max(2, len(criterion_rows) + 1)
@@ -844,7 +910,9 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
                 key_expression=f'$H$3&"|"&ROWS($A${criterion_visible_start}:$A{visible_row})',
                 lookup_column="CB", result_column=source_column, start=2, end=criterion_end,
             ))
-    row = _section(sheet, 180, "Profile audit history", 12)
+    _style_formula_rows(sheet, criterion_visible_start, criterion_maximum, len(criterion_headers))
+    _add_text_color_rules(sheet, f"H{criterion_visible_start}:H{criterion_visible_start + criterion_maximum - 1}", f"H{criterion_visible_start}")
+    row = _section(sheet, 200, "Profile audit history", 12)
     audit_headers = ["Date and time", "Username", "Action", "Reason", "Before", "After"]
     for col, header in enumerate(audit_headers, 1): sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     audit_end = max(2, len(audit_rows) + 1)
@@ -856,6 +924,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
                 key_expression=f'$H$3&"|"&ROWS($A${audit_visible_start}:$A{visible_row})',
                 lookup_column="CJ", result_column=source_column, start=2, end=audit_end,
             ))
+    _style_formula_rows(sheet, audit_visible_start, audit_maximum, len(audit_headers))
     for col, width in enumerate([24, 17, 12, 34, 24, 16, 19, 16, 16, 16, 16, 16], 1): sheet.column_dimensions[get_column_letter(col)].width = width
     sheet.row_dimensions[5].height = 24; sheet.row_dimensions[6].height = 30
 
