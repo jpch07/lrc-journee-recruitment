@@ -687,20 +687,20 @@ def _result_rows(scope: str, journey_name: str, results: dict) -> list[list]:
     rows: list[list] = []
     for item in results["rows"]:
         display_journey = item.get("journeyName", journey_name)
-        rows.append([scope, "Overall ranking", item["overallRank"], item["name"], display_journey, item["overallScore"], "/20", f"{item['missingCount']} missing", "Complete" if item["complete"] else "Incomplete", item["color"].title()])
+        rows.append([scope, "Overall ranking", item["overallRank"], item["name"], display_journey, item["overallScore"], "/20", f"{item['missingCount']} missing", "Complete" if item["complete"] else "Incomplete", item["color"].title(), item.get("generalComment", ""), item.get("notes", "")])
         for code in DIMENSION_ORDER:
             value = item["dimensions"][code]
-            rows.append([scope, DIMENSION_NAMES[code], value["rank"], item["name"], display_journey, value["score"], "/1", f"{round(value.get('availableWeight', 0) * 100)}% coverage", "Complete" if value["complete"] else "Incomplete", ""])
+            rows.append([scope, DIMENSION_NAMES[code], value["rank"], item["name"], display_journey, value["score"], "/1", f"{round(value.get('availableWeight', 0) * 100)}% coverage", "Complete" if value["complete"] else "Incomplete", "", "", ""])
         for code in ACTIVITY_ORDER:
             value = item["activities"][code]
-            rows.append([scope, RUBRICS[code].name, value["rank"], item["name"], display_journey, value["score"], "/5", f"{value['submitted']}/{value['expected']} submitted", "Complete" if value["complete"] else "Incomplete", ""])
+            rows.append([scope, RUBRICS[code].name, value["rank"], item["name"], display_journey, value["score"], "/5", f"{value['submitted']}/{value['expected']} submitted", "Complete" if value["complete"] else "Incomplete", "", "", ""])
     return rows
 
 
 def _management_results_sheet(workbook: Workbook, journeys: list[Journey], by_id: dict[str, dict], combined: dict) -> None:
     sheet = _new_sheet(workbook, "Results", landscape=True)
     sheet.freeze_panes = "A6"
-    _title(sheet, "Results & rankings", "Overall, dimension, and activity rankings", 8)
+    _title(sheet, "Results & rankings", "Overall, dimension, and activity rankings", 10)
     _style_selector(sheet, "A3", "B3", "Journee view")
     _style_selector(sheet, "D3", "E3", "Result view")
     scopes = [ALL_COMPLETED, *[journey.name for journey in journeys]]
@@ -710,28 +710,29 @@ def _management_results_sheet(workbook: Workbook, journeys: list[Journey], by_id
     for journey in journeys:
         rows.extend(_result_rows(journey.name, journey.name, by_id[journey.id]["results"]))
     rows = _with_lookup_keys(rows, 0, 1)
-    start, end = _write_hidden_rows(sheet, 13, ["Scope", "View", "Rank", "Recruit", "Journee", "Score", "Scale", "Details", "Status", "Color", "Lookup key"], rows)
-    for index, value in enumerate(scopes, 2): sheet.cell(index, 24, value)
-    for index, value in enumerate(views, 2): sheet.cell(index, 25, value)
-    sheet.cell(1, 24, "Scope options"); sheet.cell(1, 25, "View options")
-    sheet.column_dimensions["X"].hidden = True; sheet.column_dimensions["Y"].hidden = True
-    _validation(sheet, "B3", "X", len(scopes)); _validation(sheet, "E3", "Y", len(views))
-    headers = ["Rank", "Recruit", "Journee", "Score", "Scale", "Details", "Status", "Color"]
+    start, end = _write_hidden_rows(sheet, 13, ["Scope", "View", "Rank", "Recruit", "Journee", "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes", "Lookup key"], rows)
+    for index, value in enumerate(scopes, 2): sheet.cell(index, 26, value)
+    for index, value in enumerate(views, 2): sheet.cell(index, 27, value)
+    sheet.cell(1, 26, "Scope options"); sheet.cell(1, 27, "View options")
+    sheet.column_dimensions["Z"].hidden = True; sheet.column_dimensions["AA"].hidden = True
+    _validation(sheet, "B3", "Z", len(scopes)); _validation(sheet, "E3", "AA", len(views))
+    headers = ["Rank", "Recruit", "Journee", "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes"]
     for column, header in enumerate(headers, 1):
         cell = sheet.cell(5, column, header); cell.fill = PatternFill("solid", fgColor=NAVY); cell.font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     maximum_rows = max(Counter((row[0], row[1]) for row in rows).values(), default=1)
     for visible_row in range(6, 6 + maximum_rows):
-        for column, source_column in enumerate(("O", "P", "Q", "R", "S", "T", "U", "V"), 1):
+        for column, source_column in enumerate(("O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"), 1):
             sheet.cell(visible_row, column, _lookup_value_formula(
                 key_expression=f'$B$3&"|"&$E$3&"|"&ROWS($A$6:$A{visible_row})',
-                lookup_column="W", result_column=source_column, start=start, end=end,
+                lookup_column="Y", result_column=source_column, start=start, end=end,
             ))
     _style_formula_rows(sheet, 6, maximum_rows, len(headers))
     _add_text_color_rules(sheet, f"G6:G{5 + maximum_rows}", "G6")
     _add_text_color_rules(sheet, f"H6:H{5 + maximum_rows}", "H6")
-    for column, width in enumerate([10, 30, 27, 14, 10, 23, 15, 12], 1): sheet.column_dimensions[get_column_letter(column)].width = width
+    for column, width in enumerate([10, 30, 27, 14, 10, 23, 15, 12, 40, 40], 1): sheet.column_dimensions[get_column_letter(column)].width = width
     for visible_row in range(6, 6 + maximum_rows):
         sheet.cell(visible_row, 4).number_format = "0.00"
+        sheet.row_dimensions[visible_row].height = 44
 
 
 def _fallback_result(recruit: Recruit) -> dict:

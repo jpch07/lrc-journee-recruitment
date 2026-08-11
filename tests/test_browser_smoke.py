@@ -18,6 +18,8 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Interactive management report" in admin_js
     assert "showSubmissionDetail" in admin_js
     assert "Edit evaluation" in admin_js
+    assert "row.generalComment" in admin_js
+    assert "results-comment-cell" in admin_js
     assert "attendance-check" in admin_js
     assert "Type evaluator name and press Enter" in admin_js
     assert "evaluatorAttendanceSort" in admin_js
@@ -64,15 +66,17 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "View criteria" in viewer_js
     assert "View evaluations" in viewer_js
     assert "Evaluator breakdown" in viewer_js
+    assert "row.generalComment" in viewer_js
+    assert "results-comment-cell" in viewer_js
     assert "Download interactive Excel report" not in viewer_js
     assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260811.2" in viewer
+    assert "viewer.js?v=20260811.3" in viewer
     assert all(path in home for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "?v=20260810.2" in admin
+    assert "admin.js?v=20260811.3" in admin
     assert "?v=20260810.1" in evaluator
     assert "common.js?v=20260810.1" in admin_js
     assert "common.js?v=20260810.1" in evaluator_js
