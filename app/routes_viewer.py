@@ -14,7 +14,7 @@ from .db import get_db
 from .models import Evaluator, Journey, MandatoryRoomEvaluator, Recruit
 from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 from .scoring import competition_ranks
-from .report_exports import build_management_report_workbook
+from .report_exports import build_management_report_workbook, save_management_report
 from .routes_admin import (
     _activity_states,
     export_results_xlsx,
@@ -287,7 +287,7 @@ def management_report(
     del context
     workbook = build_management_report_workbook(db)
     output = io.BytesIO()
-    workbook.save(output)
+    save_management_report(workbook, output)
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

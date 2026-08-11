@@ -68,7 +68,7 @@ from .rubric import (
     RUBRICS,
     public_rubric,
 )
-from .report_exports import build_report_workbook
+from .report_exports import build_report_workbook, save_management_report
 from .schemas import (
     ActivityActionRequest,
     AdminCorrectionRequest,
@@ -732,7 +732,7 @@ def export_xlsx(
     journey = get_journey_or_404(db, journey_id)
     workbook = build_report_workbook(db, journey, full=True)
     output = io.BytesIO()
-    workbook.save(output)
+    save_management_report(workbook, output)
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "journee"
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
@@ -754,7 +754,7 @@ def export_results_xlsx(
     journey = get_journey_or_404(db, journey_id)
     workbook = build_report_workbook(db, journey, full=False)
     output = io.BytesIO()
-    workbook.save(output)
+    save_management_report(workbook, output)
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "journee"
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
