@@ -154,6 +154,12 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.fill('#viewerLoginForm input[name="password"]', "browser-secret")
             viewer_page.click("#viewerLoginSubmit")
             viewer_page.wait_for_selector('#viewerNav button[data-tab="results"]')
+            journey_option = viewer_page.locator('#viewerJourney option:has-text("Mobile Acceptance")')
+            viewer_page.eval_on_selector(
+                "#viewerJourney",
+                "(select, value) => { select.value = value; select.dispatchEvent(new Event('change', {bubbles: true})); }",
+                journey_option.get_attribute("value"),
+            )
             viewer_page.click("#viewerMenu")
             viewer_page.click('#viewerNav button[data-tab="profiles"]')
             viewer_page.wait_for_selector(".dimension-card")

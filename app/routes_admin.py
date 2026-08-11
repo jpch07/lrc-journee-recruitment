@@ -738,7 +738,7 @@ def export_xlsx(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}-full-report.xlsx"',
+            "Content-Disposition": f'attachment; filename="{safe_name}-management-report.xlsx"',
             "Cache-Control": "no-store",
         },
     )
@@ -760,7 +760,7 @@ def export_results_xlsx(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}-results-and-profiles.xlsx"',
+            "Content-Disposition": f'attachment; filename="{safe_name}-management-report.xlsx"',
             "Cache-Control": "no-store",
         },
     )

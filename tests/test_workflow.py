@@ -24,6 +24,36 @@ def admin_headers(csrf):
     return {"X-CSRF-Token": csrf}
 
 
+def test_management_view_defaults_to_completed_journees_and_home_has_three_destinations(client):
+    login = client.post("/api/auth/login", json={"username": "JP Chaaya", "password": "test-password"})
+    assert login.status_code == 200, login.text
+    with SessionLocal() as db:
+        first = create_journey(db, "Completed One", date(2026, 8, 1), 1, "Test")
+        second = create_journey(db, "Completed Two", date(2026, 8, 2), 1, "Test")
+        draft = create_journey(db, "Draft Three", date(2026, 8, 3), 1, "Test")
+        first.status = "completed"
+        second.status = "completed"
+        db.add_all([
+            Recruit(journey_id=first.id, name="Alpha", present=True),
+            Recruit(journey_id=second.id, name="Bravo", present=True),
+            Recruit(journey_id=draft.id, name="Charlie", present=True),
+        ])
+        db.commit()
+
+    aggregate = client.get("/api/view/completed")
+    assert aggregate.status_code == 200, aggregate.text
+    payload = aggregate.json()
+    assert payload["scope"] == "completed"
+    assert {item["journeyName"] for item in payload["recruits"]} == {"Completed One", "Completed Two"}
+    assert {item["name"] for item in payload["results"]["rows"]} == {"Alpha", "Bravo"}
+    assert all(item["overallRank"] == 1 for item in payload["results"]["rows"])
+    assert all(item["profileKey"] for item in payload["results"]["rows"])
+
+    home = client.get("/")
+    assert home.status_code == 200
+    assert all(path in home.text for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
+
+
 def test_completion_lists_missing_activities_and_general_grades_not_dimensions():
     with SessionLocal() as db:
         journey = create_journey(db, "Incomplete Journey", date(2026, 9, 1), 1, "Test")
@@ -80,9 +110,10 @@ def test_profile_notes_are_saved_audited_and_exported(client):
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     assert exported.headers["cache-control"] == "no-store"
     workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
-    profile_sheet = next(sheet for sheet in workbook.worksheets if sheet.title.startswith("Profile 01"))
+    assert workbook.sheetnames == ["Attendance", "Results", "Recruit Profiles"]
+    profile_sheet = workbook["Recruit Profiles"]
     values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
-    assert "Notes: Private follow-up note" in values
+    assert "Private follow-up note" in values
     workbook.close()
 
 
@@ -160,10 +191,11 @@ def test_complete_sport_workflow_and_isolation(client):
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     assert exported.status_code == 200
     workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
-    recruit_rows = list(workbook["Recruit Attendance"].iter_rows(min_row=4, values_only=True))
+    assert workbook.sheetnames == ["Attendance", "Results", "Recruit Profiles"]
+    recruit_rows = list(workbook["Attendance"].iter_rows(min_row=5, max_row=5, values_only=True))
     assert "Date of birth" in recruit_rows[0]
-    dob_index = recruit_rows[0].index("Date of birth")
-    assert recruit_rows[1][dob_index].date().isoformat() == "2000-01-02"
+    attendance_values = [cell for row in workbook["Attendance"].iter_rows(values_only=True) for cell in row if cell is not None]
+    assert any(getattr(value, "isoformat", lambda: "")().startswith("2000-01-02") for value in attendance_values)
     workbook.close()
     response = client.put(
         f"/api/admin/journeys/{journey['id']}/attendance/evaluators",
@@ -270,9 +302,12 @@ def test_complete_sport_workflow_and_isolation(client):
 
     results_export = client.get(f"/api/admin/journeys/{journey['id']}/results.xlsx")
     assert results_export.status_code == 200
-    result_workbook = load_workbook(io.BytesIO(results_export.content), read_only=False, data_only=True)
-    assert {"Results Summary", "Dimension Rankings", "Activity Rankings"}.issubset(result_workbook.sheetnames)
-    profile_sheet = next(sheet for sheet in result_workbook.worksheets if sheet.title.startswith("Profile 01"))
+    result_workbook = load_workbook(io.BytesIO(results_export.content), read_only=False, data_only=False)
+    assert result_workbook.sheetnames == ["Attendance", "Results", "Recruit Profiles"]
+    assert "_xlfn.XLOOKUP" in result_workbook["Attendance"]["A6"].value
+    assert "_xlfn.XLOOKUP" in result_workbook["Results"]["A6"].value
+    profile_sheet = result_workbook["Recruit Profiles"]
+    assert "_xlfn.XLOOKUP" in profile_sheet["H3"].value
     assert len(profile_sheet._charts) == 2
     profile_values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
     assert "Criterion-level grading" in profile_values

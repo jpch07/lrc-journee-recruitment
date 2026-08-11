@@ -439,6 +439,48 @@ tr.inactive { opacity: .5; }
 .attendance-arrival-field { grid-column: 1 / -1; }
   .attendance-comment-field { grid-column: 1 / -1; }
 }
+
+/* Public application directory */
+.home-body {
+  min-height: 100vh;
+  margin: 0;
+  color: #171d28;
+  background:
+    linear-gradient(90deg, transparent 49.8%, rgba(23,29,40,.06) 50%, transparent 50.2%),
+    linear-gradient(#f3f1ed 0 72%, #171d28 72% 100%);
+}
+.home-shell { width: min(1180px, calc(100% - 40px)); margin: 0 auto; padding: clamp(48px, 8vw, 94px) 0 72px; }
+.home-hero { max-width: 760px; margin-bottom: 46px; }
+.home-mark { width: 76px; height: 76px; margin-bottom: 28px; font-size: 1.2rem; box-shadow: 8px 8px 0 #171d28; }
+.home-hero h1 { max-width: 720px; margin: 8px 0 14px; font-size: clamp(3.1rem, 8vw, 6.5rem); line-height: .88; letter-spacing: -.065em; }
+.home-hero > p:last-child { max-width: 610px; color: #596474; font-size: 1.08rem; }
+.home-destinations { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.home-destination {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  min-height: 310px;
+  padding: 26px;
+  color: #171d28;
+  text-decoration: none;
+  border: 2px solid #171d28;
+  border-top: 9px solid var(--red);
+  border-radius: 5px;
+  background: #fff;
+  box-shadow: 8px 8px 0 rgba(23,29,40,.25);
+  transition: transform .16s ease, box-shadow .16s ease;
+}
+.home-destination:hover, .home-destination:focus-visible { transform: translate(-3px,-3px); box-shadow: 12px 12px 0 var(--red); outline: none; }
+.home-destination-number { justify-self: end; color: var(--red); font-size: .82rem; font-weight: 900; letter-spacing: .12em; }
+.home-destination h2 { margin: 8px 0 12px; font-size: 1.7rem; }
+.home-destination p:last-child { color: #596474; line-height: 1.6; }
+.home-arrow { font-size: 2.1rem; font-weight: 900; }
+@media (max-width: 820px) {
+  .home-body { background: #f3f1ed; }
+  .home-shell { width: min(100% - 26px, 620px); padding-top: 32px; }
+  .home-destinations { grid-template-columns: 1fr; }
+  .home-destination { min-height: 230px; }
+}
 @media (max-width: 430px) {
   .metric-grid { grid-template-columns: 1fr 1fr; }
   .activity-strip, .profile-activity-grid, .profile-dimension-grid { grid-template-columns: 1fr; }
