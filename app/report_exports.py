@@ -15,7 +15,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from PIL import Image as PillowImage
+from PIL import Image as PillowImage, ImageDraw, ImageOps
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from .models import (
     RoomPlanEvaluator,
     RoomPlanRecruit,
 )
+from .excel_cell_images import embed_lookup_images
 from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 from .scoring import competition_ranks
 from .services import latest_room_plan, result_snapshot
@@ -53,6 +54,27 @@ GRAY_LIGHT = "F3F5F7"
 LINE = "D6DBE1"
 WHITE = "FFFFFF"
 THIN_LINE = Side(style="thin", color=LINE)
+
+
+def _profile_photo_png(photo_data: bytes | None) -> bytes:
+    canvas_size = 360
+    canvas = PillowImage.new("RGB", (canvas_size, canvas_size), "#F3F5F7")
+    if photo_data:
+        try:
+            with PillowImage.open(io.BytesIO(photo_data)) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                image.thumbnail((canvas_size, canvas_size), PillowImage.Resampling.LANCZOS)
+                canvas.paste(image, ((canvas_size - image.width) // 2, (canvas_size - image.height) // 2))
+        except Exception:
+            photo_data = None
+    if not photo_data:
+        draw = ImageDraw.Draw(canvas)
+        draw.ellipse((125, 72, 235, 182), fill="#C8102E")
+        draw.rounded_rectangle((72, 190, 288, 310), radius=54, fill="#C8102E")
+        draw.text((111, 325), "PHOTO NOT RECORDED", fill="#667085")
+    output = io.BytesIO()
+    canvas.save(output, format="PNG", optimize=True)
+    return output.getvalue()
 
 
 def _label(value: object) -> str:
@@ -768,11 +790,13 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     summary_rows: list[list] = []; dimension_rows: list[list] = []; activity_rows: list[list] = []
     evaluator_rows: list[list] = []; criterion_rows: list[list] = []; audit_rows: list[list] = []
     selector_labels: list[str] = []
+    profile_photos: list[tuple[str, bytes]] = []
     scope_names = [ALL_COMPLETED, *[journey.name for journey in journeys]]
     for journey in journeys:
         data = by_id[journey.id]
         for recruit in data["recruits"]:
             profile_key = f"{journey.id}:{recruit.id}"
+            profile_photos.append((profile_key, _profile_photo_png(recruit.photo_data)))
             label = _profile_label(recruit, name_totals, name_seen)
             selector_labels.append(label)
             base_result = data["result_by_recruit"].get(recruit.id) or _fallback_result(recruit)
@@ -829,7 +853,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     selection = '$B$3&"|"&$E$3'
     sheet["H3"] = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"$AB$2:$AB${last_summary}", blank="")
     sheet["H3"].number_format = ";;;"
-    fields = [("A5", "Recruit", "AE"), ("D5", "Journee", "AC"), ("G5", "Date", "AD"), ("J5", "Attendance", "AH"), ("A6", "Phone", "AF"), ("D6", "Date of birth", "AG"), ("G6", "Arrival", "AI"), ("J6", "Overall", "AK")]
+    fields = [("A5", "Recruit", "AE"), ("D5", "Journee", "AC"), ("G5", "Date", "AD"), ("A6", "Phone", "AF"), ("D6", "Date of birth", "AG"), ("G6", "Arrival", "AI"), ("A7", "Attendance", "AH")]
     for cell, label, source in fields:
         sheet[cell] = f'{label}: '; sheet[cell].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
         value_cell = sheet.cell(sheet[cell].row, sheet[cell].column + 1)
@@ -837,15 +861,39 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
         value_cell.font = Font(name="Aptos", size=11, bold=True, color=NAVY)
     sheet["E6"].number_format = "dd mmm yyyy"
     sheet["H5"].number_format = "dd mmm yyyy"
-    sheet["K6"] = f'=IFERROR(TEXT(_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AK$2:$AK${last_summary}),"0.00")&" /20 · rank "&_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AL$2:$AL${last_summary}),"—")'
-    sheet["J7"] = "Color grade:"
-    sheet["J7"].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
-    sheet.merge_cells("K7:L7")
-    sheet["K7"] = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"$AM$2:$AM${last_summary}")
-    sheet["K7"].font = Font(name="Aptos", size=10, bold=True, color=WHITE)
-    sheet["K7"].alignment = Alignment(horizontal="center", vertical="center")
+    sheet["D7"] = "Overall:"
+    sheet["D7"].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
+    sheet["E7"] = f'=IFERROR(TEXT(_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AK$2:$AK${last_summary}),"0.00")&" /20 · rank "&_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AL$2:$AL${last_summary}),"—")'
+    sheet["E7"].font = Font(name="Aptos", size=11, bold=True, color=NAVY)
+    sheet["G7"] = "Color grade:"
+    sheet["G7"].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
+    sheet.merge_cells("H7:I7")
+    sheet["H7"] = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"$AM$2:$AM${last_summary}")
+    sheet["H7"].font = Font(name="Aptos", size=10, bold=True, color=WHITE)
+    sheet["H7"].alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[7].height = 27
-    _add_text_color_rules(sheet, "K7:L7", "K7")
+    _add_text_color_rules(sheet, "H7:I7", "H7")
+    if profile_photos:
+        photo_start = 2
+        for photo_row, (profile_key, _) in enumerate(profile_photos, photo_start):
+            sheet.cell(photo_row, 91, profile_key)
+            photo_cell = sheet.cell(photo_row, 92, "#VALUE!")
+            photo_cell.data_type = "e"
+        sheet.column_dimensions["CM"].hidden = True
+        sheet.column_dimensions["CN"].hidden = True
+        photo_end = photo_start + len(profile_photos) - 1
+        sheet.merge_cells("J3:L7")
+        sheet["J3"] = f'=_xlfn.XLOOKUP($H$3,$CM$2:$CM${photo_end},$CN$2:$CN${photo_end})'
+        sheet["J3"].alignment = Alignment(horizontal="center", vertical="center")
+        sheet["J3"].fill = PatternFill("solid", fgColor=GRAY_LIGHT)
+        default_profile_key = next((item[1] for item in summary_rows if item[0] == f"{sheet['B3'].value}|{default_label}"), profile_photos[0][0])
+        initial_photo_index = next((index for index, item in enumerate(profile_photos) if item[0] == default_profile_key), 0)
+        workbook._journee_profile_images = {
+            "sheet_name": sheet.title,
+            "image_cells": [(f"CN{row}", photo_bytes) for row, (_, photo_bytes) in enumerate(profile_photos, photo_start)],
+            "formula_cell": "J3",
+            "initial_image_index": initial_photo_index,
+        }
     row = _section(sheet, 8, "Dimension performance", 12)
     for col, header in enumerate(["Dimension", "Score /1", "Rank", "Status", "Coverage"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
@@ -928,6 +976,16 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     _style_formula_rows(sheet, audit_visible_start, audit_maximum, len(audit_headers))
     for col, width in enumerate([24, 17, 12, 34, 24, 16, 19, 16, 16, 16, 16, 16], 1): sheet.column_dimensions[get_column_letter(col)].width = width
     sheet.row_dimensions[5].height = 24; sheet.row_dimensions[6].height = 30
+
+
+def save_management_report(workbook: Workbook, output: io.BytesIO) -> None:
+    base = io.BytesIO()
+    workbook.save(base)
+    image_config = getattr(workbook, "_journee_profile_images", None)
+    content = base.getvalue()
+    if image_config:
+        content = embed_lookup_images(content, **image_config)
+    output.write(content)
 
 
 def build_management_report_workbook(db: Session) -> Workbook:

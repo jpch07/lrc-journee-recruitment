@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import zipfile
 from datetime import date
 
 from openpyxl import load_workbook
@@ -51,6 +52,17 @@ def test_management_view_defaults_to_completed_journees_and_home_has_three_desti
 
     report = client.get("/api/view/report.xlsx")
     assert report.status_code == 200, report.text
+    with zipfile.ZipFile(io.BytesIO(report.content)) as archive:
+        names = set(archive.namelist())
+        assert "xl/metadata.xml" in names
+        assert "xl/richData/rdrichvalue.xml" in names
+        assert any(name.startswith("xl/media/profile-photo-") for name in names)
+        profile_xml = next(
+            archive.read(name).decode("utf-8")
+            for name in names
+            if name.startswith("xl/worksheets/sheet") and b"Recruit profile" in archive.read(name)
+        )
+        assert 'r="J3"' in profile_xml and 'vm="' in profile_xml
     workbook = load_workbook(io.BytesIO(report.content), read_only=False, data_only=False)
     assert workbook.sheetnames == ["Attendance", "Results", "Recruit Profiles"]
     report_values = {
@@ -67,6 +79,8 @@ def test_management_view_defaults_to_completed_journees_and_home_has_three_desti
     assert "Roster" not in report_values
     profile_options = [workbook["Recruit Profiles"].cell(row, 90).value for row in range(2, 4)]
     assert profile_options == ["Alpha", "Bravo"]
+    assert "XLOOKUP" in workbook["Recruit Profiles"]["J3"].value
+    assert "J3:L7" in {str(item) for item in workbook["Recruit Profiles"].merged_cells.ranges}
     workbook.close()
 
     home = client.get("/")
