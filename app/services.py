@@ -899,6 +899,8 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                 "dimensions": dimensions_payload,
                 "generalAverage": float(general),
                 "generalComplete": general_missing == 0,
+                "generalComment": assessment.comment if assessment else "",
+                "notes": assessment.notes if assessment else "",
                 "overallScore": float(overall),
                 "color": color_grade(overall),
                 "missingCount": missing,

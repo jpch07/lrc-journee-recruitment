@@ -126,6 +126,14 @@ def test_profile_notes_are_saved_audited_and_exported(client):
     profile = client.get(profile_url).json()
     assert profile["assessment"]["notes"] == "Private follow-up note"
     assert profile["history"][0]["after"]["notes"] == "Private follow-up note"
+    with SessionLocal() as db:
+        saved_recruit = db.get(Recruit, recruit["id"])
+        saved_recruit.present = True
+        db.commit()
+    results = client.get(f"/api/admin/journeys/{journey['id']}/results").json()
+    result_row = next(item for item in results["rows"] if item["recruitId"] == recruit["id"])
+    assert result_row["generalComment"] == "General comment"
+    assert result_row["notes"] == "Private follow-up note"
 
     with SessionLocal() as db:
         saved_journey = db.get(Journey, journey["id"])
@@ -134,11 +142,17 @@ def test_profile_notes_are_saved_audited_and_exported(client):
 
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     assert exported.headers["cache-control"] == "no-store"
-    workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
+    workbook = load_workbook(io.BytesIO(exported.content), read_only=False, data_only=False)
     assert workbook.sheetnames == ["Attendance", "Results", "Recruit Profiles"]
     profile_sheet = workbook["Recruit Profiles"]
     values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
     assert "Private follow-up note" in values
+    results_sheet = workbook["Results"]
+    assert [results_sheet.cell(5, column).value for column in (9, 10)] == ["General comment", "Notes"]
+    result_values = [cell for row in results_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
+    assert "General comment" in result_values
+    assert "Private follow-up note" in result_values
+    assert "_xlfn.XLOOKUP" in results_sheet["I6"].value
     workbook.close()
 
 
