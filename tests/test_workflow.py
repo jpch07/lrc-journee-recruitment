@@ -49,6 +49,26 @@ def test_management_view_defaults_to_completed_journees_and_home_has_three_desti
     assert all(item["overallRank"] == 1 for item in payload["results"]["rows"])
     assert all(item["profileKey"] for item in payload["results"]["rows"])
 
+    report = client.get("/api/view/report.xlsx")
+    assert report.status_code == 200, report.text
+    workbook = load_workbook(io.BytesIO(report.content), read_only=False, data_only=False)
+    assert workbook.sheetnames == ["Attendance", "Results", "Recruit Profiles"]
+    report_values = {
+        value
+        for sheet in workbook.worksheets
+        for row in sheet.iter_rows(values_only=True)
+        for value in row
+        if isinstance(value, str)
+    }
+    assert "Draft Three" not in report_values
+    assert "Charlie" not in report_values
+    attendance_headers = [workbook["Attendance"].cell(5, column).value for column in range(1, 8)]
+    assert attendance_headers == ["Journee", "Recruit", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment"]
+    assert "Roster" not in report_values
+    profile_options = [workbook["Recruit Profiles"].cell(row, 90).value for row in range(2, 4)]
+    assert profile_options == ["Alpha", "Bravo"]
+    workbook.close()
+
     home = client.get("/")
     assert home.status_code == 200
     assert all(path in home.text for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
@@ -106,6 +126,11 @@ def test_profile_notes_are_saved_audited_and_exported(client):
     profile = client.get(profile_url).json()
     assert profile["assessment"]["notes"] == "Private follow-up note"
     assert profile["history"][0]["after"]["notes"] == "Private follow-up note"
+
+    with SessionLocal() as db:
+        saved_journey = db.get(Journey, journey["id"])
+        saved_journey.status = "completed"
+        db.commit()
 
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     assert exported.headers["cache-control"] == "no-store"
@@ -188,6 +213,10 @@ def test_complete_sport_workflow_and_isolation(client):
     assert response.status_code == 200, response.text
     detail = client.get(f"/api/admin/journeys/{journey['id']}").json()
     assert next(item for item in detail["recruits"] if item["id"] == recruits[0]["id"])["dateOfBirth"] == "2000-01-02"
+    with SessionLocal() as db:
+        saved_journey = db.get(Journey, journey["id"])
+        saved_journey.status = "completed"
+        db.commit()
     exported = client.get(f"/api/admin/journeys/{journey['id']}/export.xlsx")
     assert exported.status_code == 200
     workbook = load_workbook(io.BytesIO(exported.content), read_only=True, data_only=True)
@@ -197,6 +226,10 @@ def test_complete_sport_workflow_and_isolation(client):
     attendance_values = [cell for row in workbook["Attendance"].iter_rows(values_only=True) for cell in row if cell is not None]
     assert any(getattr(value, "isoformat", lambda: "")().startswith("2000-01-02") for value in attendance_values)
     workbook.close()
+    with SessionLocal() as db:
+        saved_journey = db.get(Journey, journey["id"])
+        saved_journey.status = "draft"
+        db.commit()
     response = client.put(
         f"/api/admin/journeys/{journey['id']}/attendance/evaluators",
         headers=admin_headers(csrf),

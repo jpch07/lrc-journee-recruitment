@@ -64,9 +64,10 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "View criteria" in viewer_js
     assert "View evaluations" in viewer_js
     assert "Evaluator breakdown" in viewer_js
-    assert "Download interactive Excel report" in viewer_js
+    assert "Download interactive Excel report" not in viewer_js
+    assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260811.1" in viewer
+    assert "viewer.js?v=20260811.2" in viewer
     assert all(path in home for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
