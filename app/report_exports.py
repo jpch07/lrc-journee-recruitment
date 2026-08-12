@@ -776,7 +776,7 @@ def _profile_label(recruit: Recruit, totals: Counter[str], seen: defaultdict[str
 
 def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Journey], by_id: dict[str, dict], combined: dict) -> None:
     sheet = _new_sheet(workbook, "Recruit Profiles", landscape=True)
-    sheet.freeze_panes = "A7"
+    sheet.freeze_panes = "A8"
     _title(sheet, "Recruit profile", "Complete view-only recruit record", 12)
     _style_selector(sheet, "A3", "B3", "Journee view")
     _style_selector(sheet, "D3", "E3", "Recruit")
