@@ -81,6 +81,7 @@ def test_management_view_defaults_to_completed_journees_and_home_has_three_desti
     assert profile_options == ["Alpha", "Bravo"]
     assert "XLOOKUP" in workbook["Recruit Profiles"]["J3"].value
     assert "J3:L7" in {str(item) for item in workbook["Recruit Profiles"].merged_cells.ranges}
+    assert workbook["Recruit Profiles"].freeze_panes == "A8"
     workbook.close()
 
     home = client.get("/")
