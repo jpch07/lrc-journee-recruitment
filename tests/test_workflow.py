@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from app.db import SessionLocal
 from app.models import (ActivityState, AdminEvaluation, Assignment, AssignmentRound, EvaluationSubmission,
                         Evaluator, GeneralAssessment, Journey, Recruit, SubmissionVersion)
+from app.report_exports import _result_rows
 from app.rubric import ACTIVITY_ORDER, DIMENSION_ORDER, RUBRICS
 from app.services import create_journey, result_snapshot
 from app.utils import dumps
@@ -23,6 +24,33 @@ def admin_login(client):
 
 def admin_headers(csrf):
     return {"X-CSRF-Token": csrf}
+
+
+def test_report_dimension_grades_use_five_point_display_scale():
+    result = {
+        "rows": [{
+            "overallRank": 1,
+            "name": "Scale Test",
+            "overallScore": 14,
+            "missingCount": 0,
+            "complete": True,
+            "color": "yellow",
+            "generalComment": "",
+            "notes": "",
+            "dimensions": {
+                code: {"rank": 1, "score": 0.64, "availableWeight": 1, "complete": True}
+                for code in DIMENSION_ORDER
+            },
+            "activities": {
+                code: {"rank": 1, "score": 3.2, "submitted": 1, "expected": 1, "complete": True}
+                for code in ACTIVITY_ORDER
+            },
+        }],
+    }
+    rows = _result_rows("All completed Journees", "Scale Journey", result)
+    willingness = next(row for row in rows if row[1] == "Willingness")
+    assert willingness[5] == 3.2
+    assert willingness[6] == "/5"
 
 
 def test_management_view_defaults_to_completed_journees_and_home_has_three_destinations(client):
@@ -82,6 +110,8 @@ def test_management_view_defaults_to_completed_journees_and_home_has_three_desti
     assert "XLOOKUP" in workbook["Recruit Profiles"]["J3"].value
     assert "J3:L7" in {str(item) for item in workbook["Recruit Profiles"].merged_cells.ranges}
     assert workbook["Recruit Profiles"].freeze_panes == "A8"
+    assert workbook["Recruit Profiles"]["B9"].value == "Score /5"
+    assert "/5" in {workbook["Results"].cell(row, 19).value for row in range(2, workbook["Results"].max_row + 1)}
     workbook.close()
 
     home = client.get("/")
@@ -371,6 +401,7 @@ def test_complete_sport_workflow_and_isolation(client):
     profile_sheet = result_workbook["Recruit Profiles"]
     assert "_xlfn.XLOOKUP" in profile_sheet["H3"].value
     assert len(profile_sheet._charts) == 2
+    assert profile_sheet["B9"].value == "Score /5"
     profile_values = [cell for row in profile_sheet.iter_rows(values_only=True) for cell in row if cell is not None]
     assert "Criterion-level grading" in profile_values
     result_workbook.close()

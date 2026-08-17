@@ -56,6 +56,11 @@ WHITE = "FFFFFF"
 THIN_LINE = Side(style="thin", color=LINE)
 
 
+def _dimension_grade(value: object) -> float:
+    """Convert the internal 0–1 dimension score to its user-facing 0–5 scale."""
+    return float(value or 0) * 5
+
+
 def _profile_photo_png(photo_data: bytes | None) -> bytes:
     canvas_size = 360
     canvas = PillowImage.new("RGB", (canvas_size, canvas_size), "#F3F5F7")
@@ -279,7 +284,7 @@ def _dashboard_sheet(workbook: Workbook, journey: Journey, data: dict) -> None:
     for item_row in range(10, 10 + len(activity_rows)):
         _status_fill(sheet.cell(item_row, 2), str(sheet.cell(item_row, 2).value))
     row = _section(sheet, row, "Dimension and activity averages", 12)
-    averages = [[DIMENSION_NAMES[code], data["results"]["dimensionAverages"].get(code, 0), "Dimension /1"] for code in DIMENSION_ORDER]
+    averages = [[DIMENSION_NAMES[code], _dimension_grade(data["results"]["dimensionAverages"].get(code, 0)), "Dimension /5"] for code in DIMENSION_ORDER]
     averages.extend([[RUBRICS[code].name, data["results"]["activityAverages"].get(code, 0), "Activity /5"] for code in ACTIVITY_ORDER])
     row = _write_table(sheet, row, ["Measure", "Average", "Scale"], averages, widths=[28, 14, 16], number_formats={2: "0.00"})
     row = _section(sheet, row, "Provisional overall ranking", 12)
@@ -384,8 +389,8 @@ def _rubric_sheet(workbook: Workbook, journey: Journey) -> None:
 def _results_sheets(workbook: Workbook, journey: Journey, data: dict) -> None:
     summary = _new_sheet(workbook, "Results Summary", landscape=True)
     _title(summary, "Overall Results & Rankings", f"{journey.name} · {data['results']['formula']}", 16)
-    headers = ["Rank", "Recruit", "Overall /20", "Color", "Missing", *[DIMENSION_NAMES[code] + " /1" for code in DIMENSION_ORDER], "General /1", *[RUBRICS[code].name + " /5" for code in ACTIVITY_ORDER]]
-    rows = [[item["overallRank"], item["name"], item["overallScore"], item["color"].title(), item["missingCount"], *[item["dimensions"][code]["score"] for code in DIMENSION_ORDER], item["generalAverage"], *[item["activities"][code]["score"] for code in ACTIVITY_ORDER]] for item in data["results"]["rows"]]
+    headers = ["Rank", "Recruit", "Overall /20", "Color", "Missing", *[DIMENSION_NAMES[code] + " /5" for code in DIMENSION_ORDER], "General /1", *[RUBRICS[code].name + " /5" for code in ACTIVITY_ORDER]]
+    rows = [[item["overallRank"], item["name"], item["overallScore"], item["color"].title(), item["missingCount"], *[_dimension_grade(item["dimensions"][code]["score"]) for code in DIMENSION_ORDER], item["generalAverage"], *[item["activities"][code]["score"] for code in ACTIVITY_ORDER]] for item in data["results"]["rows"]]
     _write_table(summary, 4, headers, rows, widths=[8, 27, 14, 11, 10, *([15] * len(DIMENSION_ORDER)), 13, *([14] * len(ACTIVITY_ORDER))], number_formats={column: "0.00" for column in range(3, len(headers) + 1) if column not in {4, 5}}, auto_filter=True)
     for row in range(5, 5 + len(rows)):
         _status_fill(summary.cell(row, 4), str(summary.cell(row, 4).value))
@@ -394,10 +399,10 @@ def _results_sheets(workbook: Workbook, journey: Journey, data: dict) -> None:
     _title(dimensions, "Dimension Rankings", journey.name, 7)
     row = 4
     for code in DIMENSION_ORDER:
-        row = _section(dimensions, row, f"{DIMENSION_NAMES[code]} · Average {data['results']['dimensionAverages'].get(code, 0):.2f} /1", 7)
+        row = _section(dimensions, row, f"{DIMENSION_NAMES[code]} · Average {_dimension_grade(data['results']['dimensionAverages'].get(code, 0)):.2f} /5", 7)
         ranking = sorted(data["results"]["rows"], key=lambda item: (item["dimensions"][code]["rank"] or 10**9, item["name"]))
-        rows = [[item["dimensions"][code]["rank"], item["name"], item["dimensions"][code]["score"], item["dimensions"][code]["availableWeight"], "Complete" if item["dimensions"][code]["complete"] else "Incomplete"] for item in ranking]
-        row = _write_table(dimensions, row, ["Rank", "Recruit", "Grade /1", "Coverage", "Status"], rows, widths=[9, 30, 14, 13, 15], number_formats={3: "0.00", 4: "0%"})
+        rows = [[item["dimensions"][code]["rank"], item["name"], _dimension_grade(item["dimensions"][code]["score"]), item["dimensions"][code]["availableWeight"], "Complete" if item["dimensions"][code]["complete"] else "Incomplete"] for item in ranking]
+        row = _write_table(dimensions, row, ["Rank", "Recruit", "Grade /5", "Coverage", "Status"], rows, widths=[9, 30, 14, 13, 15], number_formats={3: "0.00", 4: "0%"})
 
     activities = _new_sheet(workbook, "Activity Rankings", landscape=True)
     _title(activities, "Activity Rankings", journey.name, 7)
@@ -446,9 +451,9 @@ def _profile_sheet(workbook: Workbook, journey: Journey, data: dict, recruit: Re
     dimension_rows = []
     for code in DIMENSION_ORDER:
         item = (result or {}).get("dimensions", {}).get(code, {})
-        dimension_rows.append([DIMENSION_NAMES[code], item.get("score", 0), item.get("rank", "—"), "Complete" if item.get("complete") else "Incomplete"])
-    row = _write_table(sheet, row, ["Dimension", "Grade /1", "Rank", "Status"], dimension_rows, widths=[25, 14, 10, 16], number_formats={2: "0.00"})
-    _add_radar(sheet, dimension_start, dimension_start + len(dimension_rows) - 1, 1, 2, "F11", "Dimension profile /1", 1)
+        dimension_rows.append([DIMENSION_NAMES[code], _dimension_grade(item.get("score", 0)), item.get("rank", "—"), "Complete" if item.get("complete") else "Incomplete"])
+    row = _write_table(sheet, row, ["Dimension", "Grade /5", "Rank", "Status"], dimension_rows, widths=[25, 14, 10, 16], number_formats={2: "0.00"})
+    _add_radar(sheet, dimension_start, dimension_start + len(dimension_rows) - 1, 1, 2, "F11", "Dimension profile /5", 5)
 
     row = max(row, 23)
     row = _section(sheet, row, "Activity performance", 12)
@@ -712,7 +717,7 @@ def _result_rows(scope: str, journey_name: str, results: dict) -> list[list]:
         rows.append([scope, "Overall ranking", item["overallRank"], item["name"], display_journey, item["overallScore"], "/20", f"{item['missingCount']} missing", "Complete" if item["complete"] else "Incomplete", item["color"].title(), item.get("generalComment", ""), item.get("notes", "")])
         for code in DIMENSION_ORDER:
             value = item["dimensions"][code]
-            rows.append([scope, DIMENSION_NAMES[code], value["rank"], item["name"], display_journey, value["score"], "/1", f"{round(value.get('availableWeight', 0) * 100)}% coverage", "Complete" if value["complete"] else "Incomplete", "", "", ""])
+            rows.append([scope, DIMENSION_NAMES[code], value["rank"], item["name"], display_journey, _dimension_grade(value["score"]), "/5", f"{round(value.get('availableWeight', 0) * 100)}% coverage", "Complete" if value["complete"] else "Incomplete", "", "", ""])
         for code in ACTIVITY_ORDER:
             value = item["activities"][code]
             rows.append([scope, RUBRICS[code].name, value["rank"], item["name"], display_journey, value["score"], "/5", f"{value['submitted']}/{value['expected']} submitted", "Complete" if value["complete"] else "Incomplete", "", "", ""])
@@ -808,7 +813,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
                 summary_rows.append([selection_key, profile_key, journey.name, journey.event_date, recruit.name, recruit.phone_number or "", recruit.date_of_birth, "Present" if recruit.present else "Absent", _local_time(recruit.arrival_time) if recruit.arrival_time else "", recruit.attendance_comment or "", result["overallScore"], result["overallRank"] or "", result["color"].title(), ", ".join(result.get("missingComponents", [])) or "Complete", float(assessment.punctuality) if assessment and assessment.punctuality is not None else "", float(assessment.respect) if assessment and assessment.respect is not None else "", float(assessment.seriousness) if assessment and assessment.seriousness is not None else "", float(result.get("generalAverage", 0)), assessment.comment if assessment else "", assessment.notes if assessment else ""])
                 for code in DIMENSION_ORDER:
                     value = result["dimensions"][code]
-                    dimension_rows.append([selection_key, DIMENSION_NAMES[code], value["score"], value["rank"] or "", "Complete" if value["complete"] else "Incomplete", f"{round(value.get('availableWeight', 0) * 100)}%"])
+                    dimension_rows.append([selection_key, DIMENSION_NAMES[code], _dimension_grade(value["score"]), value["rank"] or "", "Complete" if value["complete"] else "Incomplete", f"{round(value.get('availableWeight', 0) * 100)}%"])
                 for code in ACTIVITY_ORDER:
                     value = result["activities"][code]
                     activity_rows.append([selection_key, RUBRICS[code].name, value["score"], value["rank"] or "", f"{value['submitted']}/{value['expected']}", "Complete" if value["complete"] else "Incomplete"])
@@ -895,7 +900,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
             "initial_image_index": initial_photo_index,
         }
     row = _section(sheet, 8, "Dimension performance", 12)
-    for col, header in enumerate(["Dimension", "Score /1", "Rank", "Status", "Coverage"], 1):
+    for col, header in enumerate(["Dimension", "Score /5", "Rank", "Status", "Coverage"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     for offset, code in enumerate(DIMENSION_ORDER, 1):
         target = row + offset; sheet.cell(target, 1, DIMENSION_NAMES[code])
@@ -907,7 +912,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
             ))
     _style_formula_rows(sheet, row + 1, len(DIMENSION_ORDER), 5)
     _add_text_color_rules(sheet, f"D{row + 1}:D{row + len(DIMENSION_ORDER)}", f"D{row + 1}")
-    _add_radar(sheet, row + 1, row + len(DIMENSION_ORDER), 1, 2, "G8", "Dimension performance", 1)
+    _add_radar(sheet, row + 1, row + len(DIMENSION_ORDER), 1, 2, "G8", "Dimension performance /5", 5)
     activity_section = 26
     row = _section(sheet, activity_section, "Activity performance", 12)
     for col, header in enumerate(["Activity", "Score /5", "Rank", "Submissions", "Status"], 1):
