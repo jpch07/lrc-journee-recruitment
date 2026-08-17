@@ -687,7 +687,7 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
             "Overall /20",
             "Color",
             "Missing",
-            *[DIMENSION_NAMES[code] + " /1" for code in DIMENSION_ORDER],
+            *[DIMENSION_NAMES[code] + " /5" for code in DIMENSION_ORDER],
             "General /1",
             *[RUBRICS[code].name + " /5" for code in ACTIVITY_ORDER],
         ],
@@ -698,7 +698,7 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
                 row["overallScore"],
                 row["color"],
                 row["missingCount"],
-                *[row["dimensions"][code]["score"] for code in DIMENSION_ORDER],
+                *[row["dimensions"][code]["score"] * 5 for code in DIMENSION_ORDER],
                 row["generalAverage"],
                 *[row["activities"][code]["score"] for code in ACTIVITY_ORDER],
             ]
@@ -783,7 +783,7 @@ def export_results_csv(
         "Overall /20",
         "Color",
         "Missing",
-        *[DIMENSION_NAMES[code] + " /1" for code in DIMENSION_ORDER],
+        *[DIMENSION_NAMES[code] + " /5" for code in DIMENSION_ORDER],
         "General /1",
         *[RUBRICS[code].name + " /5" for code in ACTIVITY_ORDER],
     ])
@@ -794,7 +794,7 @@ def export_results_csv(
             row["overallScore"],
             row["color"],
             row["missingCount"],
-            *[row["dimensions"][code]["score"] for code in DIMENSION_ORDER],
+            *[row["dimensions"][code]["score"] * 5 for code in DIMENSION_ORDER],
             row["generalAverage"],
             *[row["activities"][code]["score"] for code in ACTIVITY_ORDER],
         ])
