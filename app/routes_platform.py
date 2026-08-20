@@ -8,7 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .assessment_config import blank_assessment_definition
-from .assessment_service import system_slug
+from .assessment_service import ensure_unique_system_name, system_slug
 from .auth import (
     PLATFORM_COOKIE,
     SYSTEM_COOKIE,
@@ -60,6 +60,10 @@ class WorkspaceCreateRequest(BaseModel):
     @classmethod
     def clean_name(cls, value: str) -> str:
         return " ".join(value.split())
+
+
+class WorkspaceDeleteRequest(BaseModel):
+    confirmation_name: str = Field(min_length=2, max_length=200)
 
 
 def _account(db: Session, account_id: str) -> PlatformAccount:
@@ -219,6 +223,10 @@ def create_workspace(
 ):
     require_csrf(request, context.csrf_token)
     platform = _account(db, context.account_id)
+    try:
+        ensure_unique_system_name(db, None, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="A workspace with this name already exists.") from exc
     definition = blank_assessment_definition().model_copy(update={"name": payload.name})
     definition_json = dumps(definition.model_dump(mode="json"))
     system = AssessmentSystem(
@@ -271,6 +279,30 @@ def create_workspace(
         "slug": system.slug,
         "journeyCount": 0,
     }
+
+
+@router.delete("/workspaces/{system_id}")
+def delete_workspace(
+    system_id: str,
+    payload: WorkspaceDeleteRequest,
+    request: Request,
+    response: Response,
+    context: PlatformContext = Depends(require_platform),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    system = _owned_workspace(db, context.account_id, system_id)
+    if payload.confirmation_name != system.name:
+        raise HTTPException(status_code=422, detail="Enter the exact workspace name to confirm deletion.")
+    selected_slug = request.cookies.get(SYSTEM_COOKIE, "")
+    deleted = {"id": system.id, "name": system.name, "slug": system.slug}
+    db.delete(system)
+    db.commit()
+    if selected_slug.casefold() == deleted["slug"].casefold():
+        response.delete_cookie(USER_COOKIE, path="/")
+        response.delete_cookie(SYSTEM_COOKIE, path="/")
+        response.delete_cookie("lrc_attendance_journey", path="/")
+    return {"deleted": deleted}
 
 
 @router.post("/workspaces/{system_id}/select")

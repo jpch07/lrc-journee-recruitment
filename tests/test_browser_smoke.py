@@ -76,7 +76,7 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Download interactive Excel report" not in viewer_js
     assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260820.2" in viewer
+    assert "viewer.js?v=20260820.3" in viewer
     assert "platformLoginForm" in home
     assert "platformSignupForm" in home
     assert "workspaceList" in home
@@ -84,8 +84,8 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "admin.js?v=20260820.2" in admin
-    assert "?v=20260820.2" in evaluator
+    assert "admin.js?v=20260820.3" in admin
+    assert "?v=20260820.3" in evaluator
     assert "common.js?v=20260810.1" in admin_js
     assert "common.js?v=20260810.1" in evaluator_js
 

@@ -183,6 +183,45 @@ def test_admin_create_and_mobile_layout(tmp_path):
             assert viewer_page.evaluate("document.documentElement.scrollWidth") == viewer_page.evaluate("window.innerWidth")
             viewer_context.close()
             attendance_context.close()
+
+            neutral_context = browser.new_context(viewport={"width": 1280, "height": 820})
+            neutral_page = neutral_context.new_page()
+            neutral_page.goto(base + "/", wait_until="networkidle")
+            neutral_page.click("#signupTab")
+            neutral_page.fill('#platformSignupForm input[name="username"]', "Neutral Owner")
+            neutral_page.fill('#platformSignupForm input[name="password"]', "neutral-password")
+            neutral_page.click('#platformSignupForm button[type="submit"]')
+            neutral_page.wait_for_selector("#workspaceScreen:not(.hidden)")
+            neutral_page.click("#showCreateWorkspace")
+            neutral_page.fill("#workspaceName", "Neutral Browser Workspace")
+            neutral_page.click('#createWorkspaceForm button[type="submit"]')
+            card = neutral_page.locator('.platform-workspace-card:has-text("Neutral Browser Workspace")')
+            card.wait_for()
+            card.locator(".platform-workspace-main").click()
+            neutral_page.wait_for_url("**/neutral-browser-workspace/admin")
+            neutral_page.goto(base + "/neutral-browser-workspace/configure", wait_until="networkidle")
+            neutral_page.wait_for_selector("#configApp:not(.hidden)")
+            assert neutral_page.evaluate(
+                "getComputedStyle(document.documentElement).getPropertyValue('--red').trim()"
+            ) == "#4f46e5"
+            assert neutral_page.locator(".config-heading .eyebrow").evaluate(
+                "element => getComputedStyle(element).backgroundColor"
+            ) == "rgb(79, 70, 229)"
+            neutral_page.locator("#configPublish").hover()
+            assert neutral_page.locator("#configPublish").evaluate(
+                "element => getComputedStyle(element).backgroundColor"
+            ) != "rgb(173, 9, 39)"
+
+            neutral_page.goto(base + "/", wait_until="networkidle")
+            delete_button = neutral_page.locator(
+                '.platform-workspace-card:has-text("Neutral Browser Workspace") .platform-workspace-delete'
+            )
+            neutral_page.once("dialog", lambda dialog: dialog.accept("Neutral Browser Workspace"))
+            delete_button.click()
+            neutral_page.wait_for_function(
+                "!document.querySelector('.platform-workspace-card')?.textContent.includes('Neutral Browser Workspace')"
+            )
+            neutral_context.close()
             browser.close()
     finally:
         server.terminate()

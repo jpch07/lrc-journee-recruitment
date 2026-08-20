@@ -71,7 +71,10 @@ def _parse_birth_date(value: str) -> date | None:
         "%B %d %Y",
         "%d/%m/%Y",
         "%d-%m-%Y",
+        "%m/%d/%Y",
+        "%m-%d-%Y",
         "%Y-%m-%d",
+        "%Y/%m/%d",
     ):
         try:
             return datetime.strptime(normalized, date_format).date()
@@ -156,13 +159,31 @@ def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
             existing = {
                 item.source_key: item for item in db.scalars(select(RecruitDirectory))
             }
-            active_keys: set[str] = set()
+            existing_by_row_and_name = {
+                (item.source_row, item.name.casefold()): item for item in existing.values()
+            }
+            active_existing_ids: set[str] = set()
             for values in rows:
-                active_keys.add(values["source_key"])
                 item = existing.get(values["source_key"])
                 if item is None:
-                    item = RecruitDirectory(**values)
-                    db.add(item)
+                    # Phone and birth-date edits used to change the source key.
+                    # Preserve the directory identity when the same named row is
+                    # updated so already-added attendance records remain linked.
+                    item = existing_by_row_and_name.get(
+                        (values["source_row"], values["name"].casefold())
+                    )
+                    if item is None:
+                        item = RecruitDirectory(**values)
+                        db.add(item)
+                    else:
+                        item.source_key = values["source_key"]
+                        item.source_row = values["source_row"]
+                        item.name = values["name"]
+                        item.phone_number = values["phone_number"]
+                        item.date_of_birth = values["date_of_birth"]
+                        item.date_of_birth_raw = values["date_of_birth_raw"]
+                        item.active = True
+                        item.updated_at = now
                 else:
                     item.source_row = values["source_row"]
                     item.name = values["name"]
@@ -172,8 +193,15 @@ def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
                     item.active = True
                     item.updated_at = now
                 item.synced_at = now
-            for source_key, item in existing.items():
-                if source_key not in active_keys:
+                if item.id:
+                    active_existing_ids.add(item.id)
+                    for recruit in db.scalars(select(Recruit).where(Recruit.directory_id == item.id)):
+                        if item.phone_number:
+                            recruit.phone_number = item.phone_number
+                        if item.date_of_birth:
+                            recruit.date_of_birth = item.date_of_birth
+            for item in existing.values():
+                if item.id not in active_existing_ids:
                     item.active = False
                     item.updated_at = now
             if state is None:

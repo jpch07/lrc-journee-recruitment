@@ -6,6 +6,7 @@ const state = { csrf:"", payload:null, draft:null, section:"start", dirty:false,
 const host = $("#configHost");
 
 function mutation(method, body){ return {method, body, headers:{"X-CSRF-Token":state.csrf}}; }
+function darken(hex,amount=34){const clean=String(hex||"#4f46e5").replace("#","");if(!/^[0-9a-f]{6}$/i.test(clean))return"#3730a3";const parts=[0,2,4].map(index=>Math.max(0,parseInt(clean.slice(index,index+2),16)-amount));return`#${parts.map(value=>value.toString(16).padStart(2,"0")).join("")}`;}
 function keyOf(value){ return String(value||"").toLowerCase().trim().replace(/[^a-z0-9]+/g,"_").replace(/^_+|_+$/g,"").slice(0,40) || "item"; }
 function clone(value){ return JSON.parse(JSON.stringify(value)); }
 function pathParts(path){ return path.split(".").map(item => /^\d+$/.test(item) ? Number(item) : item); }
@@ -65,7 +66,9 @@ $("#configLoginForm").onsubmit=async event=>{ event.preventDefault(); const data
 async function loadConfiguration(){ state.payload=await api("/api/configurator"); state.draft=clone(state.payload.draft); state.dirty=false; updateChrome(); }
 function updateChrome(){
   $("#configSystemName").textContent=state.draft.name; $("#configMark").textContent=state.draft.branding.shortMark||"AS";
-  $("#configMark").style.background=state.draft.branding.primaryColor; $("#configVersion").textContent=`Published v${state.payload.system.publishedVersion}`; markSaved();
+  const root=document.documentElement,primary=state.draft.branding.primaryColor||"#4f46e5",dark=state.draft.branding.darkColor||"#172033";
+  root.style.setProperty("--red",primary);root.style.setProperty("--red-dark",darken(primary));root.style.setProperty("--red-soft",`${primary}12`);root.style.setProperty("--ink",dark);root.style.setProperty("--config-blue",primary);
+  $("#configMark").style.background=primary; $("#configVersion").textContent=`Published v${state.payload.system.publishedVersion}`; markSaved();
   $$(".workspace-admin-link").forEach(link=>link.href=`/${encodeURIComponent(state.payload.system.slug)}/admin`);
 }
 

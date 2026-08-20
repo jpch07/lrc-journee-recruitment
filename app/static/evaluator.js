@@ -1,5 +1,5 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260810.1";
-import { initializeSystemUI } from "/static/system-ui.js?v=20260820.2";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260820.3";
 
 // The LRC preset still renders the proven type="number" min="0" max="5" rating control.
 

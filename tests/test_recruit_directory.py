@@ -137,4 +137,44 @@ def test_birth_date_parser_preserves_only_complete_dates():
     assert recruit_directory._parse_birth_date("Dec18 2002") == date(2002, 12, 18)
     assert recruit_directory._parse_birth_date("21 December 2007") == date(2007, 12, 21)
     assert recruit_directory._parse_birth_date("03-Oct-2005") == date(2005, 10, 3)
+    assert recruit_directory._parse_birth_date("12/18/2002") == date(2002, 12, 18)
+    assert recruit_directory._parse_birth_date("12-18-2002") == date(2002, 12, 18)
     assert recruit_directory._parse_birth_date("25 December") is None
+
+
+def test_sheet_contact_update_reaches_existing_attendance_record(client, monkeypatch):
+    rows = _rows()
+    rows[1]["date_of_birth_raw"] = ""
+    monkeypatch.setattr(recruit_directory, "fetch_directory_rows", lambda: rows)
+    csrf = _admin_login(client)
+    headers = {"X-CSRF-Token": csrf}
+    journey = client.post(
+        "/api/admin/journeys",
+        headers=headers,
+        json={"name": "Updated Directory", "event_date": "2026-08-17"},
+    ).json()
+    directory = client.get("/api/admin/recruit-directory").json()
+    karl = next(item for item in directory["items"] if item["name"] == "Karl Nassar")
+    added = client.post(
+        f"/api/admin/journeys/{journey['id']}/recruits/from-directory",
+        headers=headers,
+        json={"directory_id": karl["id"]},
+    ).json()
+    assert added["dateOfBirth"] is None
+
+    rows[1] = {
+        **rows[1],
+        "source_key": "c" * 64,
+        "phone_number": "71 999999",
+        "date_of_birth": date(2004, 5, 6),
+        "date_of_birth_raw": "05/06/2004",
+    }
+    refreshed = client.post("/api/admin/recruit-directory/sync", headers=headers)
+    assert refreshed.status_code == 200, refreshed.text
+    refreshed_karl = next(item for item in refreshed.json()["items"] if item["name"] == "Karl Nassar")
+    assert refreshed_karl["id"] == karl["id"]
+    assert refreshed_karl["dateOfBirth"] == "2004-05-06"
+    updated = client.get(f"/api/admin/journeys/{journey['id']}").json()
+    recruit = next(item for item in updated["recruits"] if item["id"] == added["id"])
+    assert recruit["phoneNumber"] == "71 999999"
+    assert recruit["dateOfBirth"] == "2004-05-06"
