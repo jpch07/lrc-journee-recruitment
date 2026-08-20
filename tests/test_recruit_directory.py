@@ -142,7 +142,7 @@ def test_birth_date_parser_preserves_only_complete_dates():
     assert recruit_directory._parse_birth_date("25 December") is None
 
 
-def test_sheet_contact_update_reaches_existing_attendance_record(client, monkeypatch):
+def test_sheet_birth_date_update_fills_missing_attendance_data_without_overwriting_phone(client, monkeypatch):
     rows = _rows()
     rows[1]["date_of_birth_raw"] = ""
     monkeypatch.setattr(recruit_directory, "fetch_directory_rows", lambda: rows)
@@ -176,5 +176,5 @@ def test_sheet_contact_update_reaches_existing_attendance_record(client, monkeyp
     assert refreshed_karl["dateOfBirth"] == "2004-05-06"
     updated = client.get(f"/api/admin/journeys/{journey['id']}").json()
     recruit = next(item for item in updated["recruits"] if item["id"] == added["id"])
-    assert recruit["phoneNumber"] == "71 999999"
+    assert recruit["phoneNumber"] == "71 000000"
     assert recruit["dateOfBirth"] == "2004-05-06"

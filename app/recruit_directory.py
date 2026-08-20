@@ -196,9 +196,9 @@ def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
                 if item.id:
                     active_existing_ids.add(item.id)
                     for recruit in db.scalars(select(Recruit).where(Recruit.directory_id == item.id)):
-                        if item.phone_number:
+                        if item.phone_number and not recruit.phone_number:
                             recruit.phone_number = item.phone_number
-                        if item.date_of_birth:
+                        if item.date_of_birth and recruit.date_of_birth is None:
                             recruit.date_of_birth = item.date_of_birth
             for item in existing.values():
                 if item.id not in active_existing_ids:
