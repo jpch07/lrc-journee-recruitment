@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.assessment_config import blank_assessment_definition, neutralize_legacy_blank_branding
 from app.db import SessionLocal
 from app.models import AssessmentSystem, PlatformAccount, UserAccount
 
@@ -123,3 +124,17 @@ def test_homepage_is_a_simple_neutral_login_and_signup(client):
     assert "Recruitment ID" not in html
     assert "Lebanese Red Cross" not in html
     assert "LRC" not in html
+
+
+def test_legacy_unbranded_workspace_red_is_rendered_neutrally():
+    definition = blank_assessment_definition()
+    definition.branding.primaryColor = "#b20d2d"
+    definition.branding.darkColor = "#192331"
+
+    normalized = neutralize_legacy_blank_branding(definition)
+    assert normalized.branding.primaryColor == "#4f46e5"
+    assert normalized.branding.darkColor == "#172033"
+
+    definition.branding.organizationName = "Lebanese Red Cross"
+    branded = neutralize_legacy_blank_branding(definition)
+    assert branded.branding.primaryColor == "#b20d2d"
