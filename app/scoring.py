@@ -4,7 +4,8 @@ import re
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Mapping
 
-from .rubric import DIMENSION_ORDER, RUBRICS
+from .assessment_runtime import active_assessment_definition, activity_definition
+from .rubric import RUBRICS
 
 
 TWO_PLACES = Decimal("0.01")
@@ -34,12 +35,40 @@ def validate_grade(value: object, label: str = "Grade") -> Decimal:
     return grade
 
 
+def validate_rating(activity_code: str, criterion_key: str, value: object) -> Decimal:
+    activity = activity_definition(activity_code)
+    criterion = next((item for item in activity.criteria if item.key == criterion_key), None) if activity else None
+    if not criterion:
+        raise ScoringError("Unknown evaluation criterion.")
+    grade = _decimal(value, criterion.name)
+    minimum, maximum, step = Decimal(criterion.minimum), Decimal(criterion.maximum), Decimal(criterion.step)
+    if grade < minimum or grade > maximum:
+        raise ScoringError(f"{criterion.name} must be between {minimum} and {maximum}.")
+    if (grade - minimum) / step != ((grade - minimum) / step).to_integral_value():
+        raise ScoringError(f"{criterion.name} must use increments of {step}.")
+    return grade
+
+
 def validate_general_grade(value: object, label: str) -> Decimal:
     grade = _decimal(value, label)
     if grade < 0 or grade > 1:
         raise ScoringError(f"{label} must be between 0 and 1.")
     if grade * 10 != (grade * 10).to_integral_value():
         raise ScoringError(f"{label} must use increments of 0.1.")
+    return grade
+
+
+def validate_general_factor(storage_key: str, value: object) -> Decimal:
+    factor = next((item for item in active_assessment_definition().generalFactors
+                   if item.storageKey == storage_key), None)
+    if factor is None:
+        raise ScoringError("This general assessment factor is disabled.")
+    grade = _decimal(value, factor.name)
+    maximum, step = Decimal(factor.maximum), Decimal(factor.step)
+    if grade < 0 or grade > maximum:
+        raise ScoringError(f"{factor.name} must be between 0 and {maximum}.")
+    if grade / step != (grade / step).to_integral_value():
+        raise ScoringError(f"{factor.name} must use increments of {step}.")
     return grade
 
 
@@ -64,9 +93,11 @@ def weighted_activity_score(activity_code: str, responses: Mapping[str, object])
     if total_weight <= 0:
         raise ScoringError("The activity rubric has no positive weight.")
     for criterion in rubric.criteria:
-        grade = validate_grade(responses[criterion.key], criterion.name)
+        grade = validate_rating(activity_code, criterion.key, responses[criterion.key])
         normalized[criterion.key] = grade
-        score += grade * criterion.weight
+        configured = next(item for item in activity_definition(activity_code).criteria if item.key == criterion.key)
+        scale = Decimal(configured.maximum) - Decimal(configured.minimum)
+        score += ((grade - Decimal(configured.minimum)) / scale * FIVE) * criterion.weight
     official = (score / total_weight).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
     return official, normalized
 
@@ -112,51 +143,103 @@ def parse_duration(value: object) -> Decimal:
     return total
 
 
-def sport_score(payload: Mapping[str, object]) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
-    required = {"push_ups", "wall_sit", "beep_test", "plank"}
-    if not required.issubset(payload):
-        raise ScoringError("Push-ups, wall sit, beep test, and plank are required.")
-    push_ups = _decimal(payload["push_ups"], "Push-ups")
-    if push_ups < 0 or push_ups != push_ups.to_integral_value():
-        raise ScoringError("Push-ups must be a non-negative whole number.")
-    normalized_values = {
-        "push_ups": push_ups,
-        "wall_sit": parse_duration(payload["wall_sit"]),
-        "beep_test": parse_duration(payload["beep_test"]),
-        "plank": parse_duration(payload["plank"]),
-    }
+def target_activity_score(
+    activity_code: str, payload: Mapping[str, object]
+) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
+    activity = activity_definition(activity_code)
+    if not activity or activity.scoring != "target_average":
+        raise ScoringError("Unknown target-based activity.")
+    required = {item.key for item in activity.criteria}
+    provided = set(payload)
+    if provided != required:
+        missing, extra = sorted(required - provided), sorted(provided - required)
+        details = []
+        if missing:
+            details.append("missing: " + ", ".join(missing))
+        if extra:
+            details.append("unexpected: " + ", ".join(extra))
+        raise ScoringError("Every activity result is required (" + "; ".join(details) + ").")
+    normalized_values: dict[str, Decimal] = {}
+    for criterion in activity.criteria:
+        if criterion.inputType == "duration":
+            value = parse_duration(payload[criterion.key])
+        else:
+            value = _decimal(payload[criterion.key], criterion.name)
+            if value < 0:
+                raise ScoringError(f"{criterion.name} cannot be negative.")
+            if criterion.inputType == "integer" and value != value.to_integral_value():
+                raise ScoringError(f"{criterion.name} must be a whole number.")
+        normalized_values[criterion.key] = value
     exercise_scores: dict[str, Decimal] = {}
-    for criterion in RUBRICS["sport"].criteria:
+    weighted_total = Decimal("0")
+    total_weight = Decimal("0")
+    for criterion in activity.criteria:
         result = normalized_values[criterion.key]
-        exercise_scores[criterion.key] = min(result / criterion.target * FIVE, FIVE)
-    official = (sum(exercise_scores.values(), Decimal("0")) / Decimal("4")).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+        target = Decimal(criterion.target)
+        if criterion.direction == "higher":
+            converted = min(result / target * FIVE, FIVE)
+        elif result == 0:
+            converted = FIVE
+        else:
+            converted = min(target / result * FIVE, FIVE)
+        exercise_scores[criterion.key] = converted
+        weighted_total += converted * Decimal(criterion.weight)
+        total_weight += Decimal(criterion.weight)
+    official = (weighted_total / total_weight).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
     return official, normalized_values, exercise_scores
 
 
+def sport_score(payload: Mapping[str, object]) -> tuple[Decimal, dict[str, Decimal], dict[str, Decimal]]:
+    """Compatibility wrapper retained for imports and the historical LRC tests."""
+    return target_activity_score("sport", payload)
+
+
 def general_average(values: Mapping[str, object | None]) -> Decimal:
+    definition = active_assessment_definition()
+    if not definition.generalFactors:
+        return Decimal("0")
     total = Decimal("0")
-    for key, label in (("punctuality", "Punctuality"), ("respect", "Respect"), ("seriousness", "Seriousness")):
-        value = values.get(key)
-        total += Decimal("0") if value is None else validate_general_grade(value, label)
-    return total / Decimal("3")
+    for factor in definition.generalFactors:
+        value = values.get(factor.storageKey)
+        if value is None:
+            continue
+        grade = _decimal(value, factor.name)
+        maximum, step = Decimal(factor.maximum), Decimal(factor.step)
+        if grade < 0 or grade > maximum or grade / step != (grade / step).to_integral_value():
+            raise ScoringError(f"{factor.name} must be between 0 and {maximum} in increments of {step}.")
+        total += grade / maximum
+    return total / Decimal(len(definition.generalFactors))
 
 
-def overall_score(dimension_scores: Mapping[str, object], general_score: object) -> Decimal:
-    dimension_total = sum(
-        (_decimal(dimension_scores.get(code, 0), code) for code in DIMENSION_ORDER),
-        Decimal("0"),
-    )
-    general = _decimal(general_score, "General average")
-    return Decimal("20") / Decimal("7") * (dimension_total + general)
+def overall_score(
+    dimension_scores: Mapping[str, object], general_score: object,
+    complete_components: set[tuple[str, str]] | None = None,
+) -> Decimal:
+    definition = active_assessment_definition()
+    weighted = Decimal("0")
+    included_weight = Decimal("0")
+    for component in definition.scoring.components:
+        marker = (component.source, component.key)
+        if (definition.scoring.missingComponents == "exclude" and complete_components is not None
+                and marker not in complete_components):
+            continue
+        value = (_decimal(general_score, "General average") if component.source == "general"
+                 else _decimal(dimension_scores.get(component.key, 0), component.key))
+        weighted += value * Decimal(component.weight)
+        included_weight += Decimal(component.weight)
+    if included_weight == 0:
+        return Decimal("0")
+    normalized = weighted / included_weight if definition.scoring.missingComponents == "exclude" else weighted
+    return normalized * Decimal(definition.scoring.officialMaximum)
 
 
 def color_grade(score: object) -> str:
     value = _decimal(score, "Overall score")
-    if value < 13:
-        return "red"
-    if value < 16:
-        return "yellow"
-    return "green"
+    chosen = sorted(active_assessment_definition().scoring.bands, key=lambda item: item.minimum)[0]
+    for band in sorted(active_assessment_definition().scoring.bands, key=lambda item: item.minimum):
+        if value >= Decimal(band.minimum):
+            chosen = band
+    return chosen.key
 
 
 def competition_ranks(values: list[tuple[str, Decimal]]) -> dict[str, int]:
@@ -169,4 +252,23 @@ def competition_ranks(values: list[tuple[str, Decimal]]) -> dict[str, int]:
             current_rank = position
             previous = score
         ranks[identifier] = current_rank
+    return ranks
+
+
+def configured_ranks(values: list[tuple[str, Decimal]]) -> dict[str, int]:
+    mode = active_assessment_definition().scoring.ranking
+    sorted_values = sorted(values, key=lambda item: (-item[1], item[0]))
+    if mode == "competition":
+        return competition_ranks(values)
+    ranks: dict[str, int] = {}
+    previous: Decimal | None = None
+    dense_rank = 0
+    for position, (identifier, score) in enumerate(sorted_values, start=1):
+        if mode == "ordinal":
+            ranks[identifier] = position
+        else:
+            if previous is None or score != previous:
+                dense_rank += 1
+                previous = score
+            ranks[identifier] = dense_rank
     return ranks

@@ -116,7 +116,10 @@ def test_management_view_defaults_to_completed_journees_and_home_has_three_desti
 
     home = client.get("/")
     assert home.status_code == 200
-    assert all(path in home.text for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
+    assert "platformLoginForm" in home.text
+    assert "platformSignupForm" in home.text
+    assert "workspaceList" in home.text
+    assert "Recruitment ID" not in home.text
 
 
 def test_completion_lists_missing_activities_and_general_grades_not_dimensions():

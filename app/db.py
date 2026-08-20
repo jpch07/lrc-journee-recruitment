@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from typing import Iterator
 
 from sqlalchemy import create_engine, event, text
-from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker, with_loader_criteria
 
 from .config import settings
 
@@ -49,6 +49,67 @@ def configure_engine_events(database_engine, *, is_sqlite: bool) -> None:
         event.listen(database_engine, "connect", _sqlite_pragmas)
     else:
         event.listen(database_engine, "begin", _postgres_transaction_search_path)
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _scope_recruitment_queries(execute_state) -> None:
+    """Keep every root query inside the recruitment selected for this request."""
+    if execute_state.execution_options.get("bypass_recruitment_scope"):
+        return
+    from .models import AssessmentSystem, AuditEvent, EvaluatorDirectory, Journey, RecruitDirectory, RecruitDirectoryState, UserAccount
+    from .tenant import current_system_id
+
+    system_id = current_system_id()
+    if not system_id:
+        return
+    statement = execute_state.statement.options(
+        with_loader_criteria(AssessmentSystem, lambda row: row.id == system_id, include_aliases=True),
+    )
+    for model in (Journey, AuditEvent, EvaluatorDirectory, RecruitDirectory, RecruitDirectoryState, UserAccount):
+        statement = statement.options(
+            with_loader_criteria(model, lambda row: row.system_id == system_id, include_aliases=True),
+        )
+    execute_state.statement = statement
+
+
+@event.listens_for(Session, "before_flush")
+def _assign_recruitment_to_new_rows(session, _flush_context, _instances) -> None:
+    from sqlalchemy import select
+    from .models import AssessmentSystem, AuditEvent, EvaluatorDirectory, Journey, RecruitDirectory, RecruitDirectoryState, UserAccount
+    from .tenant import current_system_id
+
+    system_id = current_system_id()
+    if not system_id:
+        available = list(session.scalars(
+            select(AssessmentSystem.id).limit(2).execution_options(bypass_recruitment_scope=True)
+        ))
+        system_id = available[0] if len(available) == 1 else None
+    scoped_models = (Journey, AuditEvent, EvaluatorDirectory, RecruitDirectory, RecruitDirectoryState, UserAccount)
+    needs_system = any(isinstance(row, scoped_models) and not row.system_id for row in session.new)
+    if not system_id and needs_system:
+        # Service-level and unit-test callers may use a fresh database without the
+        # HTTP lifespan. Bootstrap the compatibility recruitment only in that case.
+        from .assessment_config import lrc_assessment_definition
+        from .assessment_service import system_slug
+        from .models import AssessmentSystemVersion, new_id
+        from .utils import dumps
+
+        definition = lrc_assessment_definition()
+        system_id = new_id()
+        definition_json = dumps(definition.model_dump(mode="json"))
+        session.add(AssessmentSystem(
+            id=system_id, name=definition.name, slug=system_slug(definition.name),
+            draft_json=definition_json, published_version=1, updated_by="System bootstrap",
+        ))
+        session.add(AssessmentSystemVersion(
+            system_id=system_id, version=1, definition_json=definition_json,
+            change_summary="Compatibility bootstrap.", published_by="System bootstrap",
+        ))
+    if not system_id:
+        return
+    for row in session.new:
+        if isinstance(row, scoped_models) and not row.system_id:
+            row.system_id = system_id
 
 
 engine = create_engine(settings.database_url, **engine_options)

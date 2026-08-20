@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#192331">
+  <title>Configure Assessment System</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260811.3&theme=command-grid-2">
+  <link rel="stylesheet" href="/static/configurator.css?v=20260819.1">
+</head>
+<body class="config-body">
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <section id="configLogin" class="login-shell hidden">
+    <div class="login-card">
+      <div class="brand-mark">AS</div>
+      <p class="eyebrow">Owner access</p>
+      <h1>Configure Assessment System</h1>
+      <p class="muted">Sign in as the owner to change how the complete application works.</p>
+      <form id="configLoginForm" class="stack">
+        <label>Username<div class="account-search-picker"><input name="username" id="configUsername" autocomplete="off" required placeholder="Search your name"><div id="configUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary wide" type="submit">Log in</button>
+        <p id="configLoginError" class="form-error"></p>
+      </form>
+    </div>
+  </section>
+
+  <div id="configApp" class="config-app hidden">
+    <header class="config-topbar">
+      <a href="/admin" class="config-product"><span id="configMark" class="brand-mark small">AS</span><span><strong>Configure Assessment System</strong><small id="configSystemName">Assessment system</small></span></a>
+      <div class="config-save-state"><span id="configStateDot"></span><strong id="configStateText">Saved</strong><small id="configVersion"></small></div>
+      <div class="inline-actions"><button id="configSave" class="button ghost">Save draft</button><button id="configPublish" class="button primary">Review & publish</button><a href="/admin" class="button ghost">Back to admin</a></div>
+    </header>
+
+    <aside class="config-sidebar">
+      <p class="eyebrow">System setup</p>
+      <nav id="configNav">
+        <button data-section="start" class="active"><span>1</span> Start</button>
+        <button data-section="basics"><span>2</span> Name & terminology</button>
+        <button data-section="people"><span>3</span> People & attendance</button>
+        <button data-section="activities"><span>4</span> Activities & forms</button>
+        <button data-section="scoring"><span>5</span> Scoring & results</button>
+        <button data-section="features"><span>6</span> Pages & access</button>
+        <button data-section="review"><span>7</span> Review & publish</button>
+      </nav>
+      <div class="config-sidebar-note"><strong>Simple by design</strong><p>Only configure features already supported by the proven assessment application.</p></div>
+    </aside>
+
+    <main id="configHost" class="config-main"><div class="loading-card">Loading configuration…</div></main>
+  </div>
+
+  <dialog id="configDialog" class="modal"><div id="configDialogBody"></div></dialog>
+  <script type="module" src="/static/configurator.js?v=20260819.1"></script>
+</body>
+</html>

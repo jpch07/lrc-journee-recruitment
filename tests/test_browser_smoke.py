@@ -77,7 +77,10 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
     assert "viewer.js?v=20260817.1" in viewer
-    assert all(path in home for path in ('href="/admin"', 'href="/evaluate"', 'href="/view"'))
+    assert "platformLoginForm" in home
+    assert "platformSignupForm" in home
+    assert "workspaceList" in home
+    assert "Recruitment ID" not in home
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator

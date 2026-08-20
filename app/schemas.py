@@ -22,14 +22,21 @@ class AdminLoginRequest(BaseModel):
 class AccountLoginRequest(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=1, max_length=500)
+    recruitment: str | None = Field(default=None, max_length=100)
+
+
+class RecruitmentSelectionRequest(BaseModel):
+    recruitment: str = Field(min_length=1, max_length=100)
 
 
 class AccountCreateRequest(BaseModel):
     username: str = Field(min_length=1, max_length=200)
     password: str = Field(min_length=8, max_length=500)
-    evaluator_role: Literal["overall", "dossard"] = "dossard"
+    evaluator_role: str = Field(default="", max_length=20)
     full_name: str | None = Field(default=None, max_length=200)
     phone_number: str | None = Field(default=None, max_length=40)
+    access_profile: str = Field(default="assessor", max_length=30)
+    attendance_journey_id: str | None = Field(default=None, max_length=36)
 
 
 class AccountUpdateRequest(BaseModel):
@@ -38,8 +45,9 @@ class AccountUpdateRequest(BaseModel):
     phone_number: str | None = Field(default=None, max_length=40)
     can_admin: bool | None = None
     can_results: bool | None = None
+    can_evaluate: bool | None = None
     active: bool | None = None
-    evaluator_role: Literal["overall", "dossard"] | None = None
+    evaluator_role: str | None = Field(default=None, max_length=20)
     attendance_journey_ids: list[str] | None = None
     base_version: int | None = Field(default=None, ge=1)
 
@@ -78,7 +86,7 @@ class RecruitFromDirectoryRequest(BaseModel):
 
 class EvaluatorCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    role: Literal["overall", "dossard"]
+    role: str = Field(min_length=1, max_length=20)
     add_to_directory: bool = True
     password: str | None = Field(default=None, min_length=8, max_length=500)
     full_name: str | None = Field(default=None, max_length=200)
@@ -99,7 +107,7 @@ class RecruitAttendanceItem(BaseModel):
 class EvaluatorAttendanceItem(BaseModel):
     id: str
     present: bool
-    role: Literal["overall", "dossard"]
+    role: str = Field(min_length=1, max_length=20)
     active: bool = True
     base_version: int | None = None
 

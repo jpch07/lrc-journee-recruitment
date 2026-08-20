@@ -15,15 +15,37 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .config import settings
+from .assessment_runtime import active_assessment_definition
 from .models import Recruit, RecruitDirectory, RecruitDirectoryState, utcnow
+from .tenant import current_system_id
 
 
 DIRECTORY_STATE_ID = "google_sheet"
 _sync_lock = threading.Lock()
 
 
+def _directory_state(db: Session) -> RecruitDirectoryState | None:
+    return db.scalar(select(RecruitDirectoryState).limit(1))
+
+
+def _directory_state_id() -> str:
+    return current_system_id() or DIRECTORY_STATE_ID
+
+
 def directory_source_url() -> str:
-    sheet_name = quote(settings.recruit_sheet_name, safe="")
+    participant_settings = active_assessment_definition().participants
+    configured_url = participant_settings.directorySheetUrl.strip()
+    sheet_name = quote(participant_settings.directorySheetName or settings.recruit_sheet_name, safe="")
+    if configured_url:
+        if "/gviz/tq" in configured_url or "output=csv" in configured_url:
+            return configured_url
+        match = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", configured_url)
+        if not match:
+            raise RuntimeError("The configured participant Google Sheet URL is not valid.")
+        return (
+            f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq"
+            f"?tqx=out:csv&sheet={sheet_name}"
+        )
     return (
         f"https://docs.google.com/spreadsheets/d/{settings.recruit_sheet_id}/gviz/tq"
         f"?tqx=out:csv&sheet={sheet_name}"
@@ -96,7 +118,7 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 def _directory_payload(db: Session, *, stale: bool = False) -> dict:
-    state = db.get(RecruitDirectoryState, DIRECTORY_STATE_ID)
+    state = _directory_state(db)
     items = list(
         db.scalars(
             select(RecruitDirectory)
@@ -113,7 +135,7 @@ def _directory_payload(db: Session, *, stale: bool = False) -> dict:
 
 
 def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
-    state = db.get(RecruitDirectoryState, DIRECTORY_STATE_ID)
+    state = _directory_state(db)
     synced_at = _aware(state.synced_at) if state else None
     fresh = synced_at and datetime.now(timezone.utc) - synced_at < timedelta(seconds=settings.recruit_sheet_sync_seconds)
     cached = db.scalar(select(func.count()).select_from(RecruitDirectory).where(RecruitDirectory.active.is_(True))) or 0
@@ -122,7 +144,7 @@ def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
 
     with _sync_lock:
         db.expire_all()
-        state = db.get(RecruitDirectoryState, DIRECTORY_STATE_ID)
+        state = _directory_state(db)
         synced_at = _aware(state.synced_at) if state else None
         fresh = synced_at and datetime.now(timezone.utc) - synced_at < timedelta(seconds=settings.recruit_sheet_sync_seconds)
         cached = db.scalar(select(func.count()).select_from(RecruitDirectory).where(RecruitDirectory.active.is_(True))) or 0
@@ -156,7 +178,7 @@ def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
                     item.updated_at = now
             if state is None:
                 state = RecruitDirectoryState(
-                    id=DIRECTORY_STATE_ID, source_url=directory_source_url(), version=1
+                    id=_directory_state_id(), source_url=directory_source_url(), version=1
                 )
                 db.add(state)
             else:
@@ -169,10 +191,10 @@ def ensure_recruit_directory(db: Session, *, force: bool = False) -> dict:
         except Exception as exc:
             db.rollback()
             cached = db.scalar(select(func.count()).select_from(RecruitDirectory).where(RecruitDirectory.active.is_(True))) or 0
-            state = db.get(RecruitDirectoryState, DIRECTORY_STATE_ID)
+            state = _directory_state(db)
             if state is None:
                 state = RecruitDirectoryState(
-                    id=DIRECTORY_STATE_ID, source_url=directory_source_url(), version=1
+                    id=_directory_state_id(), source_url=directory_source_url(), version=1
                 )
                 db.add(state)
             else:

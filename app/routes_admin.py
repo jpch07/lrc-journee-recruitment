@@ -68,6 +68,12 @@ from .rubric import (
     RUBRICS,
     public_rubric,
 )
+from .assessment_runtime import (
+    active_assessment_definition,
+    activity_definition,
+    assessor_category_keys,
+    default_assessor_category,
+)
 from .report_exports import build_report_workbook, save_management_report
 from .schemas import (
     ActivityActionRequest,
@@ -92,7 +98,7 @@ from .schemas import (
     RoomCountRequest,
     RoomPlanEditRequest,
 )
-from .scoring import ScoringError, validate_general_grade
+from .scoring import ScoringError, validate_general_factor
 from .recruit_directory import create_recruit_from_directory, ensure_recruit_directory
 from .services import (
     assignment_round_payload,
@@ -278,6 +284,8 @@ def evaluator_directory(
     db: Session = Depends(get_db),
 ):
     del context
+    if not active_assessment_definition().assessors.linkedDirectoryEnabled:
+        return []
     return [
         {
             "id": item.id,
@@ -441,8 +449,10 @@ def import_people(
             db.flush()
             created.append(serialize_recruit(item))
         else:
-            role_text = _first_value(row, ("role", "type")).lower()
-            role = "overall" if role_text in {"overall", "o", "general"} else "dossard"
+            role_text = _first_value(row, ("role", "type")).strip().casefold()
+            categories = active_assessment_definition().assessors.categories
+            role = next((item.key for item in categories
+                         if role_text in {item.key.casefold(), item.name.casefold()}), default_assessor_category())
             full_name = _first_value(row, ("full name", "official name")) or None
             phone_number = _first_value(row, ("phone", "phone number", "mobile", "mobile number")) or None
             duplicate = db.scalar(
@@ -878,8 +888,9 @@ def journey_detail(
     evaluator_payload = []
     evaluator_items = list(db.scalars(
         select(Evaluator).where(Evaluator.journey_id == journey.id)
-        .order_by((Evaluator.role == "dossard"), func.lower(Evaluator.name))
     ))
+    category_order = {item.key: item.primaryPriority for item in active_assessment_definition().assessors.categories}
+    evaluator_items.sort(key=lambda item: (category_order.get(item.role, 999), item.name.casefold()))
     directory_ids = {item.directory_id for item in evaluator_items if item.directory_id}
     directories = {
         item.id: item for item in db.scalars(
@@ -1070,6 +1081,11 @@ def dashboard(
     return {
         "journey": serialize_journey(db, journey, include_token=True),
         "activities": _activity_states(db, journey.id),
+        "evaluatorCategoryCounts": {
+            category.key: sum(1 for item in evaluators if item.role == category.key)
+            for category in active_assessment_definition().assessors.categories
+        },
+        # Compatibility fields for the finalized LRC dashboard.
         "overallEvaluators": sum(1 for item in evaluators if item.role == "overall"),
         "dossardEvaluators": sum(1 for item in evaluators if item.role == "dossard"),
         "roomPlan": room_plan_payload(db, room_plan) if room_plan else None,
@@ -1112,6 +1128,8 @@ def recruit_directory(
     db: Session = Depends(get_db),
 ):
     del context
+    if not active_assessment_definition().participants.linkedDirectoryEnabled:
+        return {"items": [], "syncedAt": None, "stale": False, "lastError": ""}
     return ensure_recruit_directory(db)
 
 
@@ -1171,6 +1189,8 @@ def add_evaluator(
 ):
     require_csrf(request, context.csrf_token)
     journey = get_journey_or_404(db, journey_id)
+    if payload.role not in assessor_category_keys():
+        raise HTTPException(status_code=422, detail="Select a configured evaluator category.")
     clean_name = " ".join(payload.name.split())
     existing = db.scalar(
         select(Evaluator).where(
@@ -1297,6 +1317,8 @@ def save_evaluator_attendance(
     journey = get_journey_or_404(db, journey_id)
     changed = []
     for item in payload.items:
+        if item.role not in assessor_category_keys():
+            raise HTTPException(status_code=422, detail="Select a configured evaluator category.")
         evaluator = get_evaluator_or_404(db, journey.id, item.id)
         if item.base_version is not None and item.base_version != evaluator.version:
             raise HTTPException(status_code=409, detail=f"{evaluator.name} was changed by another admin. Reload attendance.")
@@ -1462,11 +1484,11 @@ def change_room_count(
         return {"ok": True, "roomCount": journey.room_count}
     open_room_activity = db.scalar(select(ActivityState).where(
         ActivityState.journey_id == journey.id,
-        ActivityState.code.in_(("escape_room", "negotiation")),
+        ActivityState.code.in_(tuple(ROOM_ACTIVITIES)),
         ActivityState.status == "open",
     ))
     if open_room_activity:
-        raise HTTPException(status_code=409, detail="Close Escape Room and Negotiation before changing the room count.")
+        raise HTTPException(status_code=409, detail="Close group-based activities before changing the group count.")
     published = latest_room_plan(db, journey.id, "published")
     if published and not payload.reason.strip():
         raise HTTPException(status_code=422, detail="A reason is required because a room plan is already published.")
@@ -1640,11 +1662,14 @@ def edit_assignment_preview(
     round_record = db.get(AssignmentRound, round_id)
     if not round_record or round_record.journey_id != journey.id or round_record.status != "preview":
         raise HTTPException(status_code=409, detail="Editable assignment preview not found.")
-    if round_record.activity_code == "simulation":
-        raise HTTPException(status_code=409, detail="Simulation must reuse the Skills assignments exactly and cannot be edited independently.")
+    configured_activity = activity_definition(round_record.activity_code)
+    if configured_activity and configured_activity.assignment.reuseAssignmentsFrom:
+        source = RUBRICS[configured_activity.assignment.reuseAssignmentsFrom].name
+        raise HTTPException(status_code=409, detail=f"{configured_activity.name} reuses {source} assignments and cannot be edited independently.")
     pair_keys: set[tuple[str, str]] = set()
     recruit_counts: dict[str, int] = Counter()
     evaluator_counts: dict[str, int] = Counter()
+    maximum = configured_activity.assignment.maximumAssessors if configured_activity else 2
     past_pairs, _secondary_counts = past_pair_data(db, journey.id, round_record.activity_code)
     for item in payload.items:
         evaluator = get_evaluator_or_404(db, journey.id, item.evaluator_id)
@@ -1657,8 +1682,8 @@ def edit_assignment_preview(
         pair_keys.add(pair)
         recruit_counts[item.recruit_id] += 1
         evaluator_counts[item.evaluator_id] += 1
-        if recruit_counts[item.recruit_id] > 2:
-            raise HTTPException(status_code=422, detail="A recruit cannot have more than two evaluators.")
+        if recruit_counts[item.recruit_id] > maximum:
+            raise HTTPException(status_code=422, detail=f"A participant cannot have more than {maximum} assessors.")
         if pair in past_pairs and not (item.override_reason or "").strip():
             raise HTTPException(status_code=422, detail="A repeated evaluator-recruit pair requires an override reason.")
     present_recruits = set(
@@ -1674,7 +1699,7 @@ def edit_assignment_preview(
         raise HTTPException(status_code=422, detail="Every confirmed-present recruit must retain a primary assignment.")
     for recruit_id in present_recruits:
         slots = [item.slot for item in payload.items if item.recruit_id == recruit_id]
-        if slots.count(1) != 1 or slots.count(2) > 1:
+        if slots.count(1) != 1 or slots.count(2) > (1 if maximum > 1 else 0):
             raise HTTPException(status_code=422, detail="Each recruit needs exactly one primary slot and at most one secondary slot.")
     present_evaluator_count = db.scalar(
         select(func.count()).select_from(Evaluator).where(
@@ -1798,6 +1823,82 @@ def paired_skills_simulation_action(
             "status": "open" if action != "close" else "closed"}
 
 
+@router.post("/journeys/{journey_id}/activities/parallel/{parallel_group}/{action}")
+def parallel_activity_action(
+    journey_id: str,
+    parallel_group: str,
+    action: str,
+    payload: ActivityActionRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    if action not in {"open", "close", "reopen"}:
+        raise HTTPException(status_code=404, detail="Unknown grouped activity action.")
+    activities = [item for item in active_assessment_definition().activities
+                  if item.enabled and item.assignment.parallelGroup == parallel_group]
+    if len(activities) < 2:
+        raise HTTPException(status_code=404, detail="This parallel activity group is not configured.")
+    journey = get_journey_or_404(db, journey_id)
+    codes = {item.key for item in activities}
+    states = {item.code: item for item in db.scalars(select(ActivityState).where(
+        ActivityState.journey_id == journey.id, ActivityState.code.in_(codes),
+    ))}
+    if set(states) != codes:
+        raise HTTPException(status_code=500, detail="A grouped activity state is missing.")
+    if action in {"open", "reopen"}:
+        other_active = db.scalar(select(Journey).where(Journey.status == "active", Journey.id != journey.id))
+        if other_active:
+            raise HTTPException(status_code=409, detail=f"{other_active.name} is already active. Complete or archive it first.")
+        if action == "reopen" and not payload.reason.strip():
+            raise HTTPException(status_code=422, detail="A reason is required to reopen activities.")
+        if any(not item.assignment_round_id for item in states.values()):
+            raise HTTPException(status_code=409, detail="Publish every grouped activity assignment first.")
+        for predecessor in {item.assignment.predecessor for item in activities if item.assignment.predecessor}:
+            predecessor_state = db.scalar(select(ActivityState).where(
+                ActivityState.journey_id == journey.id, ActivityState.code == predecessor,
+            ))
+            if not predecessor_state or predecessor_state.status != "closed":
+                raise HTTPException(status_code=409, detail=f"Close {RUBRICS[predecessor].name} first.")
+        conflicting = db.scalar(select(ActivityState).where(
+            ActivityState.journey_id == journey.id, ActivityState.status == "open",
+            ActivityState.code.not_in(codes),
+        ))
+        if conflicting:
+            raise HTTPException(status_code=409, detail=f"Close {RUBRICS[conflicting.code].name} first.")
+        for item in states.values():
+            item.status, item.opened_at, item.closed_at = "open", utcnow(), None
+            item.version += 1
+        journey.current_activity, journey.status = activities[0].key, "active"
+        db.execute(update(EvaluationSubmission).where(
+            EvaluationSubmission.journey_id == journey.id,
+            EvaluationSubmission.activity_code.in_(codes),
+            EvaluationSubmission.status == "locked",
+        ).values(status="submitted"))
+    else:
+        if not any(item.status == "open" for item in states.values()):
+            raise HTTPException(status_code=409, detail="No activity in this group is open.")
+        for item in states.values():
+            if item.status == "open":
+                item.status, item.closed_at = "closed", utcnow()
+                item.version += 1
+        journey.current_activity = None
+        db.execute(update(EvaluationSubmission).where(
+            EvaluationSubmission.journey_id == journey.id,
+            EvaluationSubmission.activity_code.in_(codes),
+            EvaluationSubmission.status == "submitted",
+        ).values(status="locked"))
+    journey.version += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action=f"activity.parallel_{action}", entity_type="activity", entity_id=None,
+          after={"activities": sorted(codes), "parallelGroup": parallel_group,
+                 "status": "open" if action != "close" else "closed"}, reason=payload.reason)
+    _commit(db)
+    return {"ok": True, "activities": sorted(codes),
+            "status": "open" if action != "close" else "closed"}
+
+
 @router.post("/journeys/{journey_id}/activities/{activity_code}/{action}")
 def activity_action(
     journey_id: str,
@@ -1823,7 +1924,8 @@ def activity_action(
             raise HTTPException(status_code=422, detail="A reason is required to reopen an activity.")
         if not state.assignment_round_id:
             raise HTTPException(status_code=409, detail="Publish assignments before opening this activity.")
-        predecessor = {"negotiation": "escape_room", "skills": "negotiation", "simulation": "negotiation"}.get(activity_code)
+        configured_activity = activity_definition(activity_code)
+        predecessor = configured_activity.assignment.predecessor if configured_activity else ""
         if predecessor:
             predecessor_state = db.scalar(
                 select(ActivityState).where(
@@ -1834,12 +1936,18 @@ def activity_action(
             if not predecessor_state or predecessor_state.status != "closed":
                 raise HTTPException(status_code=409, detail=f"Close {RUBRICS[predecessor].name} before opening {RUBRICS[activity_code].name}.")
         another = db.scalar(select(ActivityState).where(ActivityState.journey_id == journey.id, ActivityState.status == "open", ActivityState.code != activity_code))
-        if another and {another.code, activity_code} != {"skills", "simulation"}:
+        another_config = activity_definition(another.code) if another else None
+        can_run_together = bool(
+            another and configured_activity and another_config
+            and configured_activity.assignment.parallelGroup
+            and configured_activity.assignment.parallelGroup == another_config.assignment.parallelGroup
+        )
+        if another and not can_run_together:
             raise HTTPException(status_code=409, detail=f"Close {RUBRICS[another.code].name} before opening another activity.")
         state.status = "open"
         state.opened_at = utcnow()
         state.closed_at = None
-        journey.current_activity = "skills" if activity_code in {"skills", "simulation"} and another else activity_code
+        journey.current_activity = another.code if can_run_together else activity_code
         journey.status = "active"
         db.execute(
             update(EvaluationSubmission)
@@ -1870,16 +1978,22 @@ def activity_action(
 def _simulated_evaluation_values(activity_code: str, rng: random.Random) -> tuple[dict, dict]:
     rubric = RUBRICS[activity_code]
     if rubric.kind == "sport":
-        return {}, {
-            "push_ups": rng.randint(8, 40),
-            "wall_sit": rng.randint(35, 150),
-            "beep_test": rng.randint(240, 720),
-            "plank": rng.randint(30, 180),
-        }
-    return {
-        criterion.key: rng.randint(10, 50) / 10
-        for criterion in rubric.criteria
-    }, {}
+        configured = activity_definition(activity_code)
+        values = {}
+        for criterion in configured.criteria:
+            target = float(criterion.target)
+            generated = target * rng.uniform(.55, 1.25)
+            values[criterion.key] = round(generated) if criterion.inputType == "integer" else round(generated, 1)
+        return {}, values
+    configured = activity_definition(activity_code)
+    generated: dict[str, float] = {}
+    for criterion in configured.criteria:
+        minimum = Decimal(criterion.minimum)
+        maximum = Decimal(criterion.maximum)
+        step = Decimal(criterion.step)
+        step_count = int((maximum - minimum) / step)
+        generated[criterion.key] = float(minimum + step * rng.randint(0, step_count))
+    return generated, {}
 
 
 @router.post("/journeys/{journey_id}/testing/simulate/{activity_code}")
@@ -2207,19 +2321,17 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
     result_activities = (result_row or {}).get("activities", {})
     breakdowns: dict[str, dict] = {}
     for dimension in DIMENSION_ORDER:
-        if dimension in BEHAVIORAL_DIMENSIONS:
-            activity_codes = DIMENSION_ACTIVITIES
-        elif dimension == "application":
-            activity_codes = ("skills",)
-        else:
-            activity_codes = ("sport",)
+        dimension_config = next(item for item in active_assessment_definition().dimensions if item.key == dimension)
+        activity_codes = ([item.key for item in active_assessment_definition().activities
+                           if item.enabled and any(criterion.dimensionKey == dimension for criterion in item.criteria)]
+                          if dimension_config.source == "criteria" else [dimension_config.activityKey])
 
         matching_criteria = [
             (activity_code, criterion)
             for activity_code in activity_codes
             for criterion in RUBRICS[activity_code].criteria
-            if dimension not in BEHAVIORAL_DIMENSIONS
-            or criterion.dimension.casefold() == dimension
+            if dimension_config.source == "activity"
+            or next(item for item in activity_definition(activity_code).criteria if item.key == criterion.key).dimensionKey == dimension
         ]
         total_weight = sum((criterion.weight for _activity_code, criterion in matching_criteria), Decimal("0"))
         activities: list[dict] = []
@@ -2230,6 +2342,12 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                     continue
                 evaluator_payload: list[dict] = []
                 grades: list[Decimal] = []
+                configured_criterion = next(
+                    item for item in activity_definition(activity_code).criteria
+                    if item.key == criterion.key
+                )
+                criterion_minimum = Decimal(configured_criterion.minimum)
+                criterion_maximum = Decimal(configured_criterion.maximum)
                 for evaluation in details.get(activity_code, []):
                     submission = evaluation.get("submission")
                     final = submission and submission.get("status") in {"submitted", "locked"}
@@ -2237,7 +2355,7 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                     if final:
                         try:
                             candidate = Decimal(str(submission.get("responses", {}).get(criterion.key)))
-                            if candidate.is_finite() and Decimal("0") <= candidate <= Decimal("5"):
+                            if candidate.is_finite() and criterion_minimum <= candidate <= criterion_maximum:
                                 grade = candidate
                                 grades.append(candidate)
                         except (ArithmeticError, TypeError, ValueError):
@@ -2264,7 +2382,8 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                     grades = admin_grades
                 average = sum(grades, Decimal("0")) / Decimal(len(grades)) if grades else None
                 contribution = (
-                    average / Decimal("5") * criterion.weight / total_weight
+                    ((average - criterion_minimum) / (criterion_maximum - criterion_minimum))
+                    * criterion.weight / total_weight
                     if average is not None and total_weight
                     else Decimal("0")
                 )
@@ -2276,6 +2395,9 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                         "weight": float(criterion.weight / total_weight) if total_weight else 0.0,
                         "criterionAverage": float(average) if average is not None else None,
                         "weightedContribution": float(contribution),
+                        "minimum": float(criterion_minimum),
+                        "maximum": float(criterion_maximum),
+                        "step": float(configured_criterion.step),
                         "unit": criterion.unit,
                         "evaluators": evaluator_payload,
                     }
@@ -2336,6 +2458,9 @@ def recruit_profile(
     results = result_snapshot(db, journey)
     result_row = next((item for item in results["rows"] if item["recruitId"] == recruit.id), None)
     if result_row is None:
+        definition = active_assessment_definition()
+        missing_factors = [factor.name for factor in definition.generalFactors]
+        first_band = sorted(definition.scoring.bands, key=lambda item: item.minimum)[0].key
         result_row = {
             "recruitId": recruit.id,
             "name": recruit.name,
@@ -2345,12 +2470,12 @@ def recruit_profile(
             "generalComplete": False,
             "overallScore": 0.0,
             "overallRank": None,
-            "color": "red",
-            "missingCount": len(ACTIVITY_ORDER) + 3,
-            "missingComponents": [RUBRICS[code].name for code in ACTIVITY_ORDER] + ["Punctuality", "Respect to us", "Seriousness"],
+            "color": first_band,
+            "missingCount": len(ACTIVITY_ORDER) + len(missing_factors),
+            "missingComponents": [RUBRICS[code].name for code in ACTIVITY_ORDER] + missing_factors,
             "missingActivityCount": len(ACTIVITY_ORDER),
             "missingDimensionCount": len(DIMENSION_ORDER),
-            "missingGeneralCount": 3,
+            "missingGeneralCount": len(missing_factors),
             "complete": False,
         }
     assessment = db.get(GeneralAssessment, recruit.id)
@@ -2488,13 +2613,17 @@ def save_general_assessment(
         "notes": assessment.notes if assessment else "",
     }
     values: dict[str, Decimal | None] = {}
+    enabled_factors = {item.storageKey for item in active_assessment_definition().generalFactors}
     for key, value in (
         ("punctuality", payload.punctuality),
         ("respect", payload.respect),
         ("seriousness", payload.seriousness),
     ):
         try:
-            values[key] = None if value is None else validate_general_grade(value, key.title())
+            values[key] = (
+                None if key not in enabled_factors or value is None
+                else validate_general_factor(key, value)
+            )
         except ScoringError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not assessment:

@@ -26,6 +26,10 @@ def upgrade() -> None:
     journeys = sa.Table("journeys", metadata, autoload_with=connection)
     evaluators = sa.Table("evaluators", metadata, autoload_with=connection)
     now = datetime.now(timezone.utc)
+    system_id = None
+    if "system_id" in directory.c:
+        systems = sa.Table("assessment_systems", metadata, autoload_with=connection)
+        system_id = connection.execute(sa.select(systems.c.id).limit(1)).scalar()
 
     connection.execute(directory.update().values(active=False))
     master: list[tuple[str, str, str]] = []
@@ -44,15 +48,16 @@ def upgrade() -> None:
             )
         else:
             directory_id = str(uuid.uuid4())
-            connection.execute(
-                directory.insert().values(
-                    id=directory_id,
-                    name=name,
-                    default_role=role,
-                    active=True,
-                    created_at=now,
-                )
-            )
+            values = {
+                "id": directory_id,
+                "name": name,
+                "default_role": role,
+                "active": True,
+                "created_at": now,
+            }
+            if "system_id" in directory.c:
+                values["system_id"] = system_id
+            connection.execute(directory.insert().values(**values))
         master.append((directory_id, name, role))
 
     editable_journeys = connection.execute(

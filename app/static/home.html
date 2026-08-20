@@ -3,35 +3,67 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#b20d2d">
-  <title>LRC Journee Recruitment</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260811.2&theme=command-grid-2">
+  <meta name="theme-color" content="#4f46e5">
+  <title>Assessment Workspace</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260820.1">
 </head>
-<body class="home-body">
-  <main class="home-shell">
-    <header class="home-hero">
-      <span class="brand-mark home-mark">LRC</span>
-      <p class="eyebrow">Lebanese Red Cross</p>
-      <h1>Journee Recruitment</h1>
-      <p>Select the workspace you need. Your account permissions are checked after login.</p>
-    </header>
-    <section class="home-destinations" aria-label="Application workspaces">
-      <a class="home-destination" href="/admin">
-        <span class="home-destination-number">01</span>
-        <div><p class="eyebrow">Operations</p><h2>Admin workspace</h2><p>Attendance, assignments, activity control, evaluations, and permissions.</p></div>
-        <span class="home-arrow">→</span>
-      </a>
-      <a class="home-destination" href="/evaluate">
-        <span class="home-destination-number">02</span>
-        <div><p class="eyebrow">Field team</p><h2>Evaluator workspace</h2><p>Open the active Journee, view assignments, and submit evaluations.</p></div>
-        <span class="home-arrow">→</span>
-      </a>
-      <a class="home-destination" href="/view">
-        <span class="home-destination-number">03</span>
-        <div><p class="eyebrow">Reporting</p><h2>Management view</h2><p>Review attendance, shared rankings, recruit profiles, and reports.</p></div>
-        <span class="home-arrow">→</span>
-      </a>
+<body class="platform-home">
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <main id="authScreen" class="platform-auth-screen">
+    <section class="platform-auth-card" aria-labelledby="authTitle">
+      <div class="platform-logo" aria-hidden="true">A</div>
+      <h1 id="authTitle">Assessment Workspace</h1>
+      <p class="platform-subtitle">Sign in to manage your evaluation workspaces.</p>
+
+      <div class="platform-auth-tabs" role="tablist" aria-label="Account access">
+        <button id="loginTab" class="active" type="button" role="tab" aria-selected="true">Log in</button>
+        <button id="signupTab" type="button" role="tab" aria-selected="false">Sign up</button>
+      </div>
+
+      <form id="platformLoginForm" class="platform-form">
+        <label>Username<input name="username" autocomplete="username" required autofocus></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" minlength="8" required></label>
+        <button class="platform-primary" type="submit">Log in</button>
+        <p class="platform-form-error" aria-live="polite"></p>
+      </form>
+
+      <form id="platformSignupForm" class="platform-form hidden">
+        <label>Username<input name="username" autocomplete="username" minlength="2" required></label>
+        <label>Password<input name="password" type="password" autocomplete="new-password" minlength="8" required></label>
+        <button class="platform-primary" type="submit">Create account</button>
+        <p class="platform-form-error" aria-live="polite"></p>
+      </form>
     </section>
   </main>
+
+  <main id="workspaceScreen" class="platform-workspace-screen hidden">
+    <header class="platform-workspace-header">
+      <a class="platform-wordmark" href="/" aria-label="Assessment Workspace home"><span>A</span> Assessment Workspace</a>
+      <div class="platform-owner-menu"><span id="ownerUsername"></span><button id="platformLogout" type="button">Log out</button></div>
+    </header>
+
+    <section class="platform-workspace-content">
+      <div class="platform-workspace-title">
+        <div><p>YOUR WORKSPACES</p><h1>Choose a workspace</h1><span>Select a recruitment to view and manage its Journees.</span></div>
+        <button id="showCreateWorkspace" class="platform-primary" type="button">Create workspace</button>
+      </div>
+
+      <form id="createWorkspaceForm" class="platform-create-workspace hidden">
+        <div><label for="workspaceName">Workspace name</label><input id="workspaceName" name="name" maxlength="200" required placeholder="e.g. Volunteer Recruitment 2027"></div>
+        <button class="platform-primary" type="submit">Create</button>
+        <button id="cancelCreateWorkspace" type="button">Cancel</button>
+        <p class="platform-form-error" aria-live="polite"></p>
+      </form>
+
+      <div id="workspaceList" class="platform-workspace-list" aria-live="polite"></div>
+      <section id="emptyWorkspaces" class="platform-empty hidden">
+        <div aria-hidden="true">+</div><h2>No workspaces yet</h2><p>Create your first workspace to configure an assessment system and add Journees.</p>
+        <button class="platform-primary" type="button">Create workspace</button>
+      </section>
+    </section>
+  </main>
+
+  <script type="module" src="/static/home.js?v=20260820.1"></script>
 </body>
 </html>
