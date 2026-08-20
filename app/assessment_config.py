@@ -30,8 +30,8 @@ class Terminology(BaseModel):
 class Branding(BaseModel):
     organizationName: str = ""
     shortMark: str = "AS"
-    primaryColor: str = "#b20d2d"
-    darkColor: str = "#192331"
+    primaryColor: str = "#4f46e5"
+    darkColor: str = "#172033"
     logoUrl: str = ""
 
 
@@ -424,3 +424,28 @@ def blank_assessment_definition() -> AssessmentSystemDefinition:
             AccessProfile(key="attendance", name="Attendance operator", capabilities=["attendance"]),
         ],
     )
+
+
+def neutralize_legacy_blank_branding(
+    definition: AssessmentSystemDefinition,
+) -> AssessmentSystemDefinition:
+    """Render early blank workspaces with today's neutral platform branding.
+
+    The first configurable-workspace release persisted the old LRC red as the
+    default even when no organization was selected.  Keep explicitly branded
+    systems (including LRC) byte-for-byte unchanged and normalize only that
+    recognizable blank-workspace combination in the returned definition.
+    """
+    branding = definition.branding
+    if (
+        not branding.organizationName.strip()
+        and branding.shortMark.strip().casefold() == "as"
+        and branding.primaryColor.casefold() in {"#b20d2d", "#c8102e"}
+    ):
+        return definition.model_copy(update={
+            "branding": branding.model_copy(update={
+                "primaryColor": "#4f46e5",
+                "darkColor": "#172033",
+            })
+        })
+    return definition

@@ -200,6 +200,7 @@ def workspaces(context: PlatformContext = Depends(require_platform), db: Session
         result.append({
             "id": system.id,
             "name": system.name,
+            "slug": system.slug,
             "status": system.status,
             "journeyCount": sum(statuses.values()),
             "activeJourneyCount": statuses.get("active", 0),
@@ -267,6 +268,7 @@ def create_workspace(
     return {
         "id": system.id,
         "name": system.name,
+        "slug": system.slug,
         "journeyCount": 0,
     }
 
@@ -305,5 +307,6 @@ def select_workspace(
     return {
         "id": system.id,
         "name": system.name,
+        "slug": system.slug,
         "workspaceCsrfToken": workspace_session.csrf_token,
     }

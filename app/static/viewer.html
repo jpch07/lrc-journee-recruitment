@@ -3,16 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#b20d2d">
-  <title>LRC Journee · Management view</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260811.3&theme=command-grid-2">
+  <meta name="theme-color" content="#4f46e5">
+  <title>Assessment Workspace · Management view</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260820.2&theme=workspace-routing">
 </head>
 <body class="admin-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <section id="viewerLoginView" class="login-shell hidden">
     <div class="login-card">
-      <div class="brand-mark">LRC</div>
-      <p class="eyebrow">Lebanese Red Cross</p>
+      <div class="brand-mark">AS</div>
+      <p class="eyebrow">Workspace access</p>
       <h1>Management view</h1>
       <form id="viewerLoginForm" class="stack">
         <label>Username<div class="account-search-picker"><input id="viewerUsername" name="username" autocomplete="off" required placeholder="Search your name"><div id="viewerUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label>
@@ -25,7 +25,7 @@
   <div id="viewerApp" class="hidden">
     <header class="topbar">
       <button id="viewerMenu" class="icon-button mobile-only" aria-label="Open menu">☰</button>
-      <div class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Management view</small></span></div>
+      <div class="brand-button"><span class="brand-mark small">AS</span><span><strong data-system-name>Assessment Workspace</strong><small>Management view</small></span></div>
       <label class="viewer-scope-control"><span>Reporting scope</span><select id="viewerJourney"></select></label>
       <div class="top-actions"><span id="viewerName" class="muted"></span><button id="viewerLogout" class="button ghost small">Log out</button></div>
     </header>
@@ -44,6 +44,6 @@
   </div>
   <dialog id="viewerModal" class="modal"><div id="viewerModalBody"></div></dialog>
   <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
-  <script type="module" src="/static/viewer.js?v=20260817.1"></script>
+  <script type="module" src="/static/viewer.js?v=20260820.2"></script>
 </body>
 </html>

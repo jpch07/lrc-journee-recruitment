@@ -24,11 +24,11 @@ function switchAuth(mode) {
 
 function workspaceCard(item) {
   const activity = item.activeJourneyCount
-    ? `${item.activeJourneyCount} active Journee${item.activeJourneyCount === 1 ? "" : "s"}`
-    : "No active Journee";
+    ? `${item.activeJourneyCount} active session${item.activeJourneyCount === 1 ? "" : "s"}`
+    : "No active session";
   return `<button class="platform-workspace-card" type="button" data-workspace-id="${escapeHtml(item.id)}">
     <span class="platform-workspace-icon" aria-hidden="true">${escapeHtml(item.name.slice(0, 1).toUpperCase())}</span>
-    <span class="platform-workspace-info"><strong>${escapeHtml(item.name)}</strong><small>${item.journeyCount} Journee${item.journeyCount === 1 ? "" : "s"} · ${escapeHtml(activity)}</small></span>
+    <span class="platform-workspace-info"><strong>${escapeHtml(item.name)}</strong><small>${item.journeyCount} session${item.journeyCount === 1 ? "" : "s"} · ${escapeHtml(activity)}</small></span>
     <span class="platform-workspace-open">Open <b aria-hidden="true">→</b></span>
   </button>`;
 }
@@ -54,11 +54,11 @@ async function showWorkspaces(session) {
 async function openWorkspace(id, button) {
   button.disabled = true;
   try {
-    await api(`/api/platform/workspaces/${encodeURIComponent(id)}/select`, {
+    const selected = await api(`/api/platform/workspaces/${encodeURIComponent(id)}/select`, {
       method: "POST",
       headers: { "X-CSRF-Token": platformSession.csrfToken },
     });
-    window.location.assign("/admin");
+    window.location.assign(`/${encodeURIComponent(selected.slug)}/admin`);
   } catch (problem) {
     button.disabled = false;
     window.alert(problem.message);

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
+from app.assessment_config import blank_assessment_definition, neutralize_legacy_blank_branding
 from app.db import SessionLocal
 from app.models import AssessmentSystem, PlatformAccount, UserAccount
 
@@ -50,6 +51,7 @@ def test_one_owner_can_create_list_and_open_multiple_workspaces(client):
     listed = client.get("/api/platform/workspaces")
     assert listed.status_code == 200
     assert {item["name"] for item in listed.json()} == {"Admissions 2027", "Volunteer Selection"}
+    assert {item["slug"] for item in listed.json()} == {"admissions-2027", "volunteer-selection"}
 
     selected = client.post(
         f"/api/platform/workspaces/{first['id']}/select",
@@ -60,6 +62,18 @@ def test_one_owner_can_create_list_and_open_multiple_workspaces(client):
     assert workspace_session.status_code == 200
     assert workspace_session.json()["isOwner"] is True
     assert workspace_session.json()["recruitment"]["name"] == "Admissions 2027"
+    assert selected.json()["slug"] == "admissions-2027"
+    assert client.get("/admissions-2027/admin").status_code == 200
+    assert client.get("/admissions-2027/evaluate").status_code == 200
+    assert client.get("/admissions-2027/view").status_code == 200
+    assert client.get("/admissions-2027/configure").status_code == 200
+
+    public_config = client.get("/api/configurator/public").json()
+    assert public_config["branding"]["primaryColor"] == "#4f46e5"
+    assert public_config["branding"]["shortMark"] == "AS"
+    assert public_config["branding"]["organizationName"] == ""
+    configurator = client.get("/api/configurator").json()
+    assert configurator["presets"] == []
 
     selected = client.post(
         f"/api/platform/workspaces/{second['id']}/select",
@@ -110,3 +124,17 @@ def test_homepage_is_a_simple_neutral_login_and_signup(client):
     assert "Recruitment ID" not in html
     assert "Lebanese Red Cross" not in html
     assert "LRC" not in html
+
+
+def test_legacy_unbranded_workspace_red_is_rendered_neutrally():
+    definition = blank_assessment_definition()
+    definition.branding.primaryColor = "#b20d2d"
+    definition.branding.darkColor = "#192331"
+
+    normalized = neutralize_legacy_blank_branding(definition)
+    assert normalized.branding.primaryColor == "#4f46e5"
+    assert normalized.branding.darkColor == "#172033"
+
+    definition.branding.organizationName = "Lebanese Red Cross"
+    branded = neutralize_legacy_blank_branding(definition)
+    assert branded.branding.primaryColor == "#b20d2d"

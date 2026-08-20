@@ -38,6 +38,7 @@ from .models import (
     AdminEvaluation,
     Assignment,
     AssignmentRound,
+    AssessmentSystem,
     AuditEvent,
     EvaluationSubmission,
     Evaluator,
@@ -111,6 +112,7 @@ from .services import (
     latest_room_plan,
     monitoring_snapshot,
     past_pair_data,
+    populate_journey_evaluators_from_directory,
     process_photo,
     publish_assignment_round,
     publish_room_plan,
@@ -555,7 +557,8 @@ def evaluator_qr(
 ):
     del context
     journey = get_journey_or_404(db, journey_id)
-    url = str(request.base_url).rstrip("/") + "/evaluate"
+    slug = db.scalar(select(AssessmentSystem.slug).where(AssessmentSystem.id == journey.system_id))
+    url = str(request.base_url).rstrip("/") + (f"/{slug}/evaluate" if slug else "/evaluate")
     image = qrcode.make(url)
     output = io.BytesIO()
     image.save(output, format="PNG")
@@ -578,7 +581,8 @@ def recruit_attendance_qr(
     access = db.get(RecruitAttendanceAccess, journey.id)
     if not access:
         raise HTTPException(status_code=404, detail="Recruit attendance link is not configured.")
-    url = str(request.base_url).rstrip("/") + f"/recruit-attendance/{access.token}"
+    slug = db.scalar(select(AssessmentSystem.slug).where(AssessmentSystem.id == journey.system_id))
+    url = str(request.base_url).rstrip("/") + (f"/{slug}/attendance/{access.token}" if slug else f"/recruit-attendance/{access.token}")
     image = qrcode.make(url)
     output = io.BytesIO()
     image.save(output, format="PNG")
@@ -1014,7 +1018,8 @@ def rotate_public_link(
         entity_id=journey.id,
     )
     _commit(db)
-    return {"publicToken": journey.public_token, "evaluatorPath": f"/j/{journey.public_token}"}
+    slug = db.scalar(select(AssessmentSystem.slug).where(AssessmentSystem.id == journey.system_id))
+    return {"publicToken": journey.public_token, "evaluatorPath": f"/{slug}/evaluate" if slug else "/evaluate"}
 
 
 @router.post("/journeys/{journey_id}/rotate-recruit-attendance-link")
@@ -1047,7 +1052,8 @@ def rotate_recruit_attendance_link(
         entity_id=journey.id,
     )
     _commit(db)
-    return {"recruitAttendancePath": f"/recruit-attendance/{access.token}"}
+    slug = db.scalar(select(AssessmentSystem.slug).where(AssessmentSystem.id == journey.system_id))
+    return {"recruitAttendancePath": f"/{slug}/attendance/{access.token}" if slug else f"/recruit-attendance/{access.token}"}
 
 
 @router.get("/journeys/{journey_id}/dashboard")
@@ -1221,6 +1227,12 @@ def add_evaluator(
                 directory.full_name = clean_full_name
             if payload.phone_number is not None:
                 directory.phone_number = clean_phone
+        # A workspace account/directory entry is shared across all Journees.
+        # Add it to every existing attendance roster as absent without changing
+        # any already confirmed attendance state.
+        for existing_journey_id in list(db.scalars(select(Journey.id))):
+            populate_journey_evaluators_from_directory(db, existing_journey_id)
+        db.flush()
     account = db.scalar(select(UserAccount).where(func.lower(UserAccount.username) == clean_name.lower()))
     if payload.add_to_directory and not account:
         if not payload.password:
@@ -1237,9 +1249,17 @@ def add_evaluator(
     elif account:
         account.active = True
         account.evaluator_role = payload.role
-    evaluator = Evaluator(journey_id=journey.id, directory_id=directory.id if directory else None, name=clean_name, role=payload.role)
-    db.add(evaluator)
-    db.flush()
+    evaluator = db.scalar(select(Evaluator).where(
+        Evaluator.journey_id == journey.id,
+        Evaluator.directory_id == directory.id,
+    )) if directory else None
+    if evaluator:
+        evaluator.role = payload.role
+        evaluator.active = True
+    else:
+        evaluator = Evaluator(journey_id=journey.id, directory_id=directory.id if directory else None, name=clean_name, role=payload.role)
+        db.add(evaluator)
+        db.flush()
     audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name, action="evaluator.added", entity_type="evaluator", entity_id=evaluator.id, after=serialize_evaluator(evaluator))
     _commit(db)
     return serialize_evaluator(evaluator)

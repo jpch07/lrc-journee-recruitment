@@ -79,6 +79,22 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 def _request_system_id(request: Request) -> str | None:
     """Resolve the recruitment before dependencies and scoring code run."""
     with SessionLocal() as db:
+        path = request.url.path
+        workspace_match = re.match(r"^/([^/]+)(?:/|$)", path)
+        if workspace_match and workspace_match.group(1) not in {
+            "api", "static", "health", "admin", "configure", "evaluate",
+            "view", "j", "recruit-attendance",
+        }:
+            workspace_id = db.scalar(
+                select(AssessmentSystem.id)
+                .where(
+                    AssessmentSystem.slug == workspace_match.group(1),
+                    AssessmentSystem.status == "active",
+                )
+                .execution_options(bypass_recruitment_scope=True)
+            )
+            if workspace_id:
+                return workspace_id
         user_token = request.cookies.get(USER_COOKIE, "")
         if user_token:
             account_id = db.scalar(
@@ -103,7 +119,6 @@ def _request_system_id(request: Request) -> str | None:
             )
             if system_id:
                 return system_id
-        path = request.url.path
         token_match = re.match(r"^/(?:j|api/public/journeys)/([^/]+)", path)
         if token_match:
             return db.scalar(
@@ -176,7 +191,7 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
     path = request.url.path
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
-    elif path == "/" or path == "/admin" or path.startswith("/admin/") or path == "/configure" or path == "/view" or path == "/evaluate" or path.startswith("/j/") or path.startswith("/recruit-attendance/"):
+    elif path == "/" or path == "/admin" or path.startswith("/admin/") or path == "/configure" or path == "/view" or path == "/evaluate" or path.startswith("/j/") or path.startswith("/recruit-attendance/") or re.match(r"^/[^/]+(?:/|$)", path):
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -248,3 +263,60 @@ def recruit_attendance_app(token: str):
     if not active_assessment_definition().features.attendancePortal:
         raise HTTPException(status_code=404, detail="The attendance portal is disabled.")
     return FileResponse(STATIC_DIR / "recruit_attendance.html")
+
+
+def _workspace_file(workspace_slug: str, filename: str):
+    """Serve a workspace page and pin subsequent API calls to its tenant."""
+    with SessionLocal() as db:
+        system = db.scalar(
+            select(AssessmentSystem)
+            .where(AssessmentSystem.slug == workspace_slug, AssessmentSystem.status == "active")
+            .execution_options(bypass_recruitment_scope=True)
+        )
+    if not system:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
+    response = FileResponse(STATIC_DIR / filename)
+    set_system_cookie(response, system.slug)
+    return response
+
+
+@app.get("/{workspace_slug}", include_in_schema=False)
+def workspace_home(workspace_slug: str):
+    return _workspace_file(workspace_slug, "admin.html")
+
+
+@app.get("/{workspace_slug}/admin", include_in_schema=False)
+@app.get("/{workspace_slug}/admin/{path:path}", include_in_schema=False)
+def workspace_admin_app(workspace_slug: str, path: str = ""):
+    del path
+    return _workspace_file(workspace_slug, "admin.html")
+
+
+@app.get("/{workspace_slug}/configure", include_in_schema=False)
+def workspace_configurator(workspace_slug: str):
+    return _workspace_file(workspace_slug, "configurator.html")
+
+
+@app.get("/{workspace_slug}/evaluate", include_in_schema=False)
+def workspace_evaluator(workspace_slug: str):
+    return _workspace_file(workspace_slug, "evaluator.html")
+
+
+@app.get("/{workspace_slug}/view", include_in_schema=False)
+def workspace_management(workspace_slug: str):
+    return _workspace_file(workspace_slug, "viewer.html")
+
+
+@app.get("/{workspace_slug}/attendance/{token}", include_in_schema=False)
+def workspace_attendance(workspace_slug: str, token: str):
+    with SessionLocal() as db:
+        valid = db.scalar(
+            select(RecruitAttendanceAccess.journey_id)
+            .join(Journey, Journey.id == RecruitAttendanceAccess.journey_id)
+            .join(AssessmentSystem, AssessmentSystem.id == Journey.system_id)
+            .where(AssessmentSystem.slug == workspace_slug, RecruitAttendanceAccess.token == token)
+            .execution_options(bypass_recruitment_scope=True)
+        )
+    if not valid:
+        raise HTTPException(status_code=404, detail="Attendance link not found.")
+    return _workspace_file(workspace_slug, "recruit_attendance.html")

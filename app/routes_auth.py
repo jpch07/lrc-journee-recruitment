@@ -33,6 +33,7 @@ from .schemas import (
 )
 from .utils import audit
 from .assessment_runtime import active_assessment_definition, assessor_category_keys, default_assessor_category
+from .services import populate_journey_evaluators_from_directory
 from .tenant import current_system_id, select_system
 from .utils import loads
 
@@ -315,6 +316,13 @@ def create_account_record(
     )
     db.add(account)
     db.flush()
+    # The assessor directory is workspace-wide. Existing Sessions keep their
+    # own attendance state, but every newly created account must immediately be
+    # available there as an absent assessor just like accounts created from an
+    # attendance page.
+    for journey_id in list(db.scalars(select(Journey.id))):
+        populate_journey_evaluators_from_directory(db, journey_id)
+    db.flush()
     return account
 
 
@@ -518,6 +526,8 @@ def update_account(
         db.add(directory)
         db.flush()
         account.directory_id = directory.id
+        for journey_id in list(db.scalars(select(Journey.id))):
+            populate_journey_evaluators_from_directory(db, journey_id)
     if directory:
         if "full_name" in payload.model_fields_set:
             directory.full_name = " ".join((payload.full_name or "").split()) or None

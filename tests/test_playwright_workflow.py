@@ -115,7 +115,7 @@ def test_admin_create_and_mobile_layout(tmp_path):
             page.click('#workspaceNav button[data-section="settings"]')
             page.wait_for_selector("#recruitAttendanceLink")
             attendance_url = page.locator("#recruitAttendanceLink").input_value()
-            assert attendance_url.startswith(base + "/recruit-attendance/")
+            assert attendance_url.startswith(base + "/lrc-journee-recruitment-2026/attendance/")
 
             attendance_context = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
             attendance_page = attendance_context.new_page()
@@ -149,7 +149,7 @@ def test_admin_create_and_mobile_layout(tmp_path):
 
             viewer_context = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
             viewer_page = viewer_context.new_page()
-            viewer_page.goto(base + "/view", wait_until="networkidle")
+            viewer_page.goto(base + "/lrc-journee-recruitment-2026/view", wait_until="networkidle")
             viewer_page.fill('#viewerLoginForm input[name="username"]', "JP Chaaya")
             viewer_page.fill('#viewerLoginForm input[name="password"]', "browser-secret")
             viewer_page.click("#viewerLoginSubmit")

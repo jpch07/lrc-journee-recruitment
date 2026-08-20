@@ -12,7 +12,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .assessment_config import AssessmentSystemDefinition, blank_assessment_definition
+from .assessment_config import (
+    AssessmentSystemDefinition,
+    blank_assessment_definition,
+    neutralize_legacy_blank_branding,
+)
 from .assessment_service import (
     draft_definition,
     ensure_assessment_system,
@@ -68,8 +72,8 @@ def _commit(db: Session) -> None:
 
 def _payload(db: Session) -> dict:
     system = ensure_assessment_system(db)
-    published = published_definition(db, system)
-    draft = draft_definition(system)
+    published = neutralize_legacy_blank_branding(published_definition(db, system))
+    draft = neutralize_legacy_blank_branding(draft_definition(system))
     return {
         "system": {
             "id": system.id,
@@ -83,10 +87,9 @@ def _payload(db: Session) -> dict:
         "draft": draft.model_dump(mode="json"),
         "published": published.model_dump(mode="json"),
         "impact": historical_impact(db, system, draft),
-        "presets": [
-            {"key": "lrc_2026", "name": "LRC Recruitment 2026", "description": "The complete finalized LRC system."},
-            {"key": "blank", "name": "Blank assessment system", "description": "One simple activity ready to customize."},
-        ],
+        # A newly created workspace already starts from the neutral definition.
+        # Presets are intentionally not promoted in the owner experience.
+        "presets": [],
     }
 
 
@@ -105,7 +108,7 @@ def public_system_configuration(db: Session = Depends(get_db)):
         system = None
     else:
         system = ensure_assessment_system(db)
-        definition = published_definition(db, system)
+        definition = neutralize_legacy_blank_branding(published_definition(db, system))
     return {
         "name": definition.name,
         "terminology": definition.terminology.model_dump(mode="json"),

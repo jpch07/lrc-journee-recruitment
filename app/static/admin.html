@@ -3,18 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#b20d2d">
-  <title>LRC Journee Recruitment · Admin</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260811.3&theme=command-grid-2">
+  <meta name="theme-color" content="#4f46e5">
+  <title>Assessment Workspace · Admin</title>
+  <link rel="stylesheet" href="/static/styles.css?v=20260820.2&theme=workspace-routing">
 </head>
 <body class="admin-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
 
   <section id="loginView" class="login-shell hidden">
     <div class="login-card">
-      <div class="brand-mark">LRC</div>
-      <p class="eyebrow">Lebanese Red Cross</p>
-      <h1>Journee Recruitment</h1>
+      <div class="brand-mark">AS</div>
+      <p class="eyebrow">Workspace access</p>
+      <h1>Assessment Workspace</h1>
       <form id="loginForm" class="stack">
         <label>Username<div class="account-search-picker"><input name="username" id="adminUsername" autocomplete="off" required maxlength="200" placeholder="Search your name"><div id="accountUsernames" class="search-suggestions account-suggestions" role="listbox"></div></div></label>
         <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
@@ -27,15 +27,15 @@
   <div id="appView" class="hidden">
     <header class="topbar">
       <button id="menuButton" class="icon-button mobile-only" aria-label="Open menu">☰</button>
-      <button id="libraryButton" class="brand-button"><span class="brand-mark small">LRC</span><span><strong>Journee</strong><small>Recruitment admin</small></span></button>
+      <button id="libraryButton" class="brand-button"><span class="brand-mark small">AS</span><span><strong id="workspaceBrandName">Assessment Workspace</strong><small>Administration</small></span></button>
       <div id="journeyCrumb" class="journey-crumb">Journee library</div>
-      <div class="top-actions"><span id="adminName" class="muted"></span><button id="logoutButton" class="button ghost small">Log out</button></div>
+      <div class="top-actions"><a id="workspaceLibraryLink" href="/" class="button ghost small">All workspaces</a><span id="adminName" class="muted"></span><button id="logoutButton" class="button ghost small">Log out</button></div>
     </header>
 
     <main id="libraryView" class="page-shell">
       <div class="page-heading">
         <div><p class="eyebrow">Workspace</p><h1>Journee library</h1><p class="muted">Every event is saved as an independent workspace.</p></div>
-        <div class="heading-actions"><label class="checkbox-inline"><input id="showArchived" type="checkbox"> Show archived</label><a id="configureSystemButton" class="button ghost hidden" href="/configure">Configure assessment system</a><button id="createJourneyButton" class="button primary">+ New Journee</button></div>
+        <div class="heading-actions"><label class="checkbox-inline"><input id="showArchived" type="checkbox"> Show archived</label><button id="libraryPermissionsButton" class="button ghost hidden">Access & permissions</button><a id="configureSystemButton" class="button ghost hidden" href="/configure">Configure assessment system</a><button id="createJourneyButton" class="button primary">+ New Journee</button></div>
       </div>
       <div id="journeyGrid" class="journey-grid"></div>
     </main>
@@ -61,6 +61,6 @@
   <dialog id="modal" class="modal"><div id="modalBody"></div></dialog>
   <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
   <input id="hiddenFile" type="file" class="hidden">
-  <script type="module" src="/static/admin.js?v=20260817.1"></script>
+  <script type="module" src="/static/admin.js?v=20260820.2"></script>
 </body>
 </html>
