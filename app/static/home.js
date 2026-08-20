@@ -26,11 +26,11 @@ function workspaceCard(item) {
   const activity = item.activeJourneyCount
     ? `${item.activeJourneyCount} active session${item.activeJourneyCount === 1 ? "" : "s"}`
     : "No active session";
-  return `<button class="platform-workspace-card" type="button" data-workspace-id="${escapeHtml(item.id)}">
+  return `<article class="platform-workspace-card"><button class="platform-workspace-main" type="button" data-workspace-id="${escapeHtml(item.id)}">
     <span class="platform-workspace-icon" aria-hidden="true">${escapeHtml(item.name.slice(0, 1).toUpperCase())}</span>
     <span class="platform-workspace-info"><strong>${escapeHtml(item.name)}</strong><small>${item.journeyCount} session${item.journeyCount === 1 ? "" : "s"} · ${escapeHtml(activity)}</small></span>
     <span class="platform-workspace-open">Open <b aria-hidden="true">→</b></span>
-  </button>`;
+  </button><button class="platform-workspace-delete" type="button" data-delete-workspace="${escapeHtml(item.id)}" data-workspace-name="${escapeHtml(item.name)}" aria-label="Delete ${escapeHtml(item.name)}">Delete</button></article>`;
 }
 
 async function loadWorkspaces() {
@@ -40,6 +40,9 @@ async function loadWorkspaces() {
   $("#emptyWorkspaces").classList.toggle("hidden", Boolean(items.length));
   $("#workspaceList").querySelectorAll("[data-workspace-id]").forEach((button) => {
     button.onclick = () => openWorkspace(button.dataset.workspaceId, button);
+  });
+  $("#workspaceList").querySelectorAll("[data-delete-workspace]").forEach((button) => {
+    button.onclick = () => deleteWorkspace(button.dataset.deleteWorkspace, button.dataset.workspaceName, button);
   });
 }
 
@@ -59,6 +62,29 @@ async function openWorkspace(id, button) {
       headers: { "X-CSRF-Token": platformSession.csrfToken },
     });
     window.location.assign(`/${encodeURIComponent(selected.slug)}/admin`);
+  } catch (problem) {
+    button.disabled = false;
+    window.alert(problem.message);
+  }
+}
+
+async function deleteWorkspace(id, name, button) {
+  const confirmationName = window.prompt(
+    `This permanently deletes "${name}" and every session and record inside it.\n\nType the exact workspace name to continue:`,
+  );
+  if (confirmationName === null) return;
+  if (confirmationName !== name) {
+    window.alert("The workspace name did not match. Nothing was deleted.");
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api(`/api/platform/workspaces/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: { "X-CSRF-Token": platformSession.csrfToken },
+      body: { confirmation_name: confirmationName },
+    });
+    await loadWorkspaces();
   } catch (problem) {
     button.disabled = false;
     window.alert(problem.message);

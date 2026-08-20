@@ -19,6 +19,7 @@ from .assessment_config import (
 )
 from .assessment_service import (
     draft_definition,
+    ensure_unique_system_name,
     ensure_assessment_system,
     historical_impact,
     preset_definition,
@@ -140,6 +141,10 @@ def validate_configuration(
     del context
     definition = AssessmentSystemDefinition.model_validate(payload.definition)
     system = ensure_assessment_system(db)
+    try:
+        ensure_unique_system_name(db, system, definition.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="A workspace with this name already exists.") from exc
     return {"valid": True, "impact": historical_impact(db, system, definition)}
 
 
@@ -158,6 +163,8 @@ def update_draft(
     except ValueError as exc:
         if str(exc) == "stale":
             raise HTTPException(status_code=409, detail="The configuration changed elsewhere. Reload before saving.") from exc
+        if str(exc) == "duplicate_name":
+            raise HTTPException(status_code=409, detail="A workspace with this name already exists.") from exc
         raise
     audit(db, journey_id=None, actor_type="owner", actor_name=context.username,
           action="assessment_configuration.draft_saved", entity_type="assessment_system", entity_id=system.id,
@@ -214,6 +221,8 @@ def publish_configuration(
             raise HTTPException(status_code=409, detail="The configuration changed elsewhere. Reload before publishing.") from exc
         if str(exc) == "historical":
             raise HTTPException(status_code=409, detail=impact["message"]) from exc
+        if str(exc) == "duplicate_name":
+            raise HTTPException(status_code=409, detail="A workspace with this name already exists.") from exc
         raise
     audit(db, journey_id=None, actor_type="owner", actor_name=context.username,
           action="assessment_configuration.published", entity_type="assessment_system_version", entity_id=record.id,

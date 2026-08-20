@@ -1,5 +1,5 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
-import { initializeSystemUI } from "/static/system-ui.js?v=20260820.2";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260820.3";
 
 const state = {
   system: null,

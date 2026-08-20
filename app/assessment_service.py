@@ -31,6 +31,25 @@ def system_slug(value: str) -> str:
     return (slug or "assessment")[:90]
 
 
+def ensure_unique_system_name(
+    db: Session,
+    system: AssessmentSystem | None,
+    name: str,
+) -> None:
+    """Prevent new duplicate workspace names without breaking legacy duplicates."""
+    if system is not None and system.name.casefold() == name.casefold():
+        return
+    query = (
+        select(AssessmentSystem.id)
+        .where(func.lower(AssessmentSystem.name) == name.casefold())
+        .execution_options(bypass_recruitment_scope=True)
+    )
+    if system is not None:
+        query = query.where(AssessmentSystem.id != system.id)
+    if db.scalar(query.limit(1)):
+        raise ValueError("duplicate_name")
+
+
 def ensure_assessment_system(db: Session) -> AssessmentSystem:
     selected_id = current_system_id()
     query = select(AssessmentSystem)
@@ -153,6 +172,7 @@ def save_draft(
 ) -> AssessmentSystem:
     if system.version != base_version:
         raise ValueError("stale")
+    ensure_unique_system_name(db, system, definition.name)
     system.name = definition.name
     system.draft_json = _definition_json(definition)
     system.updated_by = actor_name
@@ -172,6 +192,7 @@ def publish_definition(
 ) -> AssessmentSystemVersion:
     if system.version != base_version:
         raise ValueError("stale")
+    ensure_unique_system_name(db, system, definition.name)
     impact = historical_impact(db, system, definition)
     if impact["blocked"]:
         raise ValueError("historical")

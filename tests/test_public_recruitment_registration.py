@@ -83,6 +83,72 @@ def test_one_owner_can_create_list_and_open_multiple_workspaces(client):
     assert client.get("/api/auth/session").json()["recruitment"]["name"] == "Volunteer Selection"
 
 
+def test_workspace_names_are_unique_and_owner_can_delete_workspace(client):
+    session = _register(client)
+    created = _create_workspace(client, session["csrfToken"], "Admissions 2028")
+    selected = client.post(
+        f"/api/platform/workspaces/{created['id']}/select",
+        headers={"X-CSRF-Token": session["csrfToken"]},
+    ).json()
+    journey = client.post(
+        "/api/admin/journeys",
+        json={"name": "Deletion cascade", "event_date": "2028-02-01"},
+        headers={"X-CSRF-Token": selected["workspaceCsrfToken"]},
+    )
+    assert journey.status_code == 200, journey.text
+    duplicate = client.post(
+        "/api/platform/workspaces",
+        json={"name": "  admissions   2028  "},
+        headers={"X-CSRF-Token": session["csrfToken"]},
+    )
+    assert duplicate.status_code == 409
+    assert duplicate.json()["detail"] == "A workspace with this name already exists."
+
+    wrong_confirmation = client.request(
+        "DELETE",
+        f"/api/platform/workspaces/{created['id']}",
+        json={"confirmation_name": "Wrong name"},
+        headers={"X-CSRF-Token": session["csrfToken"]},
+    )
+    assert wrong_confirmation.status_code == 422
+    assert len(client.get("/api/platform/workspaces").json()) == 1
+
+    deleted = client.request(
+        "DELETE",
+        f"/api/platform/workspaces/{created['id']}",
+        json={"confirmation_name": "Admissions 2028"},
+        headers={"X-CSRF-Token": session["csrfToken"]},
+    )
+    assert deleted.status_code == 200, deleted.text
+    assert deleted.json()["deleted"]["slug"] == "admissions-2028"
+    assert client.get("/api/platform/workspaces").json() == []
+    with SessionLocal() as db:
+        assert db.scalar(
+            select(AssessmentSystem.id)
+            .where(AssessmentSystem.id == created["id"])
+            .execution_options(bypass_recruitment_scope=True)
+        ) is None
+
+
+def test_configurator_cannot_rename_workspace_to_an_existing_name(client):
+    session = _register(client)
+    first = _create_workspace(client, session["csrfToken"], "Existing Workspace")
+    second = _create_workspace(client, session["csrfToken"], "Workspace To Rename")
+    selected = client.post(
+        f"/api/platform/workspaces/{second['id']}/select",
+        headers={"X-CSRF-Token": session["csrfToken"]},
+    ).json()
+    payload = client.get("/api/configurator").json()
+    payload["draft"]["name"] = first["name"].lower()
+    response = client.put(
+        "/api/configurator/draft",
+        json={"definition": payload["draft"], "base_version": payload["system"]["version"]},
+        headers={"X-CSRF-Token": selected["workspaceCsrfToken"]},
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "A workspace with this name already exists."
+
+
 def test_workspace_owners_are_isolated(client):
     first_session = _register(client, "First Owner", "first-owner-pass")
     private_workspace = _create_workspace(client, first_session["csrfToken"], "Private Recruitment")

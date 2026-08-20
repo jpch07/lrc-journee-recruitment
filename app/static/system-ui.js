@@ -14,8 +14,8 @@ function escaped(value) {
 }
 
 function darken(hex, amount = 34) {
-  const clean = String(hex || "#b20d2d").replace("#", "");
-  if (!/^[0-9a-f]{6}$/i.test(clean)) return "#8b0b22";
+  const clean = String(hex || "#4f46e5").replace("#", "");
+  if (!/^[0-9a-f]{6}$/i.test(clean)) return "#3730a3";
   const parts = [0, 2, 4].map(index => Math.max(0, parseInt(clean.slice(index, index + 2), 16) - amount));
   return `#${parts.map(value => value.toString(16).padStart(2, "0")).join("")}`;
 }
