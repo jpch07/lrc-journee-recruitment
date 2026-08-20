@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+from contextvars import ContextVar
+from collections.abc import Iterator, Mapping, Sequence, Set
+from typing import Any
 
 
-ACTIVITY_ORDER = ("sport", "escape_room", "negotiation", "skills", "simulation")
+_LRC_ACTIVITY_ORDER = ["sport", "escape_room", "negotiation", "skills", "simulation"]
 # Escape Room and Negotiation are constrained by the published room plan.
 # Skills is generated globally after Negotiation, and Simulation copies Skills.
-ROOM_ACTIVITIES = {"escape_room", "negotiation"}
-BEHAVIORAL_DIMENSIONS = ("willingness", "adaptability", "respect", "intelligence")
-DIMENSION_ORDER = (*BEHAVIORAL_DIMENSIONS, "application", "physical_ability")
-DIMENSION_NAMES = {
+_LRC_ROOM_ACTIVITIES = {"escape_room", "negotiation"}
+_LRC_BEHAVIORAL_DIMENSIONS = ["willingness", "adaptability", "respect", "intelligence"]
+_LRC_DIMENSION_ORDER = [*_LRC_BEHAVIORAL_DIMENSIONS, "application", "physical_ability"]
+_LRC_DIMENSION_NAMES = {
     "willingness": "Willingness",
     "respect": "Respect",
     "adaptability": "Adaptability",
@@ -18,7 +21,7 @@ DIMENSION_NAMES = {
     "application": "Application",
     "physical_ability": "Physical Ability",
 }
-DIMENSION_ACTIVITIES = ("escape_room", "negotiation", "simulation")
+_LRC_DIMENSION_ACTIVITIES = ["escape_room", "negotiation", "simulation"]
 ONE_SIXTH = Decimal("1") / Decimal("6")
 
 
@@ -42,7 +45,7 @@ class ActivityRubric:
     kind: str = "weighted"
 
 
-RUBRICS: dict[str, ActivityRubric] = {
+_LRC_RUBRICS: dict[str, ActivityRubric] = {
     "sport": ActivityRubric(
         code="sport",
         name="Sport",
@@ -113,12 +116,75 @@ RUBRICS: dict[str, ActivityRubric] = {
 }
 
 
+_runtime_data: ContextVar[dict[str, Any] | None] = ContextVar("assessment_rubric_runtime", default=None)
+_defaults = {
+    "activity_order": _LRC_ACTIVITY_ORDER,
+    "room_activities": _LRC_ROOM_ACTIVITIES,
+    "behavioral_dimensions": _LRC_BEHAVIORAL_DIMENSIONS,
+    "dimension_order": _LRC_DIMENSION_ORDER,
+    "dimension_names": _LRC_DIMENSION_NAMES,
+    "dimension_activities": _LRC_DIMENSION_ACTIVITIES,
+    "rubrics": _LRC_RUBRICS,
+}
+
+
+def set_runtime_data(data: dict[str, Any]):
+    return _runtime_data.set(data)
+
+
+def reset_runtime_data(token) -> None:
+    _runtime_data.reset(token)
+
+
+def _runtime_value(key: str):
+    return (_runtime_data.get() or _defaults)[key]
+
+
+class _SequenceProxy(Sequence):
+    def __init__(self, key: str): self.key = key
+    def __getitem__(self, index): return _runtime_value(self.key)[index]
+    def __len__(self) -> int: return len(_runtime_value(self.key))
+    def __iter__(self) -> Iterator: return iter(_runtime_value(self.key))
+    def __contains__(self, value) -> bool: return value in _runtime_value(self.key)
+    def index(self, value, *args) -> int: return _runtime_value(self.key).index(value, *args)
+
+
+class _SetProxy(Set):
+    def __init__(self, key: str): self.key = key
+    def __contains__(self, value) -> bool: return value in _runtime_value(self.key)
+    def __len__(self) -> int: return len(_runtime_value(self.key))
+    def __iter__(self) -> Iterator: return iter(_runtime_value(self.key))
+
+
+class _MappingProxy(Mapping):
+    def __init__(self, key: str): self.key = key
+    def __getitem__(self, item): return _runtime_value(self.key)[item]
+    def __len__(self) -> int: return len(_runtime_value(self.key))
+    def __iter__(self) -> Iterator: return iter(_runtime_value(self.key))
+    def get(self, item, default=None): return _runtime_value(self.key).get(item, default)
+    def values(self): return _runtime_value(self.key).values()
+    def items(self): return _runtime_value(self.key).items()
+
+
+ACTIVITY_ORDER = _SequenceProxy("activity_order")
+ROOM_ACTIVITIES = _SetProxy("room_activities")
+BEHAVIORAL_DIMENSIONS = _SequenceProxy("behavioral_dimensions")
+DIMENSION_ORDER = _SequenceProxy("dimension_order")
+DIMENSION_NAMES = _MappingProxy("dimension_names")
+DIMENSION_ACTIVITIES = _SequenceProxy("dimension_activities")
+RUBRICS = _MappingProxy("rubrics")
+
+
 def public_rubric(activity_code: str) -> dict:
+    from .assessment_runtime import activity_definition
     rubric = RUBRICS[activity_code]
+    configured = activity_definition(activity_code)
+    configured_by_key = {item.key: item for item in configured.criteria} if configured else {}
     return {
         "code": rubric.code,
         "name": rubric.name,
         "kind": rubric.kind,
+        "commentsEnabled": configured.commentsEnabled if configured else True,
         "criteria": [
             {
                 "key": item.key,
@@ -129,6 +195,9 @@ def public_rubric(activity_code: str) -> dict:
                 "inputType": item.input_type,
                 "target": float(item.target) if item.target is not None else None,
                 "unit": item.unit,
+                "minimum": float(configured_by_key[item.key].minimum) if item.key in configured_by_key else 0,
+                "maximum": float(configured_by_key[item.key].maximum) if item.key in configured_by_key else 5,
+                "step": float(configured_by_key[item.key].step) if item.key in configured_by_key else 0.1,
             }
             for item in rubric.criteria
         ],
@@ -137,19 +206,26 @@ def public_rubric(activity_code: str) -> dict:
 
 def evaluator_rubric(activity_code: str) -> dict:
     """Expose only form-building metadata; scoring weights and Sport targets stay private."""
+    from .assessment_runtime import activity_definition
     rubric = RUBRICS[activity_code]
+    configured = activity_definition(activity_code)
+    configured_by_key = {item.key: item for item in configured.criteria} if configured else {}
     return {
         "code": rubric.code,
         "name": rubric.name,
         "kind": rubric.kind,
+        "commentsEnabled": configured.commentsEnabled if configured else True,
         "criteria": [
             {
                 "key": item.key,
-                "dimension": item.dimension,
+                "dimension": item.dimension if not configured or configured.evaluatorShowsDimensions else "",
                 "name": item.name,
-                "explanation": item.explanation,
+                "explanation": item.explanation if not configured or configured.evaluatorShowsDescriptions else "",
                 "inputType": item.input_type,
                 "unit": item.unit,
+                "minimum": float(configured_by_key[item.key].minimum) if item.key in configured_by_key else 0,
+                "maximum": float(configured_by_key[item.key].maximum) if item.key in configured_by_key else 5,
+                "step": float(configured_by_key[item.key].step) if item.key in configured_by_key else 0.1,
             }
             for item in rubric.criteria
         ],

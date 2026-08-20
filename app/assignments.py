@@ -126,6 +126,7 @@ def _primary_matching(
     evaluators: list[EvaluatorCandidate],
     past_pairs: set[tuple[str, str]],
     seed: str,
+    preferred_roles: list[str],
 ) -> tuple[list[Pairing], list[str], set[str]]:
     warnings: list[str] = []
     if not recruits:
@@ -156,7 +157,8 @@ def _primary_matching(
         for recruit_index, recruit in enumerate(recruits):
             repeated = (evaluator.id, recruit.id) in past_pairs
             repeat_cost = 1_000_000 if repeated else 0
-            role_cost = 5_000 if evaluator.role.lower() != "overall" else 0
+            role_order = {role.casefold(): index for index, role in enumerate(preferred_roles)}
+            role_cost = role_order.get(evaluator.role.casefold(), len(role_order)) * 5_000
             tie_cost = _stable_tie(seed, "primary", evaluator.id, recruit.id)
             edge = flow_graph.add_edge(node, recruit_start + recruit_index, 1, repeat_cost + role_cost + tie_cost)
             edge_lookup.append((edge, evaluator, recruit))
@@ -199,6 +201,7 @@ def _secondary_matching(
     past_pairs: set[tuple[str, str]],
     prior_secondary_counts: dict[str, int],
     seed: str,
+    preferred_roles: list[str],
 ) -> list[Pairing]:
     used_evaluators = {pair.evaluator_id for pair in primary}
     primary_pairs = {(pair.evaluator_id, pair.recruit_id) for pair in primary}
@@ -221,8 +224,9 @@ def _secondary_matching(
                 continue
             repeated = (evaluator.id, recruit.id) in past_pairs
             repeat_cost = 1_000_000 if repeated else 0
-            # After coverage and repeat avoidance, prefer Dossards for slot 2.
-            role_cost = 100_000 if evaluator.role.lower() != "dossard" else 0
+            # After coverage and repeat avoidance, use the configured secondary-category order.
+            role_order = {role.casefold(): index for index, role in enumerate(preferred_roles)}
+            role_cost = role_order.get(evaluator.role.casefold(), len(role_order)) * 100_000
             fairness_cost = prior_secondary_counts.get(recruit.id, 0) * 10_000
             tie_cost = _stable_tie(seed, "secondary", evaluator.id, recruit.id)
             edge = flow_graph.add_edge(evaluator_node, recruit_start + recruit_index, 1, repeat_cost + role_cost + fairness_cost + tie_cost)
@@ -258,6 +262,9 @@ def generate_pairings(
     past_pairs: set[tuple[str, str]] | None = None,
     prior_secondary_counts: dict[str, int] | None = None,
     seed: str,
+    primary_role_order: list[str] | None = None,
+    secondary_role_order: list[str] | None = None,
+    maximum_assessors: int = 2,
 ) -> PairingResult:
     recruits_list = list(recruits)
     evaluators_list = list(evaluators)
@@ -265,6 +272,8 @@ def generate_pairings(
     prior_secondary_counts = prior_secondary_counts or {}
     warnings: list[str] = []
     assignments: list[Pairing] = []
+    primary_role_order = primary_role_order or ["overall", "dossard"]
+    secondary_role_order = secondary_role_order or ["dossard", "overall"]
 
     if room_based:
         rooms = sorted({item.room_number for item in recruits_list if item.room_number is not None})
@@ -272,11 +281,11 @@ def generate_pairings(
             room_recruits = [item for item in recruits_list if item.room_number == room_number]
             room_evaluators = [item for item in evaluators_list if item.room_number == room_number]
             primary, scope_warnings, _used = _primary_matching(
-                room_recruits, room_evaluators, past_pairs, f"{seed}:room:{room_number}"
+                room_recruits, room_evaluators, past_pairs, f"{seed}:room:{room_number}", primary_role_order
             )
             assignments.extend(primary)
             warnings.extend(f"Room {room_number}: {warning}" for warning in scope_warnings)
-            if len(room_evaluators) >= len(room_recruits):
+            if maximum_assessors >= 2 and len(room_evaluators) >= len(room_recruits):
                 assignments.extend(
                     _secondary_matching(
                         room_recruits,
@@ -285,16 +294,20 @@ def generate_pairings(
                         past_pairs,
                         prior_secondary_counts,
                         f"{seed}:room:{room_number}",
+                        secondary_role_order,
                     )
                 )
     else:
-        primary, scope_warnings, _used = _primary_matching(recruits_list, evaluators_list, past_pairs, seed)
+        primary, scope_warnings, _used = _primary_matching(
+            recruits_list, evaluators_list, past_pairs, seed, primary_role_order
+        )
         assignments.extend(primary)
         warnings.extend(scope_warnings)
-        if len(evaluators_list) >= len(recruits_list):
+        if maximum_assessors >= 2 and len(evaluators_list) >= len(recruits_list):
             assignments.extend(
                 _secondary_matching(
-                    recruits_list, evaluators_list, primary, past_pairs, prior_secondary_counts, seed
+                    recruits_list, evaluators_list, primary, past_pairs, prior_secondary_counts, seed,
+                    secondary_role_order,
                 )
             )
 
@@ -310,6 +323,7 @@ def generate_room_plan(
     mandatory_rooms: dict[str, int],
     room_count: int,
     seed: str,
+    primary_role_order: list[str] | None = None,
 ) -> RoomPlanResult:
     recruits_list = list(recruits)
     evaluators_list = list(evaluators)
@@ -341,8 +355,10 @@ def generate_room_plan(
 
     remaining = [item for item in evaluators_list if item.id not in evaluator_rooms]
     randomizer.shuffle(remaining)
-    # Place Overall evaluators first so the scoring function can spread them across rooms.
-    remaining.sort(key=lambda item: 0 if item.role.lower() == "overall" else 1)
+    # Place the configured primary categories first so they are spread across rooms.
+    primary_role_order = primary_role_order or ["overall", "dossard"]
+    role_order = {role.casefold(): index for index, role in enumerate(primary_role_order)}
+    remaining.sort(key=lambda item: role_order.get(item.role.casefold(), len(role_order)))
 
     recruit_count_by_room = {
         room: sum(1 for value in recruit_rooms.values() if value == room)
@@ -352,13 +368,17 @@ def generate_room_plan(
     def placement_score(evaluator: EvaluatorCandidate, room: int) -> tuple[float, float, int]:
         assigned = [evaluator_by_id[item_id] for item_id, value in evaluator_rooms.items() if value == room]
         evaluator_count = len(assigned)
-        overall_count = sum(1 for item in assigned if item.role.lower() == "overall")
+        primary_count = sum(
+            1 for item in assigned
+            if item.role.casefold() == primary_role_order[0].casefold()
+        )
         recruit_count = recruit_count_by_room[room]
         primary_deficit = max(recruit_count - evaluator_count, 0)
-        # Larger deficits are preferred; Overall evaluators also prefer rooms with lower proportional Overall coverage.
-        overall_ratio = overall_count / max(recruit_count, 1)
+        # Larger deficits are preferred; first-priority assessors are spread proportionally.
+        primary_ratio = primary_count / max(recruit_count, 1)
         balance_ratio = evaluator_count / max(recruit_count, 1)
-        return (-primary_deficit, overall_ratio if evaluator.role.lower() == "overall" else balance_ratio, room)
+        is_first_priority = evaluator.role.casefold() == primary_role_order[0].casefold()
+        return (-primary_deficit, primary_ratio if is_first_priority else balance_ratio, room)
 
     for evaluator in remaining:
         selected_room = min(range(1, room_count + 1), key=lambda room: placement_score(evaluator, room))

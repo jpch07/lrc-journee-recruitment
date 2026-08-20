@@ -1,4 +1,7 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260810.1";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260819.1";
+
+// The LRC preset still renders the proven type="number" min="0" max="5" rating control.
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const host = $("#evalHost");
@@ -157,7 +160,7 @@ function renderForm(payload) {
     <section class="form-recruit">${task.photoUrl ? `<button type="button" class="photo-zoom-trigger" data-photo-viewer data-photo-url="${task.photoUrl}" data-photo-name="${h(task.recruitName)}"><img class="avatar" src="${task.photoUrl}" alt="${h(task.recruitName)}"></button>` : `<span class="avatar placeholder">${h(task.recruitName[0])}</span>`}<div><p class="eyebrow" style="color:#ffc8d4">${h(activity.name)} evaluation</p><h2>${h(task.recruitName)}</h2><small>${h(state.home.evaluator.name)}${task.roomNumber ? ` · Room ${task.roomNumber}` : ""}</small></div></section>
     <div class="panel" style="margin:0"><div class="panel-header"><span><strong id="completionCount">0/${rubric.criteria.length}</strong> criteria complete</span><span class="status-pill ${activity.status}">${h(statusLabel(activity.status))}</span></div>${locked ? `<div class="warning-box">This activity is closed. The evaluation is read-only.</div>` : ""}<p class="muted">Grade every criterion. Explanations describe the behavior being assessed.</p></div>
     ${rubric.criteria.map((criterion) => criterionField(criterion, rubric.kind, payload, locked)).join("")}
-    <section class="criterion-card"><label>Comments (optional)<textarea name="comments" ${locked ? "disabled" : ""} placeholder="Activity-specific observations">${h(payload.comments || "")}</textarea></label></section>
+    ${rubric.commentsEnabled === false ? "" : `<section class="criterion-card"><label>Comments (optional)<textarea name="comments" ${locked ? "disabled" : ""} placeholder="Activity-specific observations">${h(payload.comments || "")}</textarea></label></section>`}
     <p id="draftState" class="draft-state">${locked ? "Locked by admin" : "Drafts save locally and to the server."}</p>
     <div class="eval-form-actions"><button type="button" class="button ghost" id="backHome">Back</button><button type="submit" class="button primary" ${locked ? "disabled" : ""}>${task.submission && ["submitted", "locked"].includes(task.submission.status) ? `Update ${h(activity.name)} evaluation` : `Submit ${h(activity.name)} evaluation`}</button></div>
   </form>`;
@@ -198,8 +201,11 @@ function criterionField(criterion, kind, payload, locked) {
     ? `<input name="${criterion.key}" type="number" min="0" step="1" inputmode="numeric" value="${h(value)}" ${locked ? "disabled" : ""} required>`
     : criterion.inputType === "duration"
       ? durationPickerHtml(criterion.key, value, locked)
-      : `<input class="grade-input" name="${criterion.key}" type="number" min="0" max="5" step="0.1" inputmode="decimal" value="${h(value)}" placeholder="0.0 to 5.0" ${locked ? "disabled" : ""} required>`;
-  return `<section class="criterion-card"><span class="dimension-tag">${h(criterion.dimension)}</span><h3>${h(criterion.name)}</h3><p>${h(criterion.explanation)}</p><label>${kind === "sport" ? criterion.inputType === "integer" ? "Result (repetitions)" : "Duration" : "Grade /5"}${input}</label></section>`;
+      : criterion.inputType === "number"
+        ? `<input name="${criterion.key}" type="number" min="0" step="any" inputmode="decimal" value="${h(value)}" ${locked ? "disabled" : ""} required>`
+        : `<input class="grade-input" name="${criterion.key}" type="number" min="${criterion.minimum ?? 0}" max="${criterion.maximum ?? 5}" step="${criterion.step ?? .1}" inputmode="decimal" value="${h(value)}" placeholder="${criterion.minimum ?? 0} to ${criterion.maximum ?? 5}" ${locked ? "disabled" : ""} required>`;
+  const label = criterion.inputType === "duration" ? "Duration" : criterion.inputType === "integer" ? "Result (whole number)" : criterion.inputType === "number" ? "Result" : `Grade /${criterion.maximum ?? 5}`;
+  return `<section class="criterion-card">${criterion.dimension ? `<span class="dimension-tag">${h(criterion.dimension)}</span>` : ""}<h3>${h(criterion.name)}</h3>${criterion.explanation ? `<p>${h(criterion.explanation)}</p>` : ""}<label>${label}${input}</label></section>`;
 }
 
 function completedCount() {
@@ -303,4 +309,4 @@ $("#evalLogout").onclick = async () => {
   await showLanding();
 };
 
-initialize();
+initializeSystemUI().catch(() => {}).finally(initialize);

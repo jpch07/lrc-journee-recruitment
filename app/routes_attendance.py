@@ -35,6 +35,7 @@ from .schemas import (
     RecruitFromDirectoryRequest,
 )
 from .recruit_directory import create_recruit_from_directory, ensure_recruit_directory
+from .assessment_runtime import active_assessment_definition
 from .services import (
     get_recruit_or_404,
     process_photo,
@@ -204,6 +205,8 @@ def recruit_attendance_directory(
     db: Session = Depends(get_db),
 ):
     _session_journey(db, context)
+    if not active_assessment_definition().participants.linkedDirectoryEnabled:
+        return {"items": [], "syncedAt": None, "stale": False, "lastError": ""}
     return ensure_recruit_directory(db)
 
 
@@ -216,6 +219,8 @@ def add_recruit_from_attendance(
 ):
     require_csrf(request, context.csrf_token)
     journey = _session_journey(db, context)
+    if not active_assessment_definition().participants.linkedDirectoryEnabled:
+        raise HTTPException(status_code=409, detail="The linked participant directory is disabled.")
     recruit = create_recruit_from_directory(db, journey.id, payload.directory_id)
     audit(
         db,

@@ -34,6 +34,7 @@ class Journey(Base):
     __tablename__ = "journeys"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     event_date: Mapped[date] = mapped_column(Date, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
@@ -44,6 +45,35 @@ class Journey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AssessmentSystem(Base):
+    __tablename__ = "assessment_systems"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    slug: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    owner_platform_account_id: Mapped[str | None] = mapped_column(ForeignKey("platform_accounts.id", ondelete="SET NULL"), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    published_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    draft_json: Mapped[str] = mapped_column(Text, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_by: Mapped[str] = mapped_column(String(200), nullable=False, default="System")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class AssessmentSystemVersion(Base):
+    __tablename__ = "assessment_system_versions"
+    __table_args__ = (UniqueConstraint("system_id", "version", name="uq_assessment_system_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition_json: Mapped[str] = mapped_column(Text, nullable=False)
+    change_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    published_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ActivityState(Base):
@@ -98,9 +128,11 @@ class Recruit(Base):
 
 class RecruitDirectory(Base):
     __tablename__ = "recruit_directory"
+    __table_args__ = (UniqueConstraint("system_id", "source_key", name="uq_recruit_directory_system_source"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    source_key: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
+    source_key: Mapped[str] = mapped_column(String(64), nullable=False)
     source_row: Mapped[int] = mapped_column(Integer, nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     phone_number: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -116,6 +148,7 @@ class RecruitDirectoryState(Base):
     __tablename__ = "recruit_directory_state"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default="google_sheet")
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
     source_url: Mapped[str] = mapped_column(String(500), nullable=False)
     synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -124,9 +157,11 @@ class RecruitDirectoryState(Base):
 
 class EvaluatorDirectory(Base):
     __tablename__ = "evaluator_directory"
+    __table_args__ = (UniqueConstraint("system_id", "name", name="uq_evaluator_directory_system_name"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    name: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
     default_role: Mapped[str] = mapped_column(String(20), nullable=False, default="dossard")
     full_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     phone_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -136,9 +171,12 @@ class EvaluatorDirectory(Base):
 
 class UserAccount(Base):
     __tablename__ = "user_accounts"
+    __table_args__ = (UniqueConstraint("system_id", "username", name="uq_user_account_system_username"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
-    username: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
+    platform_account_id: Mapped[str | None] = mapped_column(ForeignKey("platform_accounts.id", ondelete="SET NULL"), nullable=True)
+    username: Mapped[str] = mapped_column(String(200), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
     managed_password: Mapped[str | None] = mapped_column(String(500), nullable=True)
     directory_id: Mapped[str | None] = mapped_column(ForeignKey("evaluator_directory.id"), nullable=True, unique=True)
@@ -146,11 +184,34 @@ class UserAccount(Base):
     is_owner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     can_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     can_results: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    can_evaluate: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class PlatformAccount(Base):
+    __tablename__ = "platform_accounts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    username: Mapped[str] = mapped_column(String(200), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(500), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class PlatformSession(Base):
+    __tablename__ = "platform_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("platform_accounts.id", ondelete="CASCADE"), nullable=False)
+    csrf_token: Mapped[str] = mapped_column(String(80), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class JourneyPermission(Base):
@@ -427,6 +488,7 @@ class AuditEvent(Base):
     __table_args__ = (Index("ix_audit_journey_created", "journey_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
     journey_id: Mapped[str | None] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=True)
     actor_type: Mapped[str] = mapped_column(String(20), nullable=False)
     actor_name: Mapped[str] = mapped_column(String(200), nullable=False)

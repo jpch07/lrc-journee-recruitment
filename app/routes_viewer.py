@@ -13,7 +13,8 @@ from .auth import UserContext, require_csrf, require_results
 from .db import get_db
 from .models import Evaluator, Journey, MandatoryRoomEvaluator, Recruit
 from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
-from .scoring import competition_ranks
+from .scoring import configured_ranks
+from .assessment_runtime import active_assessment_definition
 from .report_exports import build_management_report_workbook, save_management_report
 from .routes_admin import (
     _activity_states,
@@ -46,9 +47,12 @@ def _journey_payload(db: Session, journey: Journey) -> dict:
         ))
     }
     evaluators = []
-    for item in db.scalars(select(Evaluator).where(
+    evaluator_items = list(db.scalars(select(Evaluator).where(
         Evaluator.journey_id == journey.id, Evaluator.active.is_(True)
-    ).order_by((Evaluator.role == "dossard"), func.lower(Evaluator.name))):
+    )))
+    category_order = {item.key: item.primaryPriority for item in active_assessment_definition().assessors.categories}
+    evaluator_items.sort(key=lambda item: (category_order.get(item.role, 999), item.name.casefold()))
+    for item in evaluator_items:
         payload = serialize_evaluator(item)
         payload["mandatoryRoom"] = mandatory_rooms.get(item.id)
         evaluators.append(payload)
@@ -116,13 +120,13 @@ def _aggregate_results(snapshots: list[tuple[Journey, dict]]) -> dict:
             rows.append(row)
 
     overall_inputs = [(row["profileKey"], Decimal(str(row["overallScore"]))) for row in rows]
-    overall_ranks = competition_ranks(overall_inputs)
+    overall_ranks = configured_ranks(overall_inputs)
     activity_ranks = {
-        code: competition_ranks([(row["profileKey"], Decimal(str(row["activities"][code]["score"]))) for row in rows])
+        code: configured_ranks([(row["profileKey"], Decimal(str(row["activities"][code]["score"]))) for row in rows])
         for code in ACTIVITY_ORDER
     }
     dimension_ranks = {
-        code: competition_ranks([(row["profileKey"], Decimal(str(row["dimensions"][code]["score"]))) for row in rows])
+        code: configured_ranks([(row["profileKey"], Decimal(str(row["dimensions"][code]["score"]))) for row in rows])
         for code in DIMENSION_ORDER
     }
     for row in rows:
@@ -136,10 +140,13 @@ def _aggregate_results(snapshots: list[tuple[Journey, dict]]) -> dict:
     def average(values: list[float]) -> float:
         return float(sum((Decimal(str(value)) for value in values), Decimal("0")) / Decimal(len(values))) if values else 0.0
 
+    definition = active_assessment_definition()
     return {
         "journeyId": None,
         "formula": "(Willingness + Adaptability + Respect + Intelligence + Application + Physical Ability + General) × 20 / 7",
-        "dimensionNames": DIMENSION_NAMES,
+        "scoreMaximum": float(definition.scoring.officialMaximum),
+        "dimensionNames": dict(DIMENSION_NAMES),
+        "performanceBands": [item.model_dump(mode="json") for item in definition.scoring.bands],
         "dimensionAverages": {code: average([row["dimensions"][code]["score"] for row in rows]) for code in DIMENSION_ORDER},
         "activityAverages": {code: average([row["activities"][code]["score"] for row in rows]) for code in ACTIVITY_ORDER},
         "rows": rows,

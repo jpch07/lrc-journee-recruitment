@@ -17,19 +17,23 @@ from .auth import (
     require_csrf,
     require_owner,
     require_user,
+    set_system_cookie,
     verify_password,
 )
 from .db import get_db
 from .config import settings
-from .models import AuditEvent, Evaluator, EvaluatorDirectory, Journey, JourneyPermission, UserAccount, UserSession, utcnow
+from .models import AssessmentSystem, AuditEvent, Evaluator, EvaluatorDirectory, Journey, JourneyPermission, PlatformAccount, UserAccount, UserSession, utcnow
 from .schemas import (
     AccountCreateRequest,
     AccountLoginRequest,
     AccountUpdateRequest,
+    RecruitmentSelectionRequest,
     PasswordChangeRequest,
     PasswordResetRequest,
 )
 from .utils import audit
+from .assessment_runtime import active_assessment_definition, assessor_category_keys, default_assessor_category
+from .tenant import current_system_id, select_system
 from .utils import loads
 
 
@@ -67,6 +71,7 @@ def account_payload(
 ) -> dict:
     if directory is None and account.directory_id:
         directory = db.get(EvaluatorDirectory, account.directory_id)
+    system = db.get(AssessmentSystem, account.system_id)
     payload = {
         "id": account.id,
         "username": account.username,
@@ -75,11 +80,13 @@ def account_payload(
         "isOwner": account.is_owner,
         "canAdmin": account.can_admin,
         "canResults": account.can_results,
+        "canEvaluate": account.can_evaluate,
         "active": account.active,
         "mustChangePassword": account.must_change_password,
         "version": account.version,
         "attendanceJourneyIds": _permission_ids(db, account.id) if include_permissions else [],
         "testToolsEnabled": settings.test_tools_enabled,
+        "recruitment": {"id": system.id, "name": system.name, "slug": system.slug} if system else None,
     }
     if include_managed_password:
         payload["managedPassword"] = account.managed_password
@@ -90,7 +97,7 @@ def account_payload(
 
 def simple_managed_password(username: str) -> str:
     normalized = unicodedata.normalize("NFKD", username).casefold()
-    compact = "".join(character for character in normalized if character.isalnum()) or "lrcuser"
+    compact = "".join(character for character in normalized if character.isalnum()) or "user"
     return f"{compact}{secrets.randbelow(900) + 100}"
 
 
@@ -101,8 +108,65 @@ def _current_account(db: Session, context: UserContext) -> UserAccount:
     return account
 
 
+def _sync_platform_owner_password(db: Session, account: UserAccount) -> None:
+    """Keep the owner's one global password identical in every owned workspace."""
+    if not account.platform_account_id:
+        return
+    platform = db.scalar(
+        select(PlatformAccount)
+        .where(PlatformAccount.id == account.platform_account_id)
+        .execution_options(bypass_recruitment_scope=True)
+    )
+    if not platform:
+        return
+    platform.password_hash = account.password_hash
+    platform.version += 1
+    linked_owners = list(db.scalars(
+        select(UserAccount)
+        .where(
+            UserAccount.platform_account_id == platform.id,
+            UserAccount.is_owner.is_(True),
+        )
+        .execution_options(bypass_recruitment_scope=True)
+    ))
+    for linked_owner in linked_owners:
+        linked_owner.password_hash = account.password_hash
+
+
+def _system_by_slug(db: Session, slug: str) -> AssessmentSystem | None:
+    return db.scalar(
+        select(AssessmentSystem)
+        .where(func.lower(AssessmentSystem.slug) == slug.strip().casefold())
+        .execution_options(bypass_recruitment_scope=True)
+    )
+
+
+@router.get("/recruitment")
+def selected_recruitment(db: Session = Depends(get_db)):
+    system_id = current_system_id()
+    if not system_id:
+        return {"selected": False}
+    system = db.get(AssessmentSystem, system_id)
+    return {"selected": True, "id": system.id, "name": system.name, "slug": system.slug} if system else {"selected": False}
+
+
+@router.post("/select-recruitment")
+def select_recruitment(payload: RecruitmentSelectionRequest, response: Response, db: Session = Depends(get_db)):
+    system = _system_by_slug(db, payload.recruitment)
+    if not system or system.status != "active":
+        raise HTTPException(status_code=404, detail="Recruitment not found.")
+    set_system_cookie(response, system.slug)
+    return {"id": system.id, "name": system.name, "slug": system.slug}
+
+
 @router.get("/usernames")
-def usernames(db: Session = Depends(get_db)):
+def usernames(recruitment: str | None = None, db: Session = Depends(get_db)):
+    system_id = current_system_id()
+    if not system_id and recruitment:
+        system = _system_by_slug(db, recruitment)
+        system_id = system.id if system else None
+    if not system_id:
+        return []
     return [
         {
             "username": account.username,
@@ -112,8 +176,9 @@ def usernames(db: Session = Depends(get_db)):
         for account, directory in db.execute(
             select(UserAccount, EvaluatorDirectory)
             .outerjoin(EvaluatorDirectory, UserAccount.directory_id == EvaluatorDirectory.id)
-            .where(UserAccount.active.is_(True))
+            .where(UserAccount.system_id == system_id, UserAccount.active.is_(True))
             .order_by(func.lower(UserAccount.username))
+            .execution_options(bypass_recruitment_scope=True)
         )
     ]
 
@@ -122,12 +187,32 @@ def usernames(db: Session = Depends(get_db)):
 def login(payload: AccountLoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
     enforce_login_rate_limit(request)
     username = " ".join(payload.username.split())
-    account = db.scalar(select(UserAccount).where(func.lower(UserAccount.username) == username.lower()))
+    system = _system_by_slug(db, payload.recruitment) if payload.recruitment else None
+    selected_id = system.id if system else current_system_id()
+    if selected_id:
+        account = db.scalar(
+            select(UserAccount).where(
+                UserAccount.system_id == selected_id,
+                func.lower(UserAccount.username) == username.lower(),
+            ).execution_options(bypass_recruitment_scope=True)
+        )
+    else:
+        matches = list(db.scalars(
+            select(UserAccount).where(func.lower(UserAccount.username) == username.lower())
+            .execution_options(bypass_recruitment_scope=True)
+        ))
+        account = matches[0] if len(matches) == 1 else None
     if not account or not account.active or not verify_password(account.password_hash, payload.password):
         raise HTTPException(status_code=403, detail="Invalid username or password.")
+    select_system(account.system_id)
     clear_login_attempts(request)
     clear_expired_sessions(db)
     session = create_user_session(db, response, account)
+    system = db.get(AssessmentSystem, account.system_id) if current_system_id() == account.system_id else db.scalar(
+        select(AssessmentSystem).where(AssessmentSystem.id == account.system_id).execution_options(bypass_recruitment_scope=True)
+    )
+    if system:
+        set_system_cookie(response, system.slug)
     audit(
         db,
         journey_id=None,
@@ -177,6 +262,7 @@ def change_password(
     account.managed_password = payload.new_password
     account.must_change_password = False
     account.version += 1
+    _sync_platform_owner_password(db, account)
     db.execute(delete(UserSession).where(UserSession.account_id == account.id, UserSession.token_hash != context.token_hash))
     audit(db, journey_id=None, actor_type="account", actor_name=account.username,
           action="account.password_changed", entity_type="user_account", entity_id=account.id)
@@ -192,6 +278,9 @@ def create_account_record(
     full_name: str | None = None,
     phone_number: str | None = None,
 ) -> UserAccount:
+    evaluator_role = evaluator_role or default_assessor_category()
+    if evaluator_role not in assessor_category_keys():
+        raise HTTPException(status_code=422, detail="Select a configured assessor category.")
     clean = " ".join(username.split())
     clean_full_name = " ".join((full_name or "").split()) or None
     clean_phone = (phone_number or "").strip() or None
@@ -287,6 +376,17 @@ def add_account(
         payload.full_name,
         payload.phone_number,
     )
+    profile = next((item for item in active_assessment_definition().accessProfiles
+                    if item.enabled and item.key == payload.access_profile), None)
+    if not profile or profile.key == "owner":
+        raise HTTPException(status_code=422, detail="Select an enabled non-owner access profile.")
+    account.can_admin = "admin" in profile.capabilities
+    account.can_results = "results" in profile.capabilities
+    account.can_evaluate = "evaluate" in profile.capabilities
+    if "attendance" in profile.capabilities and payload.attendance_journey_id:
+        if not db.get(Journey, payload.attendance_journey_id):
+            raise HTTPException(status_code=422, detail="Attendance Journey not found.")
+        db.add(JourneyPermission(account_id=account.id, journey_id=payload.attendance_journey_id, can_attendance=True))
     audit(db, journey_id=None, actor_type="account", actor_name=context.username,
           action="account.created", entity_type="user_account", entity_id=account.id,
           after={
@@ -423,15 +523,18 @@ def update_account(
             directory.full_name = " ".join((payload.full_name or "").split()) or None
         if "phone_number" in payload.model_fields_set:
             directory.phone_number = (payload.phone_number or "").strip() or None
-    for field in ("can_admin", "can_results", "active", "evaluator_role"):
+    if payload.evaluator_role is not None and payload.evaluator_role not in assessor_category_keys():
+        raise HTTPException(status_code=422, detail="Select a configured assessor category.")
+    for field in ("can_admin", "can_results", "can_evaluate", "active", "evaluator_role"):
         value = getattr(payload, field)
         if value is not None:
             setattr(account, field, value)
     if account.is_owner:
         account.can_admin = True
         account.can_results = True
+        account.can_evaluate = True
         account.active = True
-        account.evaluator_role = "dossard"
+        account.evaluator_role = "dossard" if "dossard" in assessor_category_keys() else default_assessor_category()
     if payload.evaluator_role is not None and directory:
         directory.default_role = account.evaluator_role
     if payload.attendance_journey_ids is not None:
@@ -519,6 +622,7 @@ def reset_password(
     account.managed_password = payload.new_password
     account.must_change_password = True
     account.version += 1
+    _sync_platform_owner_password(db, account)
     db.execute(delete(UserSession).where(UserSession.account_id == account.id))
     audit(db, journey_id=None, actor_type="account", actor_name=context.username,
           action="account.password_reset", entity_type="user_account", entity_id=account.id,

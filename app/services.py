@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from .assignments import (
     EvaluatorCandidate,
     Pairing,
+    PairingResult,
     RecruitCandidate,
     generate_pairings,
     generate_room_plan,
@@ -51,13 +52,19 @@ from .rubric import (
 from .scoring import (
     ScoringError,
     color_grade,
-    competition_ranks,
+    configured_ranks,
     general_average,
     overall_score,
-    sport_score,
+    target_activity_score,
     weighted_activity_score,
 )
 from .utils import audit, dumps, loads
+from .assessment_runtime import (
+    active_assessment_definition,
+    activity_definition,
+    primary_category_order,
+    secondary_category_order,
+)
 
 
 def get_journey_or_404(db: Session, journey_id: str) -> Journey:
@@ -349,6 +356,7 @@ def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: st
             {item.evaluator_id: item.room_number for item in mandatory_records},
             journey.room_count,
             seed,
+            primary_role_order=primary_category_order(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -397,11 +405,14 @@ def publish_room_plan(
 ) -> None:
     if plan.journey_id != journey.id or plan.status != "preview":
         raise HTTPException(status_code=409, detail="Only a preview for this Journee can be published.")
-    escape_state = db.scalar(
-        select(ActivityState).where(ActivityState.journey_id == journey.id, ActivityState.code == "escape_room")
-    )
-    if escape_state and escape_state.status in {"open", "closed"} and not override_reason.strip():
-        raise HTTPException(status_code=409, detail="Room membership is frozen after Escape Room starts.")
+    first_group_activity = next((item for item in active_assessment_definition().activities
+                                 if item.enabled and item.assignment.mode == "automatic_groups"), None)
+    frozen_state = db.scalar(select(ActivityState).where(
+        ActivityState.journey_id == journey.id,
+        ActivityState.code == first_group_activity.key,
+    )) if first_group_activity else None
+    if frozen_state and frozen_state.status in {"open", "closed"} and not override_reason.strip():
+        raise HTTPException(status_code=409, detail=f"Group membership is frozen after {first_group_activity.name} starts.")
     db.execute(
         update(RoomPlan)
         .where(RoomPlan.journey_id == journey.id, RoomPlan.status == "published")
@@ -458,7 +469,11 @@ def _global_candidates(db: Session, journey: Journey) -> tuple[list[RecruitCandi
 
 
 def past_pair_data(db: Session, journey_id: str, current_activity: str) -> tuple[set[tuple[str, str]], dict[str, int]]:
-    independent = {"sport", "escape_room", "negotiation", "skills"}
+    definition = active_assessment_definition()
+    independent = {
+        item.key for item in definition.activities
+        if item.enabled and not item.assignment.reuseAssignmentsFrom
+    }
     independent.discard(current_activity)
     rows = db.execute(
         select(Assignment.evaluator_id, Assignment.recruit_id, Assignment.slot)
@@ -484,10 +499,12 @@ def create_assignment_preview(
     db.scalar(select(Journey).where(Journey.id == journey.id).with_for_update())
     if activity_code not in RUBRICS:
         raise HTTPException(status_code=404, detail="Unknown activity.")
-    if activity_code == "simulation":
+    configured_activity = activity_definition(activity_code)
+    if configured_activity and configured_activity.assignment.reuseAssignmentsFrom:
         raise HTTPException(
             status_code=409,
-            detail="Skills and Simulation share one assignment. Generate it from Skills & Simulation.",
+            detail=(f"{configured_activity.name} reuses assignments from "
+                    f"{RUBRICS[configured_activity.assignment.reuseAssignmentsFrom].name}. Generate them there."),
         )
     state = db.scalar(
         select(ActivityState).where(ActivityState.journey_id == journey.id, ActivityState.code == activity_code)
@@ -520,14 +537,20 @@ def create_assignment_preview(
     if not recruits:
         raise HTTPException(status_code=409, detail="No confirmed-present recruits are available.")
     past_pairs, secondary_counts = past_pair_data(db, journey.id, activity_code)
-    result = generate_pairings(
+    if configured_activity and not configured_activity.assignment.avoidRepeatPairs:
+        past_pairs = set()
+    result = (generate_pairings(
         recruits,
         evaluators,
         room_based=activity_code in ROOM_ACTIVITIES,
         past_pairs=past_pairs,
         prior_secondary_counts=secondary_counts,
         seed=seed,
-    )
+        primary_role_order=primary_category_order(),
+        secondary_role_order=secondary_category_order(),
+        maximum_assessors=(configured_activity.assignment.maximumAssessors if configured_activity else 2),
+    ) if not configured_activity or configured_activity.assignment.mode != "manual"
+              else PairingResult([], ["Manual assignment: add one primary assessor for every participant before publishing."]))
     round_record.warnings_json = dumps(result.warnings)
     for item in result.assignments:
         db.add(
@@ -598,15 +621,28 @@ def assignment_round_payload(db: Session, round_record: AssignmentRound) -> dict
 def publish_assignment_round(db: Session, journey: Journey, round_record: AssignmentRound, actor_name: str) -> None:
     if round_record.journey_id != journey.id or round_record.status != "preview":
         raise HTTPException(status_code=409, detail="Only a preview for this Journee can be published.")
-    if round_record.activity_code == "simulation":
+    configured_activity = activity_definition(round_record.activity_code)
+    if configured_activity and configured_activity.assignment.reuseAssignmentsFrom:
         raise HTTPException(
             status_code=409,
-            detail="Simulation assignments are published automatically with Skills & Simulation.",
+            detail=f"{configured_activity.name} assignments are published from its configured source activity.",
         )
     assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
     recruit_counts = Counter(item.recruit_id for item in assignments)
-    if any(count > 2 for count in recruit_counts.values()):
-        raise HTTPException(status_code=409, detail="A recruit cannot have more than two evaluators.")
+    maximum = configured_activity.assignment.maximumAssessors if configured_activity else 2
+    if any(count > maximum for count in recruit_counts.values()):
+        raise HTTPException(status_code=409, detail=f"A participant cannot have more than {maximum} assessors.")
+    expected_recruits = set(db.scalars(select(Recruit.id).where(
+        Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True),
+    )))
+    if set(recruit_counts) != expected_recruits:
+        raise HTTPException(status_code=409, detail="Every present participant needs a primary assignment before publishing.")
+    slots_by_recruit = defaultdict(list)
+    for assignment in assignments:
+        slots_by_recruit[assignment.recruit_id].append(assignment.slot)
+    if any(slots.count(1) != 1 or slots.count(2) > (1 if maximum > 1 else 0)
+           for slots in slots_by_recruit.values()):
+        raise HTTPException(status_code=409, detail="Each participant needs exactly one primary slot and at most one secondary slot.")
     state = db.scalar(
         select(ActivityState).where(
             ActivityState.journey_id == journey.id, ActivityState.code == round_record.activity_code
@@ -616,18 +652,16 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
         raise HTTPException(status_code=500, detail="Activity state is missing.")
     if state.status == "open":
         raise HTTPException(status_code=409, detail="Close the activity before publishing replacements.")
-    simulation_state = None
-    if round_record.activity_code == "skills":
-        simulation_state = db.scalar(
-            select(ActivityState).where(
-                ActivityState.journey_id == journey.id,
-                ActivityState.code == "simulation",
-            )
-        )
-        if not simulation_state:
-            raise HTTPException(status_code=500, detail="Simulation activity state is missing.")
-        if simulation_state.status == "open":
-            raise HTTPException(status_code=409, detail="Close Skills and Simulation before publishing replacements.")
+    definition = active_assessment_definition()
+    reuse_targets = [item for item in definition.activities if item.enabled and
+                     item.assignment.reuseAssignmentsFrom == round_record.activity_code]
+    reuse_states = {item.key: db.scalar(select(ActivityState).where(
+        ActivityState.journey_id == journey.id, ActivityState.code == item.key,
+    )) for item in reuse_targets}
+    if any(state is None for state in reuse_states.values()):
+        raise HTTPException(status_code=500, detail="A configured shared-assignment activity state is missing.")
+    if any(state.status == "open" for state in reuse_states.values()):
+        raise HTTPException(status_code=409, detail="Close shared-assignment activities before publishing replacements.")
     db.execute(
         update(AssignmentRound)
         .where(
@@ -652,14 +686,15 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
         entity_id=round_record.id,
         after={"activity": round_record.activity_code, "version": round_record.version, "count": len(assignments)},
     )
-    if simulation_state is not None:
-        # Evaluations remain distinct, but both activities receive an exact copy of
-        # the one admin-managed pairing. This is part of the same transaction.
-        simulation_version = (
+    for target_activity in reuse_targets:
+        target_state = reuse_states[target_activity.key]
+        # Evaluations remain distinct, but related activities receive an exact copy
+        # of the one admin-managed pairing in the same transaction.
+        target_version = (
             db.scalar(
                 select(func.max(AssignmentRound.version)).where(
                     AssignmentRound.journey_id == journey.id,
-                    AssignmentRound.activity_code == "simulation",
+                    AssignmentRound.activity_code == target_activity.key,
                 )
             )
             or 0
@@ -668,15 +703,15 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
             update(AssignmentRound)
             .where(
                 AssignmentRound.journey_id == journey.id,
-                AssignmentRound.activity_code == "simulation",
+                AssignmentRound.activity_code == target_activity.key,
                 AssignmentRound.status.in_(("preview", "published")),
             )
             .values(status="superseded")
         )
-        simulation_round = AssignmentRound(
+        target_round = AssignmentRound(
             journey_id=journey.id,
-            activity_code="simulation",
-            version=simulation_version,
+            activity_code=target_activity.key,
+            version=target_version,
             status="published",
             seed=round_record.seed,
             warnings_json="[]",
@@ -684,12 +719,12 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
             created_by=actor_name,
             published_at=round_record.published_at,
         )
-        db.add(simulation_round)
+        db.add(target_round)
         db.flush()
         for item in assignments:
             db.add(
                 Assignment(
-                    round_id=simulation_round.id,
+                    round_id=target_round.id,
                     evaluator_id=item.evaluator_id,
                     recruit_id=item.recruit_id,
                     room_number=item.room_number,
@@ -698,8 +733,8 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
                     repeat_reason=None,
                 )
             )
-        simulation_state.assignment_round_id = simulation_round.id
-        simulation_state.version += 1
+        target_state.assignment_round_id = target_round.id
+        target_state.version += 1
         audit(
             db,
             journey_id=journey.id,
@@ -707,17 +742,19 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
             actor_name=actor_name,
             action="assignments.published_shared",
             entity_type="assignment_round",
-            entity_id=simulation_round.id,
+            entity_id=target_round.id,
             after={
-                "activities": ["skills", "simulation"],
+                "activities": [round_record.activity_code, target_activity.key],
                 "sourceRoundId": round_record.id,
-                "simulationVersion": simulation_version,
+                "targetVersion": target_version,
                 "count": len(assignments),
             },
         )
 
 
 def result_snapshot(db: Session, journey: Journey) -> dict:
+    definition = active_assessment_definition()
+    configured_activities = [item for item in definition.activities if item.enabled]
     recruits = list(
         db.scalars(
             select(Recruit)
@@ -770,14 +807,15 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
     } if recruits else {}
 
     rows: list[dict] = []
-    activity_rank_inputs: dict[str, list[tuple[str, Decimal]]] = {code: [] for code in ACTIVITY_ORDER}
-    dimension_rank_inputs: dict[str, list[tuple[str, Decimal]]] = {code: [] for code in DIMENSION_ORDER}
+    activity_rank_inputs: dict[str, list[tuple[str, Decimal]]] = {item.key: [] for item in configured_activities}
+    dimension_rank_inputs: dict[str, list[tuple[str, Decimal]]] = {item.key: [] for item in definition.dimensions}
     overall_rank_inputs: list[tuple[str, Decimal]] = []
     for recruit in recruits:
         activity_values: dict[str, Decimal] = {}
         activities_payload: dict[str, dict] = {}
         submitted_by_activity: dict[str, list[EvaluationSubmission]] = {}
-        for code in ACTIVITY_ORDER:
+        for activity in configured_activities:
+            code = activity.key
             expected_assignments = assignments_by_recruit_activity.get((recruit.id, code), [])
             expected = len(expected_assignments)
             submitted_records = [
@@ -791,9 +829,12 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             # Missing expected submissions stay visible/incomplete, while the
             # available evaluator scores are averaged without adding a zero.
             admin_evaluation = admin_evaluations.get((recruit.id, code))
-            value = Decimal(admin_evaluation.score) if admin_evaluation else (
-                sum(submitted_values, Decimal("0")) / Decimal(submitted) if submitted else Decimal("0")
-            )
+            if admin_evaluation:
+                value = Decimal(admin_evaluation.score)
+            elif definition.scoring.assessorAggregation == "missing_as_zero" and expected:
+                value = sum(submitted_values, Decimal("0")) / Decimal(expected)
+            else:
+                value = sum(submitted_values, Decimal("0")) / Decimal(submitted) if submitted else Decimal("0")
             activity_values[code] = value
             activity_rank_inputs[code].append((recruit.id, value))
             activities_payload[code] = {
@@ -807,13 +848,32 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
 
         dimensions_payload: dict[str, dict] = {}
         dimension_values: dict[str, Decimal] = {}
-        for dimension in BEHAVIORAL_DIMENSIONS:
+        for dimension_config in definition.dimensions:
+            dimension = dimension_config.key
+            if dimension_config.source == "activity":
+                activity_code = dimension_config.activityKey
+                activity_payload = activities_payload.get(activity_code, {})
+                value = activity_values.get(activity_code, Decimal("0")) / Decimal("5")
+                dimension_values[dimension] = value
+                dimension_rank_inputs[dimension].append((recruit.id, value))
+                dimensions_payload[dimension] = {
+                    "name": dimension_config.name,
+                    "score": float(value),
+                    "complete": bool(activity_payload.get("complete")),
+                    "availableWeight": 1.0 if activity_payload.get("submitted") or activity_payload.get("adminOverride") else 0.0,
+                    "criterionCount": len(RUBRICS[activity_code].criteria) if activity_code in RUBRICS else 0,
+                }
+                continue
             weighted_value = Decimal("0")
             total_weight = Decimal("0")
             available_weight = Decimal("0")
             complete = True
             criterion_count = 0
-            for code in DIMENSION_ACTIVITIES:
+            for activity in configured_activities:
+                code = activity.key
+                matching_criteria = [item for item in activity.criteria if item.dimensionKey == dimension]
+                if not matching_criteria:
+                    continue
                 expected_assignments = assignments_by_recruit_activity.get((recruit.id, code), [])
                 admin_evaluation = admin_evaluations.get((recruit.id, code))
                 submitted_records = submitted_by_activity[code]
@@ -824,59 +884,52 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                     if admin_evaluation
                     else [loads(item.responses_json, {}) for item in submitted_records]
                 )
-                for criterion in RUBRICS[code].criteria:
-                    if criterion.dimension.casefold() != dimension:
-                        continue
+                for configured_criterion in matching_criteria:
+                    criterion = next(item for item in RUBRICS[code].criteria if item.key == configured_criterion.key)
                     criterion_count += 1
                     total_weight += criterion.weight
                     grades: list[Decimal] = []
                     for response in response_payloads:
                         try:
                             grade = Decimal(str(response[criterion.key]))
-                            if grade < 0 or grade > 5:
+                            if (grade < Decimal(configured_criterion.minimum)
+                                    or grade > Decimal(configured_criterion.maximum)):
                                 raise ValueError
                             grades.append(grade)
                         except (KeyError, TypeError, ValueError, ArithmeticError):
                             complete = False
                     if grades:
-                        criterion_average = sum(grades, Decimal("0")) / Decimal(len(grades))
+                        denominator = (len(expected_assignments)
+                                       if definition.scoring.assessorAggregation == "missing_as_zero" and not admin_evaluation
+                                       else len(grades))
+                        criterion_average = sum(grades, Decimal("0")) / Decimal(max(denominator, 1))
                         available_weight += criterion.weight
                     else:
                         criterion_average = Decimal("0")
                         complete = False
-                    weighted_value += criterion_average / Decimal("5") * criterion.weight
+                    minimum = Decimal(configured_criterion.minimum)
+                    scale = Decimal(configured_criterion.maximum) - minimum
+                    weighted_value += ((criterion_average - minimum) / scale) * criterion.weight
             value = weighted_value / total_weight if total_weight else Decimal("0")
             dimension_values[dimension] = value
             dimension_rank_inputs[dimension].append((recruit.id, value))
             dimensions_payload[dimension] = {
-                "name": DIMENSION_NAMES[dimension],
+                "name": dimension_config.name,
                 "score": float(value),
                 "complete": complete,
                 "availableWeight": float(available_weight / total_weight) if total_weight else 0.0,
                 "criterionCount": criterion_count,
             }
 
-        for dimension, activity_code in (("application", "skills"), ("physical_ability", "sport")):
-            value = activity_values[activity_code] / Decimal("5")
-            dimension_values[dimension] = value
-            dimension_rank_inputs[dimension].append((recruit.id, value))
-            dimensions_payload[dimension] = {
-                "name": DIMENSION_NAMES[dimension],
-                "score": float(value),
-                "complete": activities_payload[activity_code]["complete"],
-                "availableWeight": 1.0 if activities_payload[activity_code]["submitted"] else 0.0,
-                "criterionCount": len(RUBRICS[activity_code].criteria),
-            }
-
         assessment = assessments.get(recruit.id)
-        general_values = {
-            "punctuality": assessment.punctuality if assessment else None,
-            "respect": assessment.respect if assessment else None,
-            "seriousness": assessment.seriousness if assessment else None,
-        }
+        general_values = {factor.storageKey: getattr(assessment, factor.storageKey) if assessment else None
+                          for factor in definition.generalFactors}
         general = general_average(general_values)
         general_missing = sum(1 for value in general_values.values() if value is None)
-        overall = overall_score(dimension_values, general)
+        complete_components = {("dimension", key) for key, item in dimensions_payload.items() if item["complete"]}
+        if general_missing == 0 and definition.generalFactors:
+            complete_components.add(("general", "general"))
+        overall = overall_score(dimension_values, general, complete_components)
         overall_rank_inputs.append((recruit.id, overall))
         missing_activities = [
             code for code, item in activities_payload.items() if not item["complete"]
@@ -886,9 +939,7 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
         missing_components = [
             RUBRICS[code].name for code in missing_activities
         ] + [
-            label
-            for key, label in (("punctuality", "Punctuality"), ("respect", "Respect to us"), ("seriousness", "Seriousness"))
-            if general_values[key] is None
+            factor.name for factor in definition.generalFactors if general_values[factor.storageKey] is None
         ]
         rows.append(
             {
@@ -912,13 +963,13 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             }
         )
 
-    activity_ranks = {code: competition_ranks(values) for code, values in activity_rank_inputs.items()}
-    dimension_ranks = {code: competition_ranks(values) for code, values in dimension_rank_inputs.items()}
-    overall_ranks = competition_ranks(overall_rank_inputs)
+    activity_ranks = {code: configured_ranks(values) for code, values in activity_rank_inputs.items()}
+    dimension_ranks = {code: configured_ranks(values) for code, values in dimension_rank_inputs.items()}
+    overall_ranks = configured_ranks(overall_rank_inputs)
     for row in rows:
-        for code in ACTIVITY_ORDER:
+        for code in activity_rank_inputs:
             row["activities"][code]["rank"] = activity_ranks[code].get(row["recruitId"])
-        for code in DIMENSION_ORDER:
+        for code in dimension_rank_inputs:
             row["dimensions"][code]["rank"] = dimension_ranks[code].get(row["recruitId"])
         row["overallRank"] = overall_ranks.get(row["recruitId"])
     rows.sort(key=lambda row: (row["overallRank"] or 10**9, row["name"]))
@@ -933,8 +984,10 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
     return {
         "journeyId": journey.id,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "formula": "(Willingness + Adaptability + Respect + Intelligence + Application + Physical Ability + General) × 20 / 7",
-        "dimensionNames": DIMENSION_NAMES,
+        "formula": "Configured weighted overall score",
+        "scoreMaximum": float(definition.scoring.officialMaximum),
+        "dimensionNames": {item.key: item.name for item in definition.dimensions},
+        "performanceBands": [item.model_dump(mode="json") for item in definition.scoring.bands],
         "dimensionAverages": dimension_averages,
         "activityAverages": activity_averages,
         "rows": rows,
@@ -1030,9 +1083,9 @@ def monitoring_snapshot(db: Session, journey: Journey, activity_code: str) -> di
 
 def score_evaluation(activity_code: str, responses: dict, raw: dict) -> tuple[Decimal, dict, dict]:
     try:
-        if activity_code == "sport":
+        if RUBRICS[activity_code].kind == "sport":
             source = raw or responses
-            score, normalized, exercise_scores = sport_score(source)
+            score, normalized, exercise_scores = target_activity_score(activity_code, source)
             return score, {key: float(value) for key, value in exercise_scores.items()}, {
                 key: float(value) for key, value in normalized.items()
             }

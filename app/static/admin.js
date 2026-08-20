@@ -1,6 +1,8 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260819.1";
 
 const state = {
+  system: null,
   csrf: "",
   adminName: "",
   isOwner: false,
@@ -31,8 +33,8 @@ const host = $("#sectionHost");
 const modal = $("#modal");
 const photoViewer = $("#photoViewer");
 
-const dimensionOrder = ["willingness", "adaptability", "respect", "intelligence", "application", "physical_ability"];
-const dimensionNames = {
+let dimensionOrder = ["willingness", "adaptability", "respect", "intelligence", "application", "physical_ability"];
+let dimensionNames = {
   willingness: "Willingness",
   respect: "Respect",
   adaptability: "Adaptability",
@@ -40,7 +42,8 @@ const dimensionNames = {
   application: "Application",
   physical_ability: "Physical Ability",
 };
-const dimensionGrade = (value) => Number(value || 0) * 5;
+let dimensionMaximums = Object.fromEntries(dimensionOrder.map(code => [code, 5]));
+const dimensionGrade = (value, code) => Number(value || 0) * Number(dimensionMaximums[code] || 5);
 
 function showPhotoViewer(url, name) {
   $("#photoViewerImage").src = url;
@@ -175,6 +178,7 @@ async function loadLibrary() {
   $("#workspaceView").classList.add("hidden");
   $("#journeyCrumb").textContent = "Journee library";
   $("#permissionsNav").classList.toggle("hidden", !state.isOwner);
+  $("#configureSystemButton").classList.toggle("hidden", !state.isOwner);
   renderLibrary();
 }
 
@@ -320,14 +324,14 @@ async function renderDashboard() {
     <div class="metric-grid">
       <div class="metric-card"><small>Present recruits</small><strong>${presentRecruits}</strong><span class="subtle"> of ${data.journey.recruitCount}</span></div>
       <div class="metric-card"><small>Present evaluators</small><strong>${presentEvaluators}</strong><span class="subtle"> of ${data.journey.evaluatorCount}</span></div>
-      <div class="metric-card"><small>Evaluator roles</small><div class="split"><span><strong>${data.overallEvaluators}</strong><small>Overall</small></span><span><strong>${data.dossardEvaluators}</strong><small>Dossard</small></span></div></div>
-      <div class="metric-card"><small>Active activity</small><strong style="font-size:1.15rem">${data.journey.currentActivity ? h(statusLabel(data.journey.currentActivity)) : "None"}</strong><span class="subtle">${data.roomPlan ? `${data.roomPlan.rooms.length} rooms published` : "No room plan"}</span></div>
+      <div class="metric-card"><small>Evaluator categories</small><div class="split">${assessorCategories().map(category => `<span><strong>${data.evaluatorCategoryCounts?.[category.key] || 0}</strong><small>${h(category.name)}</small></span>`).join("")}</div></div>
+      <div class="metric-card"><small>Active activity</small><strong style="font-size:1.15rem">${data.journey.currentActivity ? h(configuredActivityName(data.journey.currentActivity)) : "None"}</strong><span class="subtle">${data.roomPlan ? `${data.roomPlan.rooms.length} rooms published` : "No room plan"}</span></div>
     </div>
     ${data.activeMonitoring ? `<div class="panel"><div class="panel-header"><div><h2>Live submission progress</h2><p class="muted">${receivedSubmissions} of ${expectedSubmissions} expected evaluations received.</p></div><button class="button ghost small" id="goMonitoring">Open monitor</button></div><div class="progress"><span style="width:${expectedSubmissions ? receivedSubmissions / expectedSubmissions * 100 : 0}%"></span></div></div>` : ""}
     ${data.warnings.length ? `<div class="panel"><h2>Unresolved warnings</h2>${data.warnings.map((warning) => `<div class="warning-box">${h(warning)}</div>`).join("")}</div>` : ""}
     <div class="panel"><div class="panel-header"><div><h2>Activity lifecycle</h2><p class="muted">Published assignments and operational state.</p></div></div><div class="activity-strip">${data.activities.map((activity) => `<div class="activity-mini"><strong>${h(activity.name)}</strong><span class="status-pill ${activity.status}">${h(statusLabel(activity.status))}</span><small>${activity.assignmentRoundId ? "Assignments published" : "No published assignment"}</small></div>`).join("")}</div></div>
     <div class="two-column"><div class="panel"><div class="panel-header"><h2>Provisional overall ranking</h2><button class="button ghost small" id="goResults">View all</button></div>${rankingTable(data.ranking)}</div>
-    <div class="panel"><h2>Dimension averages /5</h2><div class="member-list">${dimensionOrder.map((code) => `<div class="member-chip"><span>${h(data.dimensionNames?.[code] || dimensionNames[code])}</span><strong>${fmt(dimensionGrade(data.dimensionAverages?.[code]))}</strong></div>`).join("")}</div><h3 style="margin-top:20px">Activity averages /5</h3><div class="member-list">${Object.entries(data.activityAverages).map(([code, value]) => `<div class="member-chip"><span>${h(statusLabel(code))}</span><strong>${fmt(value)}</strong></div>`).join("")}</div><div style="margin-top:18px" class="inline-actions"><button class="button primary" id="quickAttendance">Attendance</button><button class="button secondary" id="quickAssignments">Assignments</button></div></div></div>`;
+    <div class="panel"><h2>Dimension averages /5</h2><div class="member-list">${dimensionOrder.map((code) => `<div class="member-chip"><span>${h(data.dimensionNames?.[code] || dimensionNames[code])}</span><strong>${fmt(dimensionGrade(data.dimensionAverages?.[code], code))} /${dimensionMaximums[code]}</strong></div>`).join("")}</div><h3 style="margin-top:20px">Activity averages /5</h3><div class="member-list">${Object.entries(data.activityAverages).map(([code, value]) => `<div class="member-chip"><span>${h(configuredActivityName(code))}</span><strong>${fmt(value)}</strong></div>`).join("")}</div><div style="margin-top:18px" class="inline-actions"><button class="button primary" id="quickAttendance">Attendance</button><button class="button secondary" id="quickAssignments">Assignments</button></div></div></div>`;
   $("#refreshDashboard").onclick = () => renderDashboard();
   $("#goProtection").onclick = () => switchSection("settings");
   if ($("#goMonitoring")) $("#goMonitoring").onclick = () => switchSection("monitoring");
@@ -364,9 +368,40 @@ function normalizedName(value) {
   return String(value || "").normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }
 
+function assessorCategories() {
+  return state.system?.assessorCategories || [{ key: "overall", name: "Overall", primaryPriority: 0, secondaryPriority: 1 }, { key: "dossard", name: "Dossard", primaryPriority: 1, secondaryPriority: 0 }];
+}
+
+function categoryOptions(selected) {
+  return assessorCategories().map(item => `<option value="${h(item.key)}" ${item.key === selected ? "selected" : ""}>${h(item.name)}</option>`).join("");
+}
+
+function accessProfileOptions(selected = "assessor") {
+  return (state.system?.accessProfiles || []).filter(item => item.key !== "owner")
+    .map(item => `<option value="${h(item.key)}" ${item.key === selected ? "selected" : ""}>${h(item.name)}</option>`).join("");
+}
+
+function categoryRank(role, priority = "primaryPriority") {
+  const category = assessorCategories().find(item => item.key === role);
+  return category?.[priority] ?? 999;
+}
+
+function configuredActivityName(code) {
+  return state.system?.activities?.find(item => item.key === code)?.name || statusLabel(code);
+}
+
+function configuredActivity(code) {
+  return state.system?.activities?.find(item => item.key === code) || null;
+}
+
+function sharedAssignmentTargets(code) {
+  return (state.system?.activities || []).filter(item => item.assignment?.reuseAssignmentsFrom === code);
+}
+
 function evaluatorAttendanceSort(a, b) {
-  const group = (item) => item.present ? (item.role === "overall" ? 0 : 1) : (item.role === "overall" ? 2 : 3);
-  return group(a) - group(b) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  return Number(b.present) - Number(a.present)
+    || categoryRank(a.role) - categoryRank(b.role)
+    || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
 }
 
 function evaluatorSearchMatches(evaluators, query) {
@@ -502,7 +537,7 @@ function renderAttendanceTable(rows) {
     if (isRecruit) return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td>${photo}</td><td><strong>${h(item.name)}</strong></td><td><input class="table-input phone-input" inputmode="tel" value="${h(item.phoneNumber || "")}" placeholder="Phone number"></td><td><input class="table-input dob-input" type="date" value="${h(item.dateOfBirth || "")}" aria-label="${h(item.name)} date of birth"></td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><input class="table-input arrival-input" type="datetime-local" value="${h(dateTimeInput(item.arrivalTime))}" ${item.present ? "" : "disabled"}></td><td><input class="table-input attendance-comment-input" value="${h(item.attendanceComment || "")}" placeholder="Reason for tardiness"></td><td><button class="button ghost small photo-button">${item.hasPhoto ? "Replace" : "Upload"}</button></td><td><span class="row-sync saved" data-sync-id="${item.id}">Saved</span></td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
     return `<tr data-id="${item.id}" class="${item.present ? "" : "inactive"}"><td><strong>${h(item.name)}</strong>${item.mandatoryRoom && !item.present ? `<small class="danger-text"> Required evaluator is absent</small>` : ""}</td><td><input class="attendance-check" type="checkbox" aria-label="${h(item.name)} present" ${item.present ? "checked" : ""}></td><td><span class="role-badge ${item.role}">${h(item.role)}</span></td><td>${item.mandatoryRoom ? `Room ${item.mandatoryRoom}` : "—"}</td><td><button class="button danger small delete-person">Delete</button></td></tr>`;
   }).join("");
-  target.innerHTML = `<div class="table-wrap"><table><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
+  target.innerHTML = `<div class="table-wrap"><table class="${isRecruit ? "recruit-attendance-table" : "evaluator-attendance-table"}"><thead><tr>${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
   $$("tbody tr", target).forEach((row) => {
     const item = state.attendanceDraft[row.dataset.id];
     $(".delete-person", row).onclick = async () => {
@@ -669,7 +704,7 @@ async function saveAttendance() {
 
 function addPersonDialog(isRecruit) {
   if (isRecruit) return openRecruitDirectoryDialog();
-  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add evaluator not in the default list</h2><div class="stack"><label>Username / nickname<input name="name" required maxlength="200"></label><label>Full name (optional)<input name="fullName" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" inputmode="tel" maxlength="40"></label><label>Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
+  openModal(`<form id="personForm"><p class="eyebrow">Roster</p><h2>Add evaluator not in the default list</h2><div class="stack"><label>Username / nickname<input name="name" required maxlength="200"></label><label>Full name (optional)<input name="fullName" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" inputmode="tel" maxlength="40"></label><label>Temporary password<input name="password" type="password" minlength="8" autocomplete="new-password" required></label><label>Role<select name="role">${categoryOptions()}</select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#personForm").onsubmit = async (event) => {
     event.preventDefault();
@@ -790,7 +825,11 @@ function uploadSinglePhoto(recruitId) {
 }
 
 async function renderAssignments() {
-  if (state.assignmentActivity === "simulation") state.assignmentActivity = "skills";
+  const assignmentActivities = (state.system?.activities || state.journey.activities)
+    .filter(activity => !activity.assignment?.reuseAssignmentsFrom);
+  if (!assignmentActivities.some(item => item.key === state.assignmentActivity || item.code === state.assignmentActivity)) {
+    state.assignmentActivity = assignmentActivities[0]?.key || assignmentActivities[0]?.code;
+  }
   const [publishedRooms, previewRooms, publishedRound, previewRound] = await Promise.all([
     api(`/api/admin/journeys/${state.journey.id}/rooms?status=published`),
     api(`/api/admin/journeys/${state.journey.id}/rooms?status=preview`),
@@ -799,22 +838,28 @@ async function renderAssignments() {
   ]);
   state.roomPlan = previewRooms || publishedRooms;
   state.assignmentRound = previewRound || publishedRound;
-  const escapeState = state.journey.activities.find((item) => item.code === "escape_room");
-  const roomsFrozen = escapeState && ["open", "closed"].includes(escapeState.status);
-  const activityTabs = state.journey.activities.filter((activity) => activity.code !== "simulation").map((activity) => {
-    const name = activity.code === "skills" ? "Skills & Simulation" : activity.name;
-    return `<button data-activity="${activity.code}" class="${activity.code === state.assignmentActivity ? "active" : ""}">${h(name)}</button>`;
+  const firstGroupActivity = (state.system?.activities || []).find(item => item.assignment?.mode === "automatic_groups");
+  const firstGroupState = firstGroupActivity ? state.journey.activities.find(item => item.code === firstGroupActivity.key) : null;
+  const roomsFrozen = firstGroupState && ["open", "closed"].includes(firstGroupState.status);
+  const activityTabs = assignmentActivities.map((configured) => {
+    const code = configured.key || configured.code;
+    const targets = sharedAssignmentTargets(code);
+    const name = [configured.name, ...targets.map(item => item.name)].join(" & ");
+    return `<button data-activity="${code}" class="${code === state.assignmentActivity ? "active" : ""}">${h(name)}</button>`;
   }).join("");
-  const assignmentName = state.assignmentActivity === "skills" ? "Skills & Simulation" : statusLabel(state.assignmentActivity);
+  const configured = configuredActivity(state.assignmentActivity);
+  const reuseTargets = sharedAssignmentTargets(state.assignmentActivity);
+  const assignmentName = [configuredActivityName(state.assignmentActivity), ...reuseTargets.map(item => item.name)].join(" & ");
+  const roomActivities = (state.system?.activities || []).filter(item => item.assignment?.mode === "automatic_groups");
+  const showRooms = state.system?.features?.groupsAndRooms !== false && roomActivities.length > 0;
+  const roomPanel = showRooms ? `<div class="panel"><div class="panel-header"><div><h2>Fixed room plan</h2><p class="muted">Used by ${h(roomActivities.map(item => item.name).join(", "))}.</p></div><div class="inline-actions"><label class="compact-field">Rooms<input id="roomCountInput" type="number" min="1" max="100" value="${state.journey.roomCount}"></label><button class="button ghost" id="saveRoomCount">Save room count</button>${state.system?.features?.mandatoryPlacements === false ? "" : `<button class="button secondary" id="mandatoryRooms">Mandatory placements</button>`}<button class="button ghost" id="previewRooms">${previewRooms ? "Regenerate preview" : "Generate preview"}</button>${previewRooms ? `<button class="button primary" id="publishRooms">${roomsFrozen ? "Publish override" : "Publish rooms"}</button>` : ""}</div></div>${state.roomPlan ? renderRoomPlan(state.roomPlan) : `<div class="empty-state"><p>Confirm attendance, then generate the room plan.</p></div>`}</div>` : "";
   host.innerHTML = `${sectionHeading("Distribution", "Rooms & assignments", "Preview changes privately, review warnings, then publish atomically.")}
-    <div class="panel"><div class="panel-header"><div><h2>Fixed room plan</h2><p class="muted">Used for Escape Room and Negotiation. Skills & Simulation use one global assignment for both activities.</p></div><div class="inline-actions"><label class="compact-field">Rooms<input id="roomCountInput" type="number" min="1" max="100" value="${state.journey.roomCount}"></label><button class="button ghost" id="saveRoomCount">Save room count</button><button class="button secondary" id="mandatoryRooms">Mandatory placements</button><button class="button ghost" id="previewRooms">${previewRooms ? "Regenerate preview" : "Generate preview"}</button>${previewRooms ? `<button class="button primary" id="publishRooms">${roomsFrozen ? "Publish override" : "Publish rooms"}</button>` : ""}</div></div>
-      ${state.roomPlan ? renderRoomPlan(state.roomPlan) : `<div class="empty-state"><p>Confirm attendance, then generate the room plan.</p></div>`}
-    </div>
-    <div class="panel"><div class="tabs">${activityTabs}</div><div class="panel-header"><div><h2>${h(assignmentName)} assignments</h2><p class="muted">${previewRound ? "Showing private preview" : publishedRound ? "Showing evaluator-visible published version" : "No assignment generated"}.${state.assignmentActivity === "skills" ? " One publication applies the exact pairing to both activities." : ""}</p></div><div class="inline-actions"><button class="button ghost" id="previewAssignments">${previewRound ? "Regenerate preview" : "Generate preview"}</button>${previewRound ? `<button class="button primary" id="publishAssignments">${state.assignmentActivity === "skills" ? "Publish for both activities" : "Publish assignments"}</button>` : ""}</div></div>
+    ${roomPanel}
+    <div class="panel"><div class="tabs">${activityTabs}</div><div class="panel-header"><div><h2>${h(assignmentName)} assignments</h2><p class="muted">${previewRound ? "Showing private preview" : publishedRound ? "Showing evaluator-visible published version" : "No assignment generated"}.${reuseTargets.length ? ` One publication applies the exact pairing to ${reuseTargets.length + 1} activities.` : ""}</p></div><div class="inline-actions"><button class="button ghost" id="previewAssignments">${previewRound ? "Regenerate preview" : configured?.assignment?.mode === "manual" ? "Create manual preview" : "Generate preview"}</button>${previewRound ? `<button class="button primary" id="publishAssignments">${reuseTargets.length ? "Publish shared assignments" : "Publish assignments"}</button>` : ""}</div></div>
       ${state.assignmentRound ? renderAssignmentRound(state.assignmentRound) : `<div class="empty-state"><p>Generate a reproducible assignment preview.</p></div>`}
     </div>`;
   $$(".tabs button", host).forEach((button) => button.onclick = () => { state.assignmentActivity = button.dataset.activity; renderAssignments(); });
-  $("#saveRoomCount").onclick = async () => {
+  if ($("#saveRoomCount")) $("#saveRoomCount").onclick = async () => {
     const roomCount = Number($("#roomCountInput").value);
     if (!Number.isInteger(roomCount) || roomCount < 1 || roomCount > 100) return toast("Enter a room count from 1 to 100.", "error");
     if (roomCount === state.journey.roomCount) return toast("Room count is unchanged.");
@@ -822,7 +867,7 @@ async function renderAssignments() {
     if (publishedRooms) reasonDialog("Change published room count", "Explain why the published room structure is being replaced. Existing historical assignments remain unchanged.", save);
     else await save();
   };
-  $("#previewRooms").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/preview`, "POST", {}, "Room preview generated.", renderAssignments);
+  if ($("#previewRooms")) $("#previewRooms").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/preview`, "POST", {}, "Room preview generated.", renderAssignments);
   if ($("#publishRooms")) $("#publishRooms").onclick = async () => {
     if (roomsFrozen) {
       reasonDialog("Override frozen room plan", "This changes room membership for future rounds only. Existing assignments and evaluations remain unchanged.", (reason) => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/${previewRooms.id}/publish-override`, "POST", { reason }, "Room override published for future rounds.", renderAssignments));
@@ -831,10 +876,10 @@ async function renderAssignments() {
     }
   };
   $("#previewAssignments").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}/preview`, "POST", {}, "Assignment preview generated.", renderAssignments);
-  if ($("#publishAssignments")) $("#publishAssignments").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${previewRound.id}/publish`, "POST", {}, state.assignmentActivity === "skills" ? "Skills & Simulation assignments published to evaluators." : "Assignments published to evaluators.", renderAssignments);
-  $("#mandatoryRooms").onclick = mandatoryRoomsDialog;
+  if ($("#publishAssignments")) $("#publishAssignments").onclick = async () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${previewRound.id}/publish`, "POST", {}, `${assignmentName} assignments published.`, renderAssignments);
+  if ($("#mandatoryRooms")) $("#mandatoryRooms").onclick = mandatoryRoomsDialog;
   if (previewRooms) wireRoomEditors(previewRooms);
-  if (previewRound && previewRound.activityCode !== "simulation") wireAssignmentEditors(previewRound);
+  if (previewRound && !configuredActivity(previewRound.activityCode)?.assignment?.reuseAssignmentsFrom) wireAssignmentEditors(previewRound);
 }
 
 function warningHtml(warnings) {
@@ -860,8 +905,9 @@ function wireRoomEditors(plan) {
 }
 
 function renderAssignmentRound(round) {
-  const editable = round.status === "preview" && round.activityCode !== "simulation";
-  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${h(statusLabel(round.status))} v${round.version}</strong> · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button ghost" id="saveAssignmentEdits">Save manual edits</button></div>` : round.activityCode === "simulation" && round.status === "preview" ? `<p class="subtle">Simulation is an exact, read-only copy of the published Skills pairing.</p>` : ""}`;
+  const reused = configuredActivity(round.activityCode)?.assignment?.reuseAssignmentsFrom;
+  const editable = round.status === "preview" && !reused;
+  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${h(statusLabel(round.status))} v${round.version}</strong> · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button ghost" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : ""}`;
 }
 
 function wireAssignmentEditors(round) {
@@ -869,7 +915,8 @@ function wireAssignmentEditors(round) {
   $("#addAssignment").onclick = () => {
     const evaluators = state.journey.evaluators.filter((item) => item.active && item.present);
     const recruits = state.journey.recruits.filter((item) => item.active && item.present);
-    openModal(`<form id="addPairForm"><h2>Add manual pairing</h2><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map((item) => `<option value="${item.id}">${h(item.name)} (${h(item.role)})</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map((item) => `<option value="${item.id}">${h(item.name)}</option>`).join("")}</select></label><label>Slot<select name="slot"><option value="1">Primary</option><option value="2">Secondary</option></select></label><label>Override reason (required for a forced repeat)<textarea name="reason"></textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add to preview</button></div></form>`);
+    const maximum = configuredActivity(round.activityCode)?.assignment?.maximumAssessors || 2;
+    openModal(`<form id="addPairForm"><h2>Add manual pairing</h2><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map((item) => `<option value="${item.id}">${h(item.name)} (${h(item.role)})</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map((item) => `<option value="${item.id}">${h(item.name)}</option>`).join("")}</select></label><label>Slot<select name="slot"><option value="1">Primary</option>${maximum > 1 ? `<option value="2">Secondary</option>` : ""}</select></label><label>Override reason (required for a forced repeat)<textarea name="reason"></textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add to preview</button></div></form>`);
     $("#cancelModal").onclick = closeModal;
     $("#addPairForm").onsubmit = (event) => {
       event.preventDefault();
@@ -880,12 +927,12 @@ function wireAssignmentEditors(round) {
       const existing = $$(".assignment-row", host);
       if (existing.some((row) => row.dataset.evaluator === evaluator.id && row.dataset.recruit === recruit.id)) return toast("That evaluator–recruit pair already exists.", "error");
       const recruitRows = existing.filter((row) => row.dataset.recruit === recruit.id);
-      if (recruitRows.length >= 2) return toast("A recruit cannot have more than two evaluators.", "error");
+      if (recruitRows.length >= maximum) return toast(`A participant cannot have more than ${maximum} assessors.`, "error");
       if (recruitRows.some((row) => Number(row.dataset.slot) === slot)) return toast(`This recruit already has a slot ${slot} evaluator.`, "error");
-      if (["escape_room", "negotiation"].includes(round.activityCode) && state.roomPlan) {
+      if (configuredActivity(round.activityCode)?.assignment?.mode === "automatic_groups" && state.roomPlan) {
         const recruitRoom = state.roomPlan.rooms.find((room) => room.recruits.some((item) => item.id === recruit.id))?.number;
         const evaluatorRoom = state.roomPlan.rooms.find((room) => room.evaluators.some((item) => item.id === evaluator.id))?.number;
-        if (!recruitRoom || recruitRoom !== evaluatorRoom) return toast("Escape Room and Negotiation pairings must stay inside the same room.", "error");
+        if (!recruitRoom || recruitRoom !== evaluatorRoom) return toast("This activity must keep pairings inside the same group.", "error");
       }
       const container = document.createElement("div");
       container.className = "assignment-row";
@@ -914,8 +961,8 @@ function mandatoryRoomsDialog() {
     const ordered = [...evaluators].sort((a, b) => {
       const roomA = placements[a.id] || Number.MAX_SAFE_INTEGER;
       const roomB = placements[b.id] || Number.MAX_SAFE_INTEGER;
-      const roleA = a.role === "overall" ? 0 : 1;
-      const roleB = b.role === "overall" ? 0 : 1;
+      const roleA = categoryRank(a.role);
+      const roleB = categoryRank(b.role);
       return roomA - roomB || roleA - roleB || a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
     });
     $("#mandatoryList").innerHTML = ordered.map((item) => `<div class="mandatory-row ${item.present ? "" : "absent"}" data-id="${item.id}"><div><strong>${h(item.name)}</strong><small>${h(item.fullName || "Full name not recorded")} · ${item.present ? "Present" : "Absent"}</small></div><span class="role-badge ${item.role}">${h(item.role)}</span><select aria-label="Mandatory room for ${h(item.name)}">${roomOptions(placements[item.id])}</select></div>`).join("");
@@ -981,17 +1028,19 @@ async function renderMonitoring() {
   const submitted = data.recruits.reduce((sum, item) => sum + item.submitted, 0);
   const remaining = Math.max(total - submitted, 0);
   const activity = state.journey.activities.find((item) => item.code === state.monitoringActivity);
-  const skills = state.journey.activities.find((item) => item.code === "skills");
-  const simulation = state.journey.activities.find((item) => item.code === "simulation");
-  const pairStatus = skills.status === simulation.status ? skills.status : null;
-  const pairButton = ["skills", "simulation"].includes(state.monitoringActivity) && pairStatus
-    ? pairStatus === "not_started" ? `<button class="button primary" id="openPair">Open Skills & Simulation</button>`
+  const parallelGroup = configuredActivity(state.monitoringActivity)?.assignment?.parallelGroup;
+  const parallelActivities = parallelGroup ? (state.system?.activities || []).filter(item => item.assignment?.parallelGroup === parallelGroup) : [];
+  const parallelStates = parallelActivities.map(item => state.journey.activities.find(stateItem => stateItem.code === item.key)).filter(Boolean);
+  const pairStatus = parallelStates.length > 1 && parallelStates.every(item => item.status === parallelStates[0].status) ? parallelStates[0].status : null;
+  const pairName = parallelActivities.map(item => item.name).join(" & ");
+  const pairButton = parallelActivities.length > 1 && pairStatus
+    ? pairStatus === "not_started" ? `<button class="button primary" id="openPair">Open ${h(pairName)}</button>`
       : pairStatus === "open" ? `<button class="button danger" id="closePair">Close both</button>`
       : `<button class="button secondary" id="reopenPair">Reopen both</button>` : "";
   const simulatorPanel = state.testToolsEnabled ? `<div class="panel testing-panel"><div class="panel-header"><div><p class="eyebrow">Development-only testing tool</p><h2>Evaluation simulator</h2><p class="muted">Acts as the assigned evaluators and submits valid randomized ${h(data.activityName || activity.name)} forms through the normal scoring and version-history workflow.</p></div><span class="status-pill warning">Not available in production</span></div>
     ${activity.status !== "open" ? `<div class="warning-box">Open ${h(data.activityName || activity.name)} before using the simulator.</div>` : total === 0 ? `<div class="empty-state"><p>No published evaluator tasks are assigned to this activity.</p></div>` : remaining === 0 ? `<div class="empty-state"><p>All ${total} assigned evaluations are already submitted.</p></div>` : `<div class="simulator-controls"><label class="activation-check"><input id="activateSimulator" type="checkbox" ${state.simulatorActivated ? "checked" : ""}> I understand this creates real test submissions in this Journee</label><label>Evaluations to complete<select id="simulatorCount" ${state.simulatorActivated ? "" : "disabled"}><option value="">All remaining (${remaining})</option>${Array.from({ length: remaining }, (_, index) => `<option value="${index + 1}">${index + 1} of ${remaining}</option>`).join("")}</select></label><button class="button danger" id="runSimulator" ${state.simulatorActivated ? "" : "disabled"}>Run simulated evaluations</button></div>`}
     <p class="subtle">Already submitted evaluations are never overwritten. Every generated form is labeled in its comment and audit history.</p></div>` : "";
-  host.innerHTML = `${sectionHeading("Live submissions", "Activity control & monitoring", "Activities open one at a time, except Skills and Simulation which may run together.", `<button class="button ghost" id="refreshMonitoring">Refresh now</button>`)}
+  host.innerHTML = `${sectionHeading("Live submissions", "Activity control & monitoring", "Activities open according to the configured order and parallel groups.", `<button class="button ghost" id="refreshMonitoring">Refresh now</button>`)}
     <div class="activity-control-grid">${state.journey.activities.map((item) => `<article class="activity-control-card ${item.code === state.monitoringActivity ? "selected" : ""}"><div class="panel-header"><h3>${h(item.name)}</h3><span class="status-pill ${item.status}">${h(statusLabel(item.status))}</span></div><button class="button ghost small select-monitor" data-code="${item.code}">Monitor</button></article>`).join("")}</div>
     <div class="panel" style="margin-top:18px"><div class="panel-header"><div><h2>${h(data.activityName || activity.name)}</h2><p class="muted">${submitted} of ${total} expected evaluations received.</p></div><div class="inline-actions">${pairButton}${activity.status === "not_started" ? `<button class="button ghost" id="openActivity">Open only this activity</button>` : activity.status === "open" ? `<button class="button ghost" id="closeActivity">Close only this activity</button>` : `<button class="button ghost" id="reopenActivity">Reopen only this activity</button>`}</div></div><div class="progress"><span style="width:${total ? submitted / total * 100 : 0}%"></span></div>
       <div class="segmented"><button data-mode="recruits" class="${state.monitoringMode === "recruits" ? "active" : ""}">By recruit</button><button data-mode="evaluators" class="${state.monitoringMode === "evaluators" ? "active" : ""}">By evaluator</button></div>
@@ -1003,9 +1052,9 @@ async function renderMonitoring() {
   if ($("#openActivity")) $("#openActivity").onclick = () => lifecycleAction("open");
   if ($("#closeActivity")) $("#closeActivity").onclick = () => lifecycleAction("close");
   if ($("#reopenActivity")) $("#reopenActivity").onclick = () => reasonDialog("Reopen activity", "Explain why evaluator editing is being reopened.", (reason) => lifecycleAction("reopen", reason));
-  if ($("#openPair")) $("#openPair").onclick = () => pairedLifecycleAction("open");
-  if ($("#closePair")) $("#closePair").onclick = () => pairedLifecycleAction("close");
-  if ($("#reopenPair")) $("#reopenPair").onclick = () => reasonDialog("Reopen Skills & Simulation", "Explain why both activities are being reopened.", (reason) => pairedLifecycleAction("reopen", reason));
+  if ($("#openPair")) $("#openPair").onclick = () => pairedLifecycleAction(parallelGroup, pairName, "open");
+  if ($("#closePair")) $("#closePair").onclick = () => pairedLifecycleAction(parallelGroup, pairName, "close");
+  if ($("#reopenPair")) $("#reopenPair").onclick = () => reasonDialog(`Reopen ${pairName}`, "Explain why these activities are being reopened.", (reason) => pairedLifecycleAction(parallelGroup, pairName, "reopen", reason));
   if ($("#activateSimulator")) $("#activateSimulator").onchange = (event) => {
     state.simulatorActivated = event.target.checked;
     $("#simulatorCount").disabled = !state.simulatorActivated;
@@ -1046,13 +1095,14 @@ function monitorTable(data) {
 function evaluationCriterionEditor(criterion, value) {
   if (criterion.inputType === "duration") return durationPickerHtml(criterion.key, value);
   if (criterion.inputType === "integer") return `<input class="whole-number-input" name="${criterion.key}" type="number" min="0" step="1" inputmode="numeric" value="${h(value ?? "")}" required>`;
-  return `<input class="grade-input" name="${criterion.key}" type="number" min="0" max="5" step="0.1" inputmode="decimal" value="${h(value ?? "")}" required>`;
+  if (criterion.inputType === "number") return `<input name="${criterion.key}" type="number" min="0" step="any" inputmode="decimal" value="${h(value ?? "")}" required>`;
+  return `<input class="grade-input" name="${criterion.key}" type="number" min="${criterion.minimum ?? 0}" max="${criterion.maximum ?? 5}" step="${criterion.step ?? .1}" inputmode="decimal" value="${h(value ?? "")}" required>`;
 }
 
 async function showSubmissionDetail(submissionId) {
   try {
     const detail = await api(`/api/admin/journeys/${state.journey.id}/submissions/${submissionId}`);
-    const values = detail.activityCode === "sport" ? detail.raw : detail.responses;
+    const values = detail.rubric.kind === "sport" ? detail.raw : detail.responses;
     const activityState = state.journey.activities.find((item) => item.code === detail.activityCode)?.status || "not_started";
     openModal(`<form id="correctionForm"><p class="eyebrow">Edit evaluation</p><h2>${h(detail.recruitName)} · ${h(detail.activityName)}</h2><p class="muted">Evaluator: ${h(detail.evaluatorName)} · Version ${detail.version} · Current score ${fmt(detail.score)} /5</p><div class="warning-box">This is an administrative correction. It is allowed while the activity is ${h(statusLabel(activityState))} and creates a permanent new version in the audit history.</div><div class="stack evaluation-editor-scroll">${detail.rubric.criteria.map((criterion) => `<label>${h(criterion.name)}<small class="muted">${h(criterion.explanation)}</small>${evaluationCriterionEditor(criterion, values[criterion.key])}</label>`).join("")}<label>Comments<textarea name="comments">${h(detail.comments)}</textarea></label><label>Required reason for change<textarea name="reason" required placeholder="Explain why this evaluation is being changed"></textarea></label></div><h3 style="margin-top:16px">Edit history</h3><div class="audit-list">${detail.history.map((item) => `<div class="audit-item"><small>${localDateTime(item.createdAt)}</small><span>${h(item.actorName)} · v${item.version}</span><span>${fmt(item.score)} /5${item.reason ? ` · ${h(item.reason)}` : ""}</span></div>`).join("")}</div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save evaluation changes</button></div></form>`, { wide: true });
     $("#cancelModal").onclick = closeModal;
@@ -1065,7 +1115,7 @@ async function showSubmissionDetail(submissionId) {
       const form = new FormData(event.currentTarget);
       const responses = {}, raw = {};
       for (const criterion of detail.rubric.criteria) {
-        if (detail.activityCode === "sport") raw[criterion.key] = form.get(criterion.key);
+        if (detail.rubric.kind === "sport") raw[criterion.key] = form.get(criterion.key);
         else responses[criterion.key] = Number(form.get(criterion.key));
       }
       button.disabled = true;
@@ -1088,9 +1138,9 @@ async function lifecycleAction(action, reason = "") {
   await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.monitoringActivity}/${action}`, "POST", { reason }, `Activity ${action === "reopen" ? "reopened" : `${action}ed`}.`, renderMonitoring);
 }
 
-async function pairedLifecycleAction(action, reason = "") {
-  if (action === "close" && !confirm("Close Skills and Simulation and lock both sets of evaluations?")) return;
-  await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/skills-simulation/${action}`, "POST", { reason }, `Skills and Simulation ${action === "reopen" ? "reopened" : `${action}ed`} together.`, renderMonitoring);
+async function pairedLifecycleAction(group, name, action, reason = "") {
+  if (action === "close" && !confirm(`Close ${name} and lock these evaluations?`)) return;
+  await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/parallel/${encodeURIComponent(group)}/${action}`, "POST", { reason }, `${name} ${action === "reopen" ? "reopened" : `${action}ed`} together.`, renderMonitoring);
 }
 
 function reasonDialog(title, text, callback) {
@@ -1240,6 +1290,15 @@ function wireProfile(profile) {
   const completion = $$(".panel h2", host).find((heading) => heading.textContent === "Completion")?.closest(".panel");
   if (completion) completion.innerHTML = `<h2>Completion</h2><p><strong>${profile.result?.missingCount || 0}</strong> missing component${profile.result?.missingCount === 1 ? "" : "s"}</p>${profile.result?.missingComponents?.length ? `<div class="member-list">${profile.result.missingComponents.map((item) => `<span class="member-chip">${h(item)}</span>`).join("")}</div>` : `<p class="success-text">All components are complete.</p>`}`;
   const form = $("#profileForm");
+  const factors = new Map((state.system?.generalFactors || []).map(item => [item.storageKey, item]));
+  for (const key of ["punctuality", "respect", "seriousness"]) {
+    const input = form.elements[key];
+    const factor = factors.get(key);
+    input.closest("label").classList.toggle("hidden", !factor || state.system?.features?.generalAssessment === false);
+    if (factor) { input.max = factor.maximum; input.step = factor.step; }
+  }
+  form.elements.comment.closest("label").classList.toggle("hidden", state.system?.features?.generalAssessment === false);
+  form.elements.notes.closest("label").classList.toggle("hidden", state.system?.features?.notes === false);
   wireBoundedNumberInputs(form);
   form.oninput = () => setDirty(true);
   $("#discardProfile").onclick = () => { state.dirty = false; renderProfiles(); };
@@ -1248,7 +1307,7 @@ function wireProfile(profile) {
     const data = new FormData(form);
     const value = (key) => data.get(key) === "" ? null : Number(data.get(key));
     try {
-      await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment"), notes: data.get("notes"), base_version: profile.assessment.version }));
+      await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment") || "", notes: data.get("notes") || "", base_version: profile.assessment.version }));
       state.dirty = false; toast("Recruit profile saved."); await renderProfiles();
     } catch (error) { toast(error.message, "error"); }
   };
@@ -1271,7 +1330,7 @@ async function showAdminEvaluationEditor(recruitId, activityCode) {
   try {
     const detail = await api(`/api/admin/journeys/${state.journey.id}/recruits/${recruitId}/admin-evaluations/${activityCode}`);
     const existing = detail.evaluation;
-    const values = activityCode === "sport" ? (existing?.raw || {}) : (existing?.responses || {});
+    const values = detail.rubric.kind === "sport" ? (existing?.raw || {}) : (existing?.responses || {});
     openModal(`<form id="adminEvaluationForm"><p class="eyebrow">Official admin evaluation</p><h2>${h(detail.recruit.name)} · ${h(detail.activityName)}</h2>${existing ? `<div class="warning-box">This admin evaluation is the official grade. Evaluator submissions remain visible but are not averaged into the result.</div>` : `<div class="warning-box">Saving this form makes the admin evaluation the official grade for this activity.</div>`}<div class="stack evaluation-editor-scroll">${detail.rubric.criteria.map((criterion) => `<label>${h(criterion.name)}<small class="muted">${h(criterion.explanation)}</small>${evaluationCriterionEditor(criterion, values[criterion.key])}</label>`).join("")}<label>Comments<textarea name="comments">${h(existing?.comments || "")}</textarea></label><label>Required reason<textarea name="reason" required placeholder="Why is the administration entering or changing this evaluation?"></textarea></label></div><div class="modal-actions">${existing ? `<button type="button" class="button danger" id="removeAdminEvaluation">Remove admin evaluation</button>` : ""}<button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save official evaluation</button></div></form>`, { wide: true });
     $("#cancelModal").onclick = closeModal;
     const formElement = $("#adminEvaluationForm");
@@ -1279,7 +1338,7 @@ async function showAdminEvaluationEditor(recruitId, activityCode) {
     formElement.onsubmit = async event => {
       event.preventDefault(); const form = new FormData(event.currentTarget); const responses = {}, raw = {};
       for (const criterion of detail.rubric.criteria) {
-        if (activityCode === "sport") raw[criterion.key] = form.get(criterion.key);
+        if (detail.rubric.kind === "sport") raw[criterion.key] = form.get(criterion.key);
         else responses[criterion.key] = Number(form.get(criterion.key));
       }
       try {
@@ -1365,6 +1424,7 @@ async function renderPermissions() {
   const eligibleWhatsApp = presentWhatsAppAccounts(accounts);
   host.innerHTML = `${sectionHeading("Security", "Access & permissions", "", `<button class="button whatsapp" id="sharePresentCredentials" ${eligibleWhatsApp.length ? "" : "disabled"}>WhatsApp present evaluators (${eligibleWhatsApp.length})</button><button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
     <div class="panel permissions-panel"><div class="permissions-toolbar"><label class="permissions-search-label" for="permissionsSearch">Find an account</label><input id="permissionsSearch" class="search-input" type="search" autocomplete="off" placeholder="Search username, full name, or phone"></div><div class="table-wrap"><table class="permissions-table"><colgroup><col class="permissions-user"><col class="permissions-password"><col class="permissions-role"><col class="permissions-toggle"><col class="permissions-toggle"><col class="permissions-attendance"><col class="permissions-toggle"><col class="permissions-actions-column"></colgroup><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th class="permissions-attendance-heading">${h(state.journey.name)} attendance</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}" data-account-search="${h(normalizedName(`${account.username} ${account.fullName || ""} ${account.phoneNumber || ""}`))}"><td><div class="account-identity"><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text">Owner</small>` : ""}<small>${h(account.fullName || "Full name not recorded")}</small>${account.phoneNumber ? `<small>${h(account.phoneNumber)}</small>` : ""}</div></td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-attendance attendance-check" type="checkbox" ${account.attendanceJourneyIds.includes(state.journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}></td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="permissions-actions"><button class="button whatsapp small whatsapp-account" ${whatsAppAccountReady(account) ? "" : "disabled"} title="${h(whatsAppAccountReady(account) ? `Open WhatsApp for ${account.username}` : "A phone number and visible password are required")}">WhatsApp</button><button class="button ghost small edit-account">Edit info</button><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save access</button><button class="button ghost small reset-account">Reset password</button><button class="button danger small delete-account" ${account.isOwner ? "disabled" : ""}>Delete</button></div></td></tr>`).join("")}</tbody></table></div><p id="permissionsNoResults" class="muted hidden">No account matches this search.</p></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
+  $$(".account-role", host).forEach((select, index) => { select.innerHTML = categoryOptions(accounts[index].evaluatorRole); });
   $("#permissionsSearch").oninput = (event) => {
     const query = normalizedName(event.currentTarget.value);
     let visible = 0;
@@ -1465,20 +1525,20 @@ async function renderPermissions() {
 }
 
 function addAccountDialog() {
-  openModal(`<form id="accountForm"><h2>Add account</h2><div class="stack"><label>Username / nickname<input name="username" required maxlength="200"></label><label>Full name (optional)<input name="fullName" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" inputmode="tel" maxlength="40"></label><label>Temporary password<input name="password" type="password" minlength="8" required></label><label>Evaluator role<select name="role"><option value="overall">Overall</option><option value="dossard">Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add account</button></div></form>`);
+  openModal(`<form id="accountForm"><h2>Add account</h2><div class="stack"><label>Username / nickname<input name="username" required maxlength="200"></label><label>Full name (optional)<input name="fullName" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" inputmode="tel" maxlength="40"></label><label>Temporary password<input name="password" type="password" minlength="8" required></label><label>Assessor category<select name="role">${categoryOptions()}</select></label><label>Access profile<select name="accessProfile">${accessProfileOptions()}</select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add account</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#accountForm").onsubmit = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await api("/api/auth/accounts", mutation("POST", { username: form.get("username"), full_name: form.get("fullName") || null, phone_number: form.get("phoneNumber") || null, password: form.get("password"), evaluator_role: form.get("role") }));
+      await api("/api/auth/accounts", mutation("POST", { username: form.get("username"), full_name: form.get("fullName") || null, phone_number: form.get("phoneNumber") || null, password: form.get("password"), evaluator_role: form.get("role"), access_profile: form.get("accessProfile"), attendance_journey_id: state.journey.id }));
       closeModal(); toast("Account added."); await renderPermissions();
     } catch (error) { toast(error.message, "error"); }
   };
 }
 
 function openAccountInfoDialog(account) {
-  openModal(`<form id="accountInfoForm"><p class="eyebrow">Account details</p><h2>Edit ${h(account.username)}</h2><div class="stack"><label>Username / nickname<input name="username" value="${h(account.username)}" required maxlength="200" ${account.isOwner ? "readonly" : ""}></label><label>Full name (optional)<input name="fullName" value="${h(account.fullName || "")}" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" value="${h(account.phoneNumber || "")}" inputmode="tel" maxlength="40"></label><label>Evaluator role<select name="role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save account info</button></div></form>`);
+  openModal(`<form id="accountInfoForm"><p class="eyebrow">Account details</p><h2>Edit ${h(account.username)}</h2><div class="stack"><label>Username / nickname<input name="username" value="${h(account.username)}" required maxlength="200" ${account.isOwner ? "readonly" : ""}></label><label>Full name (optional)<input name="fullName" value="${h(account.fullName || "")}" maxlength="200"></label><label>Phone number (optional)<input name="phoneNumber" value="${h(account.phoneNumber || "")}" inputmode="tel" maxlength="40"></label><label>Assessor category<select name="role" ${account.isOwner ? "disabled" : ""}>${categoryOptions(account.evaluatorRole)}</select></label><label class="checkbox-inline"><input name="canEvaluate" type="checkbox" ${account.canEvaluate ? "checked" : ""} ${account.isOwner ? "disabled" : ""}> Can use the evaluator workspace</label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save account info</button></div></form>`);
   $("#cancelModal").onclick = closeModal;
   $("#accountInfoForm").onsubmit = async (event) => {
     event.preventDefault();
@@ -1487,7 +1547,8 @@ function openAccountInfoDialog(account) {
       username: form.get("username"),
       full_name: form.get("fullName") || null,
       phone_number: form.get("phoneNumber") || null,
-      evaluator_role: account.isOwner ? "dossard" : form.get("role"),
+      evaluator_role: account.isOwner ? account.evaluatorRole : form.get("role"),
+      can_evaluate: account.isOwner ? true : form.get("canEvaluate") === "on",
       base_version: account.version,
     };
     const saveButton = event.currentTarget.querySelector("button.primary");
@@ -1633,4 +1694,11 @@ async function archiveCurrent() {
   } catch (error) { toast(error.message, "error"); }
 }
 
-initialize();
+initializeSystemUI().then(configuration => {
+  state.system = configuration;
+  dimensionOrder = configuration.dimensions.map(item => item.key);
+  dimensionNames = Object.fromEntries(configuration.dimensions.map(item => [item.key, item.name]));
+  dimensionMaximums = Object.fromEntries(configuration.dimensions.map(item => [item.key, Number(item.displayMaximum || 5)]));
+  const firstActivity = configuration.activities?.[0]?.key;
+  if (firstActivity) state.assignmentActivity = state.monitoringActivity = firstActivity;
+}).catch(() => {}).finally(initialize);
