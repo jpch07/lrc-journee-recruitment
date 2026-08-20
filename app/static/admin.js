@@ -1,5 +1,5 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
-import { initializeSystemUI } from "/static/system-ui.js?v=20260819.1";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260820.2";
 
 const state = {
   system: null,
@@ -25,6 +25,8 @@ const state = {
   lastProtectionPoll: 0,
   recruitAttendanceSaves: new Map(),
   loginAccounts: [],
+  workspaceSlug: "",
+  workspaceName: "",
 };
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -120,6 +122,8 @@ async function initialize() {
     state.adminName = session.username;
     state.isOwner = Boolean(session.isOwner);
     state.testToolsEnabled = Boolean(session.testToolsEnabled);
+    state.workspaceSlug = session.recruitment?.slug || "";
+    state.workspaceName = session.recruitment?.name || state.system?.name || "Assessment Workspace";
     showApp();
     await loadLibrary();
   } catch {
@@ -150,6 +154,8 @@ $("#loginForm").addEventListener("submit", async (event) => {
     state.adminName = result.username;
     state.isOwner = Boolean(result.isOwner);
     state.testToolsEnabled = Boolean(result.testToolsEnabled);
+    state.workspaceSlug = result.recruitment?.slug || "";
+    state.workspaceName = result.recruitment?.name || state.system?.name || "Assessment Workspace";
     showApp();
     await loadLibrary();
   } catch (error) {
@@ -169,6 +175,7 @@ $("#backToLibrary").addEventListener("click", returnToLibrary);
 $("#menuButton").addEventListener("click", () => $("#sidebar").classList.toggle("open"));
 $("#showArchived").addEventListener("change", loadLibrary);
 $("#createJourneyButton").addEventListener("click", createJourneyDialog);
+$("#libraryPermissionsButton").addEventListener("click", openLibraryPermissions);
 
 async function loadLibrary() {
   clearInterval(state.pollTimer);
@@ -178,8 +185,23 @@ async function loadLibrary() {
   $("#workspaceView").classList.add("hidden");
   $("#journeyCrumb").textContent = "Journee library";
   $("#permissionsNav").classList.toggle("hidden", !state.isOwner);
+  $("#libraryPermissionsButton").classList.toggle("hidden", !state.isOwner);
   $("#configureSystemButton").classList.toggle("hidden", !state.isOwner);
+  $("#configureSystemButton").href = state.workspaceSlug ? `/${encodeURIComponent(state.workspaceSlug)}/configure` : "/configure";
+  $("#workspaceBrandName").textContent = state.workspaceName || state.system?.name || "Assessment Workspace";
   renderLibrary();
+}
+
+async function openLibraryPermissions() {
+  if (!state.isOwner || !guardDirty()) return;
+  clearInterval(state.pollTimer);
+  state.journey = null;
+  state.section = "permissions";
+  $("#libraryView").classList.add("hidden");
+  $("#workspaceView").classList.remove("hidden");
+  $("#journeyCrumb").textContent = "Access & permissions";
+  $$("#workspaceNav button:not(#permissionsNav)").forEach((button) => button.classList.add("hidden"));
+  await renderSection();
 }
 
 function renderLibrary() {
@@ -255,6 +277,7 @@ async function openJourney(id, section = "dashboard") {
   $("#libraryView").classList.add("hidden");
   $("#workspaceView").classList.remove("hidden");
   $("#journeyCrumb").textContent = state.journey.name;
+  $$("#workspaceNav button:not(#permissionsNav)").forEach((button) => button.classList.remove("hidden"));
   await renderSection();
   state.pollTimer = setInterval(async () => {
     if (document.hidden || state.dirty || !state.journey) return;
@@ -293,7 +316,7 @@ $("#workspaceNav").addEventListener("click", async (event) => {
 });
 
 async function renderSection(background = false) {
-  if (!state.journey) return;
+  if (!state.journey && state.section !== "permissions") return;
   $$("#workspaceNav button").forEach((button) => button.classList.toggle("active", button.dataset.section === state.section));
   if (!background) host.innerHTML = `<div class="loading-card">Loading ${h(state.section)}…</div>`;
   try {
@@ -1386,12 +1409,19 @@ function openAccountWhatsApp(account) {
 }
 
 function presentWhatsAppAccounts(accounts) {
+  if (!state.journey) return [];
   const byUsername = new Map(accounts.map((account) => [normalizedName(account.username), account]));
   return state.journey.evaluators
     .filter((evaluator) => evaluator.present && evaluator.active)
     .sort(evaluatorAttendanceSort)
     .map((evaluator) => byUsername.get(normalizedName(evaluator.name)))
     .filter((account) => whatsAppAccountReady(account));
+}
+
+function permissionAttendanceCell(account) {
+  const journeys = state.journey ? [state.journey] : state.journeys;
+  if (!journeys.length) return `<span class="subtle">No Journees yet</span>`;
+  return `<div class="permission-journeys">${journeys.map((journey) => `<label><input class="account-attendance-journey attendance-check" data-journey-id="${journey.id}" type="checkbox" ${account.attendanceJourneyIds.includes(journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}><span>${h(journey.name)}</span></label>`).join("")}</div>`;
 }
 
 function openPresentWhatsAppQueue(eligible) {
@@ -1419,11 +1449,13 @@ function openPresentWhatsAppQueue(eligible) {
 
 async function renderPermissions() {
   if (!state.isOwner) throw new Error("Owner access is required.");
-  await refreshJourney();
+  if (state.journey) await refreshJourney();
   const [accounts, accountAudit] = await Promise.all([api("/api/auth/accounts"), api("/api/auth/account-audit")]);
   const eligibleWhatsApp = presentWhatsAppAccounts(accounts);
-  host.innerHTML = `${sectionHeading("Security", "Access & permissions", "", `<button class="button whatsapp" id="sharePresentCredentials" ${eligibleWhatsApp.length ? "" : "disabled"}>WhatsApp present evaluators (${eligibleWhatsApp.length})</button><button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
-    <div class="panel permissions-panel"><div class="permissions-toolbar"><label class="permissions-search-label" for="permissionsSearch">Find an account</label><input id="permissionsSearch" class="search-input" type="search" autocomplete="off" placeholder="Search username, full name, or phone"></div><div class="table-wrap"><table class="permissions-table"><colgroup><col class="permissions-user"><col class="permissions-password"><col class="permissions-role"><col class="permissions-toggle"><col class="permissions-toggle"><col class="permissions-attendance"><col class="permissions-toggle"><col class="permissions-actions-column"></colgroup><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th class="permissions-attendance-heading">${h(state.journey.name)} attendance</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}" data-account-search="${h(normalizedName(`${account.username} ${account.fullName || ""} ${account.phoneNumber || ""}`))}"><td><div class="account-identity"><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text">Owner</small>` : ""}<small>${h(account.fullName || "Full name not recorded")}</small>${account.phoneNumber ? `<small>${h(account.phoneNumber)}</small>` : ""}</div></td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}><option value="overall" ${account.evaluatorRole === "overall" ? "selected" : ""}>Overall</option><option value="dossard" ${account.evaluatorRole === "dossard" ? "selected" : ""}>Dossard</option></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-attendance attendance-check" type="checkbox" ${account.attendanceJourneyIds.includes(state.journey.id) || account.isOwner || account.canAdmin ? "checked" : ""} ${account.isOwner || account.canAdmin ? "disabled" : ""}></td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="permissions-actions"><button class="button whatsapp small whatsapp-account" ${whatsAppAccountReady(account) ? "" : "disabled"} title="${h(whatsAppAccountReady(account) ? `Open WhatsApp for ${account.username}` : "A phone number and visible password are required")}">WhatsApp</button><button class="button ghost small edit-account">Edit info</button><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save access</button><button class="button ghost small reset-account">Reset password</button><button class="button danger small delete-account" ${account.isOwner ? "disabled" : ""}>Delete</button></div></td></tr>`).join("")}</tbody></table></div><p id="permissionsNoResults" class="muted hidden">No account matches this search.</p></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
+  const presentShareAction = state.journey ? `<button class="button whatsapp" id="sharePresentCredentials" ${eligibleWhatsApp.length ? "" : "disabled"}>WhatsApp present evaluators (${eligibleWhatsApp.length})</button>` : "";
+  const attendanceHeading = state.journey ? `${state.journey.name} attendance` : "Attendance access by Journee";
+  host.innerHTML = `${sectionHeading("Security", "Access & permissions", state.journey ? "" : "Workspace-wide accounts and permissions. Attendance access remains Journee-specific.", `${presentShareAction}<button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
+    <div class="panel permissions-panel"><div class="permissions-toolbar"><label class="permissions-search-label" for="permissionsSearch">Find an account</label><input id="permissionsSearch" class="search-input" type="search" autocomplete="off" placeholder="Search username, full name, or phone"></div><div class="table-wrap"><table class="permissions-table"><colgroup><col class="permissions-user"><col class="permissions-password"><col class="permissions-role"><col class="permissions-toggle"><col class="permissions-toggle"><col class="permissions-attendance"><col class="permissions-toggle"><col class="permissions-actions-column"></colgroup><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th class="permissions-attendance-heading">${h(attendanceHeading)}</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}" data-account-search="${h(normalizedName(`${account.username} ${account.fullName || ""} ${account.phoneNumber || ""}`))}"><td><div class="account-identity"><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text">Owner</small>` : ""}<small>${h(account.fullName || "Full name not recorded")}</small>${account.phoneNumber ? `<small>${h(account.phoneNumber)}</small>` : ""}</div></td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td>${permissionAttendanceCell(account)}</td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="permissions-actions"><button class="button whatsapp small whatsapp-account" ${whatsAppAccountReady(account) ? "" : "disabled"} title="${h(whatsAppAccountReady(account) ? `Open WhatsApp for ${account.username}` : "A phone number and visible password are required")}">WhatsApp</button><button class="button ghost small edit-account">Edit info</button><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save access</button><button class="button ghost small reset-account">Reset password</button><button class="button danger small delete-account" ${account.isOwner ? "disabled" : ""}>Delete</button></div></td></tr>`).join("")}</tbody></table></div><p id="permissionsNoResults" class="muted hidden">No account matches this search.</p></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
   $$(".account-role", host).forEach((select, index) => { select.innerHTML = categoryOptions(accounts[index].evaluatorRole); });
   $("#permissionsSearch").oninput = (event) => {
     const query = normalizedName(event.currentTarget.value);
@@ -1453,12 +1485,15 @@ async function renderPermissions() {
       await renderPermissions();
     } catch (error) { toast(error.message, "error"); button.disabled = false; }
   });
-  $("#sharePresentCredentials").onclick = () => openPresentWhatsAppQueue(eligibleWhatsApp);
+  if ($("#sharePresentCredentials")) $("#sharePresentCredentials").onclick = () => openPresentWhatsAppQueue(eligibleWhatsApp);
   $$(".save-account", host).forEach((button) => button.onclick = async () => {
     const row = button.closest("tr");
     const account = accounts.find((item) => item.id === row.dataset.accountId);
     const attendanceIds = new Set(account.attendanceJourneyIds);
-    if (row.querySelector(".account-attendance").checked) attendanceIds.add(state.journey.id); else attendanceIds.delete(state.journey.id);
+    $$(".account-attendance-journey", row).forEach((checkbox) => {
+      if (checkbox.checked) attendanceIds.add(checkbox.dataset.journeyId);
+      else attendanceIds.delete(checkbox.dataset.journeyId);
+    });
     button.disabled = true;
     try {
       await api(`/api/auth/accounts/${account.id}`, mutation("PATCH", {
@@ -1475,7 +1510,7 @@ async function renderPermissions() {
   });
   $$(".reset-account", host).forEach((button) => button.onclick = async () => {
     const account = accounts.find((item) => item.id === button.closest("tr").dataset.accountId);
-    const compact = account.username.normalize("NFKD").toLocaleLowerCase().replace(/[^a-z0-9]/g, "") || "lrcuser";
+    const compact = account.username.normalize("NFKD").toLocaleLowerCase().replace(/[^a-z0-9]/g, "") || "user";
     const suggested = `${compact}${Math.floor(Math.random() * 900) + 100}`;
     const password = prompt(`Enter a new password for ${account.username}:`, suggested);
     if (!password) return;
@@ -1514,7 +1549,7 @@ async function renderPermissions() {
       const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(",")).join("\r\n");
       const link = document.createElement("a");
       link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-      link.download = `LRC-evaluator-passwords-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.download = `assessor-passwords-${new Date().toISOString().slice(0, 10)}.csv`;
       link.click();
       URL.revokeObjectURL(link.href);
       toast(`${created.length} evaluator passwords generated. They remain visible to the owner.`);
@@ -1531,7 +1566,7 @@ function addAccountDialog() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await api("/api/auth/accounts", mutation("POST", { username: form.get("username"), full_name: form.get("fullName") || null, phone_number: form.get("phoneNumber") || null, password: form.get("password"), evaluator_role: form.get("role"), access_profile: form.get("accessProfile"), attendance_journey_id: state.journey.id }));
+      await api("/api/auth/accounts", mutation("POST", { username: form.get("username"), full_name: form.get("fullName") || null, phone_number: form.get("phoneNumber") || null, password: form.get("password"), evaluator_role: form.get("role"), access_profile: form.get("accessProfile"), attendance_journey_id: state.journey?.id || null }));
       closeModal(); toast("Account added."); await renderPermissions();
     } catch (error) { toast(error.message, "error"); }
   };
@@ -1645,8 +1680,9 @@ async function renderSettings() {
     api(`/api/admin/journeys/${state.journey.id}/event-day-protection`),
   ]);
   state.lastProtectionPoll = Date.now();
-  const evalUrl = `${location.origin}/evaluate`;
-  const viewUrl = `${location.origin}/view`;
+  const workspaceRoot = state.workspaceSlug ? `${location.origin}/${encodeURIComponent(state.workspaceSlug)}` : location.origin;
+  const evalUrl = `${workspaceRoot}/evaluate`;
+  const viewUrl = `${workspaceRoot}/view`;
   const attendanceUrl = state.journey.recruitAttendancePath ? `${location.origin}${state.journey.recruitAttendancePath}` : "";
   host.innerHTML = `${sectionHeading("Configuration", "Settings, audit & export", "Manage event metadata, evaluator access, archives, and complete data extracts.")}
     <div class="two-column"><div class="panel"><h2>Journee metadata</h2><form id="settingsForm" class="stack"><label>Name<input name="name" value="${h(state.journey.name)}" required></label><label>Date<input name="date" type="date" value="${h(state.journey.eventDate)}" required></label><label>Status<select name="status">${["draft", "ready", "active", "completed", "archived"].map((value) => `<option value="${value}" ${value === state.journey.status ? "selected" : ""}>${h(statusLabel(value))}</option>`).join("")}</select></label><button class="button primary">Save settings</button></form></div>
@@ -1657,7 +1693,7 @@ async function renderSettings() {
     <div class="panel"><h2 class="danger-text">Archive or delete</h2><p class="muted">Archiving preserves the Journee. Permanent deletion removes its attendance, rooms, assignments, evaluations, photos, and audit history.</p><div class="inline-actions"><button class="button ghost" id="archiveCurrent">Archive Journee</button><button class="button danger" id="deleteCurrent">Permanently delete Journee</button></div></div>`;
   const form = $("#settingsForm");
   const accessPanel = $$(".panel h2", host).find((item) => item.textContent === "Access links & QR codes")?.closest(".panel");
-  if (accessPanel) accessPanel.insertAdjacentHTML("beforeend", `<div class="access-link-block"><h3>Read-only management link</h3><input readonly value="${h(viewUrl)}"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyViewLink">Copy read-only link</button><a class="button ghost" href="/view" target="_blank" rel="noopener">Open</a></div></div>`);
+  if (accessPanel) accessPanel.insertAdjacentHTML("beforeend", `<div class="access-link-block"><h3>Read-only management link</h3><input readonly value="${h(viewUrl)}"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyViewLink">Copy read-only link</button><a class="button ghost" href="${h(viewUrl)}" target="_blank" rel="noopener">Open</a></div></div>`);
   form.onsubmit = async (event) => {
     event.preventDefault();
     const data = new FormData(form);

@@ -1,7 +1,7 @@
 :root {
-  --red: #c8102e;
-  --red-dark: #8b0b22;
-  --red-soft: #fff1f4;
+  --red: #4f46e5;
+  --red-dark: #3730a3;
+  --red-soft: #eef2ff;
   --ink: #17202d;
   --muted: #5f6b7a;
   --line: #dce1e7;
@@ -149,6 +149,9 @@ textarea { min-height: 105px; resize: vertical; }
 .permissions-table .account-role { width: 100%; min-width: 88px; }
 .permissions-attendance-heading { overflow-wrap: anywhere; }
 .permissions-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.permission-journeys { display: grid; gap: 6px; min-width: 150px; max-height: 150px; overflow: auto; }
+.permission-journeys label { display: flex; align-items: center; gap: 7px; font-size: .78rem; font-weight: 600; }
+.permission-journeys .attendance-check { width: 20px !important; height: 20px; flex: 0 0 auto; }
 .search-suggestions button:hover, .search-suggestions button:focus-visible { background: var(--red-soft); outline: none; }
 .search-suggestions button span:first-child { min-width: 0; }
 .search-suggestions button strong, .search-suggestions button small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

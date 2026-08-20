@@ -184,11 +184,15 @@ def serialize_journey(db: Session, journey: Journey, *, include_token: bool = Fa
         "updatedAt": journey.updated_at.isoformat(),
     }
     if include_token:
+        from .models import AssessmentSystem
+
+        system_slug = db.scalar(select(AssessmentSystem.slug).where(AssessmentSystem.id == journey.system_id))
+        workspace_root = f"/{system_slug}" if system_slug else ""
         result["publicToken"] = journey.public_token
-        result["evaluatorPath"] = "/evaluate"
+        result["evaluatorPath"] = f"{workspace_root}/evaluate"
         attendance_access = db.get(RecruitAttendanceAccess, journey.id)
         result["recruitAttendancePath"] = (
-            f"/recruit-attendance/{attendance_access.token}" if attendance_access else None
+            f"{workspace_root}/attendance/{attendance_access.token}" if attendance_access else None
         )
     return result
 

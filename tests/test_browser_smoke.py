@@ -50,7 +50,7 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "wireRecruitDirectoryPicker" in common_js
     assert "selectedAccount" in common_js
     assert "data-duration-minutes" in common_js
-    assert "Recruit attendance" in attendance
+    assert "Participant attendance" in attendance
     assert "queueRecruitSave" in attendance_js
     assert "attendanceSave" not in attendance_js
     assert "checking for updates every 5 seconds" in attendance_js
@@ -76,7 +76,7 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Download interactive Excel report" not in viewer_js
     assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260817.1" in viewer
+    assert "viewer.js?v=20260820.2" in viewer
     assert "platformLoginForm" in home
     assert "platformSignupForm" in home
     assert "workspaceList" in home
@@ -84,10 +84,20 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "admin.js?v=20260817.1" in admin
-    assert "?v=20260810.1" in evaluator
+    assert "admin.js?v=20260820.2" in admin
+    assert "?v=20260820.2" in evaluator
     assert "common.js?v=20260810.1" in admin_js
     assert "common.js?v=20260810.1" in evaluator_js
+
+
+def test_static_workspace_shells_are_neutral_before_configuration_loads():
+    static = Path("app/static")
+    for filename in ("admin.html", "evaluator.html", "viewer.html", "recruit_attendance.html"):
+        content = (static / filename).read_text(encoding="utf-8")
+        assert "Lebanese Red Cross" not in content
+        assert ">LRC<" not in content
+    configurator = (static / "configurator.js").read_text(encoding="utf-8")
+    assert "Use LRC preset" not in configurator
 
 
 def test_frontend_responses_prevent_stale_release_mixing(client):

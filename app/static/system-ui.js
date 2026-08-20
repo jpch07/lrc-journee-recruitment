@@ -119,6 +119,7 @@ export function applySystemConfiguration(configuration) {
   const root = document.documentElement;
   root.style.setProperty("--red", configuration.branding.primaryColor);
   root.style.setProperty("--red-dark", darken(configuration.branding.primaryColor));
+  root.style.setProperty("--red-soft", `${configuration.branding.primaryColor}12`);
   root.style.setProperty("--ink", configuration.branding.darkColor);
   document.querySelector('meta[name="theme-color"]')?.setAttribute("content", configuration.branding.primaryColor);
   document.querySelectorAll(".brand-mark").forEach(mark => {
@@ -137,6 +138,11 @@ export function applySystemConfiguration(configuration) {
   document.querySelectorAll(".login-card > .eyebrow, .home-hero > .eyebrow").forEach(element => {
     element.textContent = configuration.branding.organizationName || configuration.name;
   });
+  const loginTitle = document.querySelector(".login-card > h1");
+  if (loginTitle) loginTitle.textContent = configuration.name;
+  const workspaceBrandName = document.querySelector("#workspaceBrandName");
+  if (workspaceBrandName) workspaceBrandName.textContent = configuration.name;
+  document.querySelectorAll("[data-system-name]").forEach(element => { element.textContent = configuration.name; });
   const homeTitle = document.querySelector(".home-hero > h1");
   if (homeTitle) homeTitle.textContent = configuration.name;
   document.title = `${configuration.name}${document.title.includes("·") ? ` · ${document.title.split("·").at(-1).trim()}` : ""}`;

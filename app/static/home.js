@@ -54,11 +54,11 @@ async function showWorkspaces(session) {
 async function openWorkspace(id, button) {
   button.disabled = true;
   try {
-    await api(`/api/platform/workspaces/${encodeURIComponent(id)}/select`, {
+    const selected = await api(`/api/platform/workspaces/${encodeURIComponent(id)}/select`, {
       method: "POST",
       headers: { "X-CSRF-Token": platformSession.csrfToken },
     });
-    window.location.assign("/admin");
+    window.location.assign(`/${encodeURIComponent(selected.slug)}/admin`);
   } catch (problem) {
     button.disabled = false;
     window.alert(problem.message);

@@ -30,8 +30,8 @@ class Terminology(BaseModel):
 class Branding(BaseModel):
     organizationName: str = ""
     shortMark: str = "AS"
-    primaryColor: str = "#b20d2d"
-    darkColor: str = "#192331"
+    primaryColor: str = "#4f46e5"
+    darkColor: str = "#172033"
     logoUrl: str = ""
 
 

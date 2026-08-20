@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#192331">
   <title>Configure Assessment System</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260811.3&theme=command-grid-2">
-  <link rel="stylesheet" href="/static/configurator.css?v=20260819.1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260820.2&theme=workspace-routing">
+  <link rel="stylesheet" href="/static/configurator.css?v=20260820.2">
 </head>
 <body class="config-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -28,9 +28,9 @@
 
   <div id="configApp" class="config-app hidden">
     <header class="config-topbar">
-      <a href="/admin" class="config-product"><span id="configMark" class="brand-mark small">AS</span><span><strong>Configure Assessment System</strong><small id="configSystemName">Assessment system</small></span></a>
+      <a href="/admin" class="config-product workspace-admin-link"><span id="configMark" class="brand-mark small">AS</span><span><strong>Configure Assessment System</strong><small id="configSystemName">Assessment system</small></span></a>
       <div class="config-save-state"><span id="configStateDot"></span><strong id="configStateText">Saved</strong><small id="configVersion"></small></div>
-      <div class="inline-actions"><button id="configSave" class="button ghost">Save draft</button><button id="configPublish" class="button primary">Review & publish</button><a href="/admin" class="button ghost">Back to admin</a></div>
+      <div class="inline-actions"><button id="configSave" class="button ghost">Save draft</button><button id="configPublish" class="button primary">Review & publish</button><a href="/admin" class="button ghost workspace-admin-link">Back to admin</a><a href="/" class="button ghost">All workspaces</a></div>
     </header>
 
     <aside class="config-sidebar">
@@ -51,6 +51,6 @@
   </div>
 
   <dialog id="configDialog" class="modal"><div id="configDialogBody"></div></dialog>
-  <script type="module" src="/static/configurator.js?v=20260819.1"></script>
+  <script type="module" src="/static/configurator.js?v=20260820.2"></script>
 </body>
 </html>

@@ -45,6 +45,13 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
     )
     assert picker_account["fullName"] == "Test Person Full Name"
     assert "phoneNumber" not in picker_account
+    journey_detail = client.get(f"/api/admin/journeys/{journey['id']}").json()
+    attendance_evaluator = next(
+        item for item in journey_detail["evaluators"]
+        if item["name"] == "Permission Tester"
+    )
+    assert attendance_evaluator["present"] is False
+    assert attendance_evaluator["active"] is True
     updated = client.patch(f"/api/auth/accounts/{account['id']}", headers=headers, json={
         "can_results": True,
         "attendance_journey_ids": [journey["id"]],

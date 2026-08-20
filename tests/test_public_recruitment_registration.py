@@ -50,6 +50,7 @@ def test_one_owner_can_create_list_and_open_multiple_workspaces(client):
     listed = client.get("/api/platform/workspaces")
     assert listed.status_code == 200
     assert {item["name"] for item in listed.json()} == {"Admissions 2027", "Volunteer Selection"}
+    assert {item["slug"] for item in listed.json()} == {"admissions-2027", "volunteer-selection"}
 
     selected = client.post(
         f"/api/platform/workspaces/{first['id']}/select",
@@ -60,6 +61,18 @@ def test_one_owner_can_create_list_and_open_multiple_workspaces(client):
     assert workspace_session.status_code == 200
     assert workspace_session.json()["isOwner"] is True
     assert workspace_session.json()["recruitment"]["name"] == "Admissions 2027"
+    assert selected.json()["slug"] == "admissions-2027"
+    assert client.get("/admissions-2027/admin").status_code == 200
+    assert client.get("/admissions-2027/evaluate").status_code == 200
+    assert client.get("/admissions-2027/view").status_code == 200
+    assert client.get("/admissions-2027/configure").status_code == 200
+
+    public_config = client.get("/api/configurator/public").json()
+    assert public_config["branding"]["primaryColor"] == "#4f46e5"
+    assert public_config["branding"]["shortMark"] == "AS"
+    assert public_config["branding"]["organizationName"] == ""
+    configurator = client.get("/api/configurator").json()
+    assert configurator["presets"] == []
 
     selected = client.post(
         f"/api/platform/workspaces/{second['id']}/select",

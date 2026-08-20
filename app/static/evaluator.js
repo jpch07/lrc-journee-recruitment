@@ -1,12 +1,12 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260810.1";
-import { initializeSystemUI } from "/static/system-ui.js?v=20260819.1";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260820.2";
 
 // The LRC preset still renders the proven type="number" min="0" max="5" rating control.
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const host = $("#evalHost");
 const photoViewer = $("#photoViewer");
-const fixedLink = location.pathname.replace(/\/+$/, "") === "/evaluate";
+const fixedLink = location.pathname.replace(/\/+$/, "").endsWith("/evaluate");
 const token = location.pathname.split("/").filter(Boolean).pop();
 const publicBase = fixedLink ? "/api/public/current" : `/api/public/journeys/${encodeURIComponent(token)}`;
 const state = {
