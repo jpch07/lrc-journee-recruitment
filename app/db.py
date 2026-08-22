@@ -40,9 +40,15 @@ def _sqlite_pragmas(dbapi_connection, _connection_record) -> None:
 
 
 def _postgres_transaction_search_path(connection) -> None:
-    # SET LOCAL is transaction-scoped, which is safe with transaction-pooling:
-    # PgBouncer keeps every statement in this transaction on one server.
-    connection.exec_driver_sql(POSTGRES_SEARCH_PATH_SQL)
+    if connection.dialect.name == "cockroachdb":
+        # CockroachDB's Alembic dialect performs non-transactional DDL. A
+        # session-scoped search path therefore has to survive the implicit
+        # commits between schema changes.
+        connection.exec_driver_sql("set search_path to journee_recruitment, public")
+    else:
+        # SET LOCAL is transaction-scoped, which is safe with Neon/PgBouncer:
+        # every statement in this transaction stays on one server.
+        connection.exec_driver_sql(POSTGRES_SEARCH_PATH_SQL)
 
 
 def configure_engine_events(database_engine, *, is_sqlite: bool) -> None:
@@ -145,7 +151,20 @@ def initialize_database() -> None:
             connection.execute(text("select pg_advisory_lock(hashtext('lrc_journee_migrations'))"))
         try:
             configuration.attributes["connection"] = connection
-            command.upgrade(configuration, "head")
+            if IS_COCKROACH and not connection.execute(text(
+                "select count(*) from information_schema.tables "
+                "where table_schema='journee_recruitment' and table_name='alembic_version'"
+            )).scalar():
+                # Revision 0001 intentionally reflects current metadata so a
+                # fresh database does not need to replay years of compatibility
+                # migrations. CockroachDB runs DDL asynchronously and outside a
+                # single transaction, which makes that historical replay both
+                # slow and vulnerable to duplicate-object races. Build the
+                # current schema once and stamp it at head instead.
+                Base.metadata.create_all(bind=connection, checkfirst=True)
+                command.stamp(configuration, "head")
+            else:
+                command.upgrade(configuration, "head")
         finally:
             if not IS_SQLITE and not IS_COCKROACH:
                 connection.execute(text("select pg_advisory_unlock(hashtext('lrc_journee_migrations'))"))

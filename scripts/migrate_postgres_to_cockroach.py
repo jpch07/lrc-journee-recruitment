@@ -46,6 +46,23 @@ def scoped_engine(url: str):
     return engine
 
 
+def parent_first(rows: list[dict], *, id_key: str, parent_key: str) -> list[dict]:
+    """Order rows so an optional self-referenced parent is inserted first."""
+    pending = {row[id_key]: row for row in rows}
+    ordered: list[dict] = []
+    inserted: set[str] = set()
+    while pending:
+        ready = [row for row in pending.values()
+                 if not row.get(parent_key) or row[parent_key] in inserted or row[parent_key] not in pending]
+        if not ready:
+            raise RuntimeError(f"Circular {parent_key} relationship detected during migration.")
+        for row in ready:
+            ordered.append(row)
+            inserted.add(row[id_key])
+            del pending[row[id_key]]
+    return ordered
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--confirm", action="store_true")
@@ -88,8 +105,18 @@ def main() -> int:
                 continue
             rows = [dict(row) for row in source.execute(select(table)).mappings()]
             counts[table.name] = len(rows)
-            if rows:
-                target.execute(table.insert(), rows)
+            if table.name == "assignment_rounds":
+                rows = parent_first(rows, id_key="id", parent_key="reused_from_id")
+            if table.name == "recruits":
+                # Avoid psycopg pipeline frames containing many BYTEA photos;
+                # Cockroach's cloud gateway may close an oversized frame even
+                # though the complete transaction is comfortably within its
+                # transaction-size limit.
+                for row in rows:
+                    target.execute(table.insert(), row)
+            else:
+                for offset in range(0, len(rows), 100):
+                    target.execute(table.insert(), rows[offset:offset + 100])
 
     failures = []
     with target_engine.connect() as target:
