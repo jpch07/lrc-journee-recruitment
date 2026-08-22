@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import hashlib
+import random
 import secrets
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
@@ -8,7 +10,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 from PIL import Image, ImageOps
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .assignments import (
@@ -16,10 +18,14 @@ from .assignments import (
     Pairing,
     PairingResult,
     RecruitCandidate,
+    distribute_evaluators_to_rooms,
     generate_pairings,
     generate_room_plan,
 )
 from .models import (
+    ActivityEvaluatorAvailability,
+    ActivityMandatoryEvaluator,
+    ActivityOperation,
     ActivityState,
     AdminEvaluation,
     Assignment,
@@ -37,6 +43,7 @@ from .models import (
     RoomPlanRecruit,
     RubricSnapshot,
     SubmissionVersion,
+    new_id,
     utcnow,
 )
 from .rubric import (
@@ -59,6 +66,7 @@ from .scoring import (
     weighted_activity_score,
 )
 from .utils import audit, dumps, loads
+from .object_storage import has_photo
 from .assessment_runtime import (
     active_assessment_definition,
     activity_definition,
@@ -72,6 +80,93 @@ def get_journey_or_404(db: Session, journey_id: str) -> Journey:
     if not journey:
         raise HTTPException(status_code=404, detail="Journee not found.")
     return journey
+
+
+def operation_activity_code(activity_code: str) -> str:
+    configured = activity_definition(activity_code)
+    return configured.assignment.reuseAssignmentsFrom if configured and configured.assignment.reuseAssignmentsFrom else activity_code
+
+
+def preceding_operation_activity(activity_code: str) -> str:
+    """Return the activity whose availability should seed this operation.
+
+    Room inheritance remains explicitly configured through ``predecessor``. The
+    availability chain follows every enabled activity, so a room activity can
+    inherit earlier attendance without attempting to copy a non-room plan.
+    """
+    code = operation_activity_code(activity_code)
+    configured = activity_definition(code)
+    if configured and configured.assignment.predecessor:
+        return operation_activity_code(configured.assignment.predecessor)
+    enabled = [item.key for item in active_assessment_definition().activities if item.enabled]
+    try:
+        index = enabled.index(code)
+    except ValueError:
+        return ""
+    for previous in reversed(enabled[:index]):
+        previous_code = operation_activity_code(previous)
+        if previous_code != code:
+            return previous_code
+    return ""
+
+
+def ensure_activity_operation(db: Session, journey: Journey, activity_code: str) -> ActivityOperation:
+    """Create an independent activity operation, copying only its initial availability."""
+    code = operation_activity_code(activity_code)
+    predecessor = preceding_operation_activity(code)
+    operation = db.scalar(select(ActivityOperation).where(
+        ActivityOperation.journey_id == journey.id,
+        ActivityOperation.activity_code == code,
+    ))
+    if operation:
+        if operation.initialized_from != (predecessor or None):
+            operation.initialized_from = predecessor or None
+        if predecessor:
+            ensure_activity_operation(db, journey, predecessor)
+        _sync_activity_availability(db, journey, code, predecessor)
+        db.flush()
+        return operation
+    if predecessor:
+        ensure_activity_operation(db, journey, predecessor)
+    prior = db.scalar(select(ActivityOperation).where(
+        ActivityOperation.journey_id == journey.id,
+        ActivityOperation.activity_code == predecessor,
+    )) if predecessor else None
+    operation = ActivityOperation(
+        journey_id=journey.id,
+        activity_code=code,
+        room_count=prior.room_count if prior else journey.room_count,
+        initialized_from=predecessor or None,
+    )
+    db.add(operation)
+    db.flush()
+    _sync_activity_availability(db, journey, code, predecessor)
+    db.flush()
+    return operation
+
+
+def _sync_activity_availability(db: Session, journey: Journey, code: str, predecessor: str) -> None:
+    """Backfill activity records when evaluators are added after a plan was created."""
+    source_values = {
+        item.evaluator_id: item.available for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+            ActivityEvaluatorAvailability.journey_id == journey.id,
+            ActivityEvaluatorAvailability.activity_code == predecessor,
+        ))
+    } if predecessor else {}
+    existing = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+    )))
+    evaluators = list(db.scalars(select(Evaluator).where(
+        Evaluator.journey_id == journey.id, Evaluator.active.is_(True))))
+    for evaluator in evaluators:
+        if evaluator.id not in existing:
+            db.add(ActivityEvaluatorAvailability(
+                journey_id=journey.id,
+                activity_code=code,
+                evaluator_id=evaluator.id,
+                available=source_values.get(evaluator.id, evaluator.present),
+            ))
 
 
 def get_recruit_or_404(db: Session, journey_id: str, recruit_id: str) -> Recruit:
@@ -208,7 +303,7 @@ def serialize_recruit(recruit: Recruit) -> dict:
         "arrivalTime": recruit.arrival_time.isoformat() if recruit.arrival_time else None,
         "attendanceComment": recruit.attendance_comment or "",
         "active": recruit.active,
-        "hasPhoto": bool(recruit.photo_data),
+        "hasPhoto": has_photo(recruit),
         "version": recruit.version,
     }
 
@@ -297,10 +392,15 @@ def process_photo(data: bytes) -> tuple[bytes, str]:
         raise HTTPException(status_code=400, detail="The uploaded file is not a valid image.") from exc
 
 
-def latest_room_plan(db: Session, journey_id: str, status: str) -> RoomPlan | None:
+def latest_room_plan(db: Session, journey_id: str, status: str, activity_code: str | None = None) -> RoomPlan | None:
+    code = operation_activity_code(activity_code) if activity_code else None
     return db.scalar(
         select(RoomPlan)
-        .where(RoomPlan.journey_id == journey_id, RoomPlan.status == status)
+        .where(
+            RoomPlan.journey_id == journey_id,
+            RoomPlan.status == status,
+            *([RoomPlan.activity_code == code] if code else []),
+        )
         .order_by(RoomPlan.version.desc())
     )
 
@@ -310,27 +410,37 @@ def room_plan_payload(db: Session, plan: RoomPlan) -> dict:
     evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == plan.journey_id))}
     recruit_members = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == plan.id)))
     evaluator_members = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == plan.id)))
+    operation = db.scalar(select(ActivityOperation).where(
+        ActivityOperation.journey_id == plan.journey_id,
+        ActivityOperation.activity_code == plan.activity_code,
+    ))
+    room_count = operation.room_count if operation else get_journey_or_404(db, plan.journey_id).room_count
     rooms: dict[int, dict] = {
         number: {"number": number, "recruits": [], "evaluators": []}
-        for number in range(1, get_journey_or_404(db, plan.journey_id).room_count + 1)
+        for number in range(1, room_count + 1)
     }
     for member in recruit_members:
         recruit = recruits.get(member.recruit_id)
         if recruit:
+            value = serialize_recruit(recruit)
+            value["locked"] = member.locked
             rooms.setdefault(member.room_number, {"number": member.room_number, "recruits": [], "evaluators": []})[
                 "recruits"
-            ].append(serialize_recruit(recruit))
+            ].append(value)
     for member in evaluator_members:
         evaluator = evaluators.get(member.evaluator_id)
         if evaluator:
             value = serialize_evaluator(evaluator)
             value["mandatory"] = member.mandatory
+            value["locked"] = member.locked
             rooms.setdefault(member.room_number, {"number": member.room_number, "recruits": [], "evaluators": []})[
                 "evaluators"
             ].append(value)
     return {
         "id": plan.id,
+        "activityCode": plan.activity_code,
         "version": plan.version,
+        "editRevision": plan.edit_revision,
         "status": plan.status,
         "seed": plan.seed,
         "warnings": loads(plan.warnings_json, []),
@@ -340,33 +450,48 @@ def room_plan_payload(db: Session, plan: RoomPlan) -> dict:
     }
 
 
-def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: str) -> RoomPlan:
+def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: str, activity_code: str = "escape_room") -> RoomPlan:
     db.scalar(select(Journey).where(Journey.id == journey.id).with_for_update())
+    code = operation_activity_code(activity_code)
+    operation = ensure_activity_operation(db, journey, code)
     recruits = list(
         db.scalars(select(Recruit).where(Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True)))
     )
-    evaluators = list(
-        db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id, Evaluator.active.is_(True), Evaluator.present.is_(True)))
-    )
+    available_ids = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+        ActivityEvaluatorAvailability.available.is_(True),
+    )))
+    evaluators = list(db.scalars(select(Evaluator).where(
+        Evaluator.journey_id == journey.id, Evaluator.active.is_(True), Evaluator.id.in_(available_ids)))) if available_ids else []
     if not recruits:
         raise HTTPException(status_code=409, detail="Confirm at least one present recruit first.")
     mandatory_records = list(
-        db.scalars(select(MandatoryRoomEvaluator).where(MandatoryRoomEvaluator.journey_id == journey.id))
+        db.scalars(select(ActivityMandatoryEvaluator).where(
+            ActivityMandatoryEvaluator.journey_id == journey.id,
+            ActivityMandatoryEvaluator.activity_code == code,
+        ))
     )
     try:
         result = generate_room_plan(
             [RecruitCandidate(item.id, item.name) for item in recruits],
             [EvaluatorCandidate(item.id, item.name, item.role) for item in evaluators],
             {item.evaluator_id: item.room_number for item in mandatory_records},
-            journey.room_count,
+            operation.room_count,
             seed,
             primary_role_order=primary_category_order(),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.execute(update(RoomPlan).where(
+        RoomPlan.journey_id == journey.id,
+        RoomPlan.activity_code == code,
+        RoomPlan.status == "preview",
+    ).values(status="superseded"))
     version = (db.scalar(select(func.max(RoomPlan.version)).where(RoomPlan.journey_id == journey.id)) or 0) + 1
     plan = RoomPlan(
         journey_id=journey.id,
+        activity_code=code,
         version=version,
         status="preview",
         seed=seed,
@@ -399,6 +524,180 @@ def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: st
     return plan
 
 
+def activity_operation_payload(db: Session, journey: Journey, activity_code: str) -> dict:
+    operation = ensure_activity_operation(db, journey, activity_code)
+    code = operation.activity_code
+    evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(
+        Evaluator.journey_id == journey.id, Evaluator.active.is_(True)))}
+    directory = {item.id: item for item in db.scalars(select(EvaluatorDirectory).where(
+        EvaluatorDirectory.id.in_([item.directory_id for item in evaluators.values() if item.directory_id])
+    ))} if evaluators else {}
+    availability = {item.evaluator_id: item for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+    ))}
+    mandatory = {item.evaluator_id: item.room_number for item in db.scalars(select(ActivityMandatoryEvaluator).where(
+        ActivityMandatoryEvaluator.journey_id == journey.id,
+        ActivityMandatoryEvaluator.activity_code == code,
+    ))}
+    return {
+        "activityCode": code,
+        "roomCount": operation.room_count,
+        "version": operation.version,
+        "initializedFrom": operation.initialized_from,
+        "roomSource": (
+            operation_activity_code(activity_definition(code).assignment.predecessor)
+            if activity_definition(code) and activity_definition(code).assignment.predecessor else None
+        ),
+        "evaluators": [{
+            **serialize_evaluator(item),
+            "fullName": directory[item.directory_id].full_name if item.directory_id in directory else "",
+            "available": availability.get(item.id).available if item.id in availability else False,
+            "availabilityVersion": availability.get(item.id).version if item.id in availability else 1,
+            "mandatoryRoom": mandatory.get(item.id),
+        } for item in sorted(evaluators.values(), key=lambda row: (
+            not (availability.get(row.id).available if row.id in availability else False),
+            row.role != "overall", row.name.casefold(),
+        ))],
+    }
+
+
+def create_activity_room_preview(
+    db: Session,
+    journey: Journey,
+    activity_code: str,
+    actor_name: str,
+    seed: str,
+    mode: str,
+) -> RoomPlan:
+    """Create a working room plan while preserving the requested half of the plan."""
+    code = operation_activity_code(activity_code)
+    if mode == "full":
+        operation = ensure_activity_operation(db, journey, code)
+        current = latest_room_plan(db, journey.id, "preview", code) or latest_room_plan(db, journey.id, "published", code)
+        configured = activity_definition(code)
+        predecessor = operation_activity_code(configured.assignment.predecessor) if configured and configured.assignment.predecessor else ""
+        source = ((latest_room_plan(db, journey.id, "published", predecessor)
+                   or latest_room_plan(db, journey.id, "preview", predecessor)) if predecessor else None)
+        if current or not source:
+            return create_room_preview(db, journey, actor_name, seed, code)
+        mode = "copy_recruits"
+    operation = ensure_activity_operation(db, journey, code)
+    current = latest_room_plan(db, journey.id, "preview", code) or latest_room_plan(db, journey.id, "published", code)
+    recruit_ids = set(db.scalars(select(Recruit.id).where(
+        Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True))))
+    evaluator_rows = list(db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id, Evaluator.active.is_(True))))
+    evaluator_by_id = {item.id: item for item in evaluator_rows}
+    available_ids = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+        ActivityEvaluatorAvailability.available.is_(True),
+    )))
+    evaluators = [EvaluatorCandidate(item.id, item.name, item.role) for item in evaluator_rows if item.id in available_ids]
+    mandatory = {item.evaluator_id: item.room_number for item in db.scalars(select(ActivityMandatoryEvaluator).where(
+        ActivityMandatoryEvaluator.journey_id == journey.id,
+        ActivityMandatoryEvaluator.activity_code == code,
+    ))}
+    locked: set[str] = set()
+    locked_evaluators: dict[str, int] = {}
+    recruit_rooms: dict[str, int] = {}
+    evaluator_rooms: dict[str, int] = {}
+    if current:
+        for item in db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == current.id)):
+            if item.recruit_id in recruit_ids:
+                recruit_rooms[item.recruit_id] = item.room_number
+                if item.locked:
+                    locked.add(item.recruit_id)
+        for item in db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == current.id)):
+            if item.evaluator_id in available_ids:
+                evaluator_rooms[item.evaluator_id] = item.room_number
+                if item.locked and not item.mandatory:
+                    locked_evaluators[item.evaluator_id] = item.room_number
+    if mode == "copy_recruits":
+        configured = activity_definition(code)
+        predecessor = operation_activity_code(configured.assignment.predecessor) if configured and configured.assignment.predecessor else ""
+        source = latest_room_plan(db, journey.id, "published", predecessor) or latest_room_plan(db, journey.id, "preview", predecessor)
+        if not source:
+            raise HTTPException(status_code=409, detail="The preceding activity has no room plan to copy.")
+        recruit_rooms = {item.recruit_id: item.room_number for item in db.scalars(
+            select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == source.id)) if item.recruit_id in recruit_ids}
+        locked = set(recruit_rooms)
+    if mode == "copy_full":
+        configured = activity_definition(code)
+        predecessor = operation_activity_code(configured.assignment.predecessor) if configured and configured.assignment.predecessor else ""
+        source = latest_room_plan(db, journey.id, "published", predecessor) or latest_room_plan(db, journey.id, "preview", predecessor)
+        if not source:
+            raise HTTPException(status_code=409, detail="The preceding activity has no room plan to copy.")
+        source_operation = ensure_activity_operation(db, journey, predecessor)
+        operation.room_count = source_operation.room_count
+        operation.version += 1
+        source_recruits = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == source.id)))
+        recruit_rooms = {item.recruit_id: item.room_number for item in source_recruits if item.recruit_id in recruit_ids}
+        locked = {item.recruit_id for item in source_recruits if item.recruit_id in recruit_ids and item.locked}
+        source_evaluators = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == source.id)))
+        evaluator_rooms = {item.evaluator_id: item.room_number for item in source_evaluators
+                           if item.evaluator_id in available_ids}
+        locked_evaluators = {item.evaluator_id: item.room_number for item in source_evaluators
+                             if item.evaluator_id in available_ids and item.locked and not item.mandatory}
+        source_mandatory = {item.evaluator_id: item.room_number for item in db.scalars(
+            select(ActivityMandatoryEvaluator).where(
+                ActivityMandatoryEvaluator.journey_id == journey.id,
+                ActivityMandatoryEvaluator.activity_code == predecessor,
+            )) if item.evaluator_id in available_ids}
+        db.execute(delete(ActivityMandatoryEvaluator).where(
+            ActivityMandatoryEvaluator.journey_id == journey.id,
+            ActivityMandatoryEvaluator.activity_code == code,
+        ))
+        for evaluator_id, room_number in source_mandatory.items():
+            db.add(ActivityMandatoryEvaluator(
+                journey_id=journey.id, activity_code=code,
+                evaluator_id=evaluator_id, room_number=room_number,
+            ))
+        mandatory = source_mandatory
+    if mode == "recruits":
+        randomizer = random.Random(int.from_bytes(hashlib.sha256(seed.encode()).digest()[:8], "big"))
+        unassigned = sorted(recruit_ids - locked)
+        randomizer.shuffle(unassigned)
+        counts = Counter(recruit_rooms[item] for item in locked if item in recruit_rooms)
+        for recruit_id in unassigned:
+            room = min(range(1, operation.room_count + 1), key=lambda value: (counts[value], value))
+            recruit_rooms[recruit_id] = room
+            counts[room] += 1
+    if not recruit_rooms or (set(recruit_rooms) != recruit_ids and mode != "copy_full"):
+        raise HTTPException(status_code=409, detail="Place every present recruit or generate recruit rooms first.")
+    warnings: list[str] = []
+    mandatory_present: set[str] = set()
+    if mode in {"evaluators", "copy_recruits"}:
+        evaluator_rooms, mandatory_present, warnings = distribute_evaluators_to_rooms(
+            recruit_rooms, evaluators, mandatory, operation.room_count, seed, primary_category_order(),
+            locked_rooms=locked_evaluators if mode == "evaluators" else None)
+    elif mode == "copy_full":
+        mandatory_present = set(mandatory)
+        missing_from_source = available_ids - set(evaluator_rooms)
+        warnings = ([f"{len(missing_from_source)} currently available evaluator(s) were not in the previous room plan and remain unassigned."]
+                    if missing_from_source else [])
+    else:
+        evaluator_rooms = {key: value for key, value in evaluator_rooms.items() if key in available_ids}
+        mandatory_present = {key for key, value in mandatory.items() if evaluator_rooms.get(key) == value}
+    db.execute(update(RoomPlan).where(
+        RoomPlan.journey_id == journey.id, RoomPlan.activity_code == code, RoomPlan.status == "preview",
+    ).values(status="superseded"))
+    version = (db.scalar(select(func.max(RoomPlan.version)).where(RoomPlan.journey_id == journey.id)) or 0) + 1
+    plan = RoomPlan(journey_id=journey.id, activity_code=code, version=version, status="preview",
+                    seed=seed, warnings_json=dumps(warnings), created_by=actor_name)
+    db.add(plan); db.flush()
+    for recruit_id, room in recruit_rooms.items():
+        db.add(RoomPlanRecruit(plan_id=plan.id, recruit_id=recruit_id, room_number=room, locked=recruit_id in locked))
+    for evaluator_id, room in evaluator_rooms.items():
+        db.add(RoomPlanEvaluator(plan_id=plan.id, evaluator_id=evaluator_id, room_number=room,
+                                 mandatory=evaluator_id in mandatory_present,
+                                 locked=evaluator_id in locked_evaluators))
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=actor_name,
+          action=f"room_plan.{mode}_generated", entity_type="room_plan", entity_id=plan.id,
+          after={"activity": code, "version": version})
+    return plan
+
+
 def publish_room_plan(
     db: Session,
     journey: Journey,
@@ -407,19 +706,16 @@ def publish_room_plan(
     *,
     override_reason: str = "",
 ) -> None:
+    db.flush()
     if plan.journey_id != journey.id or plan.status != "preview":
         raise HTTPException(status_code=409, detail="Only a preview for this Journee can be published.")
-    first_group_activity = next((item for item in active_assessment_definition().activities
-                                 if item.enabled and item.assignment.mode == "automatic_groups"), None)
-    frozen_state = db.scalar(select(ActivityState).where(
-        ActivityState.journey_id == journey.id,
-        ActivityState.code == first_group_activity.key,
-    )) if first_group_activity else None
-    if frozen_state and frozen_state.status in {"open", "closed"} and not override_reason.strip():
-        raise HTTPException(status_code=409, detail=f"Group membership is frozen after {first_group_activity.name} starts.")
     db.execute(
         update(RoomPlan)
-        .where(RoomPlan.journey_id == journey.id, RoomPlan.status == "published")
+        .where(
+            RoomPlan.journey_id == journey.id,
+            RoomPlan.activity_code == plan.activity_code,
+            RoomPlan.status == "published",
+        )
         .values(status="superseded")
     )
     plan.status = "published"
@@ -437,14 +733,21 @@ def publish_room_plan(
     )
 
 
-def _room_candidates(db: Session, journey: Journey) -> tuple[list[RecruitCandidate], list[EvaluatorCandidate]]:
-    plan = latest_room_plan(db, journey.id, "published")
+def _room_candidates(db: Session, journey: Journey, activity_code: str, plan: RoomPlan | None = None) -> tuple[list[RecruitCandidate], list[EvaluatorCandidate]]:
+    code = operation_activity_code(activity_code)
+    ensure_activity_operation(db, journey, code)
+    plan = plan or latest_room_plan(db, journey.id, "published", code)
     if not plan:
         raise HTTPException(status_code=409, detail="Publish a room plan before generating this activity.")
     recruit_members = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == plan.id)))
     evaluator_members = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == plan.id)))
     recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == journey.id))}
     evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
+    available_ids = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+        ActivityEvaluatorAvailability.available.is_(True),
+    )))
     return (
         [
             RecruitCandidate(member.recruit_id, recruits[member.recruit_id].name, member.room_number)
@@ -454,17 +757,29 @@ def _room_candidates(db: Session, journey: Journey) -> tuple[list[RecruitCandida
         [
             EvaluatorCandidate(member.evaluator_id, evaluators[member.evaluator_id].name, evaluators[member.evaluator_id].role, member.room_number)
             for member in evaluator_members
-            if member.evaluator_id in evaluators and evaluators[member.evaluator_id].active and evaluators[member.evaluator_id].present
+            if member.evaluator_id in evaluators and evaluators[member.evaluator_id].active
+            and member.evaluator_id in available_ids
         ],
     )
 
 
-def _global_candidates(db: Session, journey: Journey) -> tuple[list[RecruitCandidate], list[EvaluatorCandidate]]:
+def _global_candidates(db: Session, journey: Journey, activity_code: str) -> tuple[list[RecruitCandidate], list[EvaluatorCandidate]]:
+    code = operation_activity_code(activity_code)
+    ensure_activity_operation(db, journey, code)
+    available_ids = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+        ActivityEvaluatorAvailability.available.is_(True),
+    )))
     recruits = list(
         db.scalars(select(Recruit).where(Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True)))
     )
     evaluators = list(
-        db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id, Evaluator.active.is_(True), Evaluator.present.is_(True)))
+        db.scalars(select(Evaluator).where(
+            Evaluator.journey_id == journey.id,
+            Evaluator.active.is_(True),
+            Evaluator.id.in_(available_ids),
+        ))
     )
     return (
         [RecruitCandidate(item.id, item.name) for item in recruits],
@@ -510,12 +825,15 @@ def create_assignment_preview(
             detail=(f"{configured_activity.name} reuses assignments from "
                     f"{RUBRICS[configured_activity.assignment.reuseAssignmentsFrom].name}. Generate them there."),
         )
-    state = db.scalar(
-        select(ActivityState).where(ActivityState.journey_id == journey.id, ActivityState.code == activity_code)
-    )
-    if state and state.status == "open":
-        raise HTTPException(status_code=409, detail="Close the activity before replacing its assignments.")
-
+    published = db.scalar(select(AssignmentRound).where(
+        AssignmentRound.journey_id == journey.id,
+        AssignmentRound.activity_code == activity_code,
+        AssignmentRound.status == "published",
+    ))
+    published_task_keys = {
+        (item.evaluator_id, item.recruit_id): item.task_key or item.id
+        for item in db.scalars(select(Assignment).where(Assignment.round_id == published.id))
+    } if published else {}
     version = (
         db.scalar(
             select(func.max(AssignmentRound.version)).where(
@@ -524,6 +842,9 @@ def create_assignment_preview(
         )
         or 0
     ) + 1
+    selected_room_plan = ((latest_room_plan(db, journey.id, "preview", activity_code)
+                           or latest_room_plan(db, journey.id, "published", activity_code))
+                          if activity_code in ROOM_ACTIVITIES else None)
     round_record = AssignmentRound(
         journey_id=journey.id,
         activity_code=activity_code,
@@ -531,12 +852,19 @@ def create_assignment_preview(
         status="preview",
         seed=seed,
         created_by=actor_name,
+        room_plan_id=selected_room_plan.id if selected_room_plan else None,
     )
     db.add(round_record)
     db.flush()
+    db.execute(update(AssignmentRound).where(
+        AssignmentRound.journey_id == journey.id,
+        AssignmentRound.activity_code == activity_code,
+        AssignmentRound.status == "preview",
+        AssignmentRound.id != round_record.id,
+    ).values(status="superseded"))
 
     recruits, evaluators = (
-        _room_candidates(db, journey) if activity_code in ROOM_ACTIVITIES else _global_candidates(db, journey)
+        _room_candidates(db, journey, activity_code, selected_room_plan) if activity_code in ROOM_ACTIVITIES else _global_candidates(db, journey, activity_code)
     )
     if not recruits:
         raise HTTPException(status_code=409, detail="No confirmed-present recruits are available.")
@@ -566,6 +894,7 @@ def create_assignment_preview(
                 slot=item.slot,
                 repeated_pair=item.repeated_pair,
                 repeat_reason=item.repeat_reason,
+                task_key=published_task_keys.get((item.evaluator_id, item.recruit_id)) or new_id(),
             )
         )
     audit(
@@ -598,10 +927,12 @@ def assignment_round_payload(db: Session, round_record: AssignmentRound) -> dict
         "activityCode": round_record.activity_code,
         "activityName": RUBRICS[round_record.activity_code].name,
         "version": round_record.version,
+        "editRevision": round_record.edit_revision,
         "status": round_record.status,
         "seed": round_record.seed,
         "warnings": warnings,
         "reusedFromId": round_record.reused_from_id,
+        "roomPlanId": round_record.room_plan_id,
         "assignments": [
             {
                 "id": item.id,
@@ -632,21 +963,6 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
             detail=f"{configured_activity.name} assignments are published from its configured source activity.",
         )
     assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
-    recruit_counts = Counter(item.recruit_id for item in assignments)
-    maximum = configured_activity.assignment.maximumAssessors if configured_activity else 2
-    if any(count > maximum for count in recruit_counts.values()):
-        raise HTTPException(status_code=409, detail=f"A participant cannot have more than {maximum} assessors.")
-    expected_recruits = set(db.scalars(select(Recruit.id).where(
-        Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True),
-    )))
-    if set(recruit_counts) != expected_recruits:
-        raise HTTPException(status_code=409, detail="Every present participant needs a primary assignment before publishing.")
-    slots_by_recruit = defaultdict(list)
-    for assignment in assignments:
-        slots_by_recruit[assignment.recruit_id].append(assignment.slot)
-    if any(slots.count(1) != 1 or slots.count(2) > (1 if maximum > 1 else 0)
-           for slots in slots_by_recruit.values()):
-        raise HTTPException(status_code=409, detail="Each participant needs exactly one primary slot and at most one secondary slot.")
     state = db.scalar(
         select(ActivityState).where(
             ActivityState.journey_id == journey.id, ActivityState.code == round_record.activity_code
@@ -654,8 +970,6 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
     )
     if not state:
         raise HTTPException(status_code=500, detail="Activity state is missing.")
-    if state.status == "open":
-        raise HTTPException(status_code=409, detail="Close the activity before publishing replacements.")
     definition = active_assessment_definition()
     reuse_targets = [item for item in definition.activities if item.enabled and
                      item.assignment.reuseAssignmentsFrom == round_record.activity_code]
@@ -664,8 +978,73 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
     )) for item in reuse_targets}
     if any(state is None for state in reuse_states.values()):
         raise HTTPException(status_code=500, detail="A configured shared-assignment activity state is missing.")
-    if any(state.status == "open" for state in reuse_states.values()):
-        raise HTTPException(status_code=409, detail="Close shared-assignment activities before publishing replacements.")
+    previous = db.scalar(select(AssignmentRound).where(
+        AssignmentRound.journey_id == journey.id,
+        AssignmentRound.activity_code == round_record.activity_code,
+        AssignmentRound.status == "published",
+    ))
+    if previous:
+        previous_assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == previous.id)))
+        new_by_pair = {(item.evaluator_id, item.recruit_id): item for item in assignments}
+        submitted = list(db.execute(
+            select(EvaluationSubmission, Assignment, Evaluator, Recruit)
+            .join(Assignment, Assignment.id == EvaluationSubmission.assignment_id)
+            .join(Evaluator, Evaluator.id == Assignment.evaluator_id)
+            .join(Recruit, Recruit.id == Assignment.recruit_id)
+            .where(Assignment.round_id == previous.id)
+        ))
+        blockers = [
+            f"{RUBRICS[round_record.activity_code].name}: {evaluator.name} -> {recruit.name} "
+            f"(submitted {submission.submitted_at.isoformat() if submission.submitted_at else 'time unavailable'})"
+            for submission, old_assignment, evaluator, recruit in submitted
+            if submission.status in {"submitted", "locked"}
+            and (old_assignment.evaluator_id, old_assignment.recruit_id) not in new_by_pair
+        ]
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot remove submitted assignment(s): " + "; ".join(blockers),
+            )
+        # Preserve the submission by moving it to the unchanged logical pair in
+        # the newly published version.
+        for submission, old_assignment, _evaluator, _recruit in submitted:
+            replacement = new_by_pair.get((old_assignment.evaluator_id, old_assignment.recruit_id))
+            if replacement:
+                submission.assignment_id = replacement.id
+    source_pairs = {(item.evaluator_id, item.recruit_id) for item in assignments}
+    target_submissions: dict[str, list[tuple[EvaluationSubmission, Assignment, str, str]]] = {}
+    target_task_keys: dict[str, dict[tuple[str, str], str]] = {}
+    for target_activity in reuse_targets:
+        previous_target = db.scalar(select(AssignmentRound).where(
+            AssignmentRound.journey_id == journey.id,
+            AssignmentRound.activity_code == target_activity.key,
+            AssignmentRound.status == "published",
+        ))
+        if not previous_target:
+            target_submissions[target_activity.key] = []
+            target_task_keys[target_activity.key] = {}
+            continue
+        target_task_keys[target_activity.key] = {
+            (item.evaluator_id, item.recruit_id): item.task_key or item.id
+            for item in db.scalars(select(Assignment).where(Assignment.round_id == previous_target.id))
+        }
+        rows = list(db.execute(
+            select(EvaluationSubmission, Assignment, Evaluator.name, Recruit.name)
+            .join(Assignment, Assignment.id == EvaluationSubmission.assignment_id)
+            .join(Evaluator, Evaluator.id == Assignment.evaluator_id)
+            .join(Recruit, Recruit.id == Assignment.recruit_id)
+            .where(Assignment.round_id == previous_target.id)
+        ))
+        blockers = [f"{target_activity.name}: {evaluator_name} -> {recruit_name} "
+                    f"(submitted {submission.submitted_at.isoformat() if submission.submitted_at else 'time unavailable'})"
+                    for submission, old, evaluator_name, recruit_name in rows
+                    if submission.status in {"submitted", "locked"}
+                    and (old.evaluator_id, old.recruit_id) not in source_pairs]
+        if blockers:
+            raise HTTPException(status_code=409, detail=(
+                f"Cannot remove submitted {target_activity.name} assignment(s): " + "; ".join(blockers)
+            ))
+        target_submissions[target_activity.key] = rows
     db.execute(
         update(AssignmentRound)
         .where(
@@ -720,14 +1099,15 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
             seed=round_record.seed,
             warnings_json="[]",
             reused_from_id=round_record.id,
+            room_plan_id=round_record.room_plan_id,
             created_by=actor_name,
             published_at=round_record.published_at,
         )
         db.add(target_round)
         db.flush()
+        copied_by_pair: dict[tuple[str, str], Assignment] = {}
         for item in assignments:
-            db.add(
-                Assignment(
+            copied = Assignment(
                     round_id=target_round.id,
                     evaluator_id=item.evaluator_id,
                     recruit_id=item.recruit_id,
@@ -735,8 +1115,16 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
                     slot=item.slot,
                     repeated_pair=False,
                     repeat_reason=None,
+                    task_key=(target_task_keys[target_activity.key].get((item.evaluator_id, item.recruit_id))
+                              or new_id()),
                 )
-            )
+            db.add(copied)
+            db.flush()
+            copied_by_pair[(item.evaluator_id, item.recruit_id)] = copied
+        for submission, old, _evaluator_name, _recruit_name in target_submissions.get(target_activity.key, []):
+            replacement = copied_by_pair.get((old.evaluator_id, old.recruit_id))
+            if replacement:
+                submission.assignment_id = replacement.id
         target_state.assignment_round_id = target_round.id
         target_state.version += 1
         audit(
@@ -949,7 +1337,7 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             {
                 "recruitId": recruit.id,
                 "name": recruit.name,
-                "hasPhoto": bool(recruit.photo_data),
+                "hasPhoto": has_photo(recruit),
                 "activities": activities_payload,
                 "dimensions": dimensions_payload,
                 "generalAverage": float(general),
@@ -1068,6 +1456,7 @@ def monitoring_snapshot(db: Session, journey: Journey, activity_code: str) -> di
                 "tasks": [
                     {
                         "assignmentId": item.id,
+                        "taskKey": item.task_key or item.id,
                         "recruitId": item.recruit_id,
                         "recruitName": recruits[item.recruit_id].name if item.recruit_id in recruits else "Unknown",
                         "submitted": item.id in submissions and submissions[item.id].status in {"submitted", "locked"},

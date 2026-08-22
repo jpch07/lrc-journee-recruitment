@@ -19,6 +19,7 @@ const state = {
   resultsActivity: "overall",
   roomPlan: null,
   assignmentRound: null,
+  activityOperation: null,
   profileId: null,
   dirty: false,
   pollTimer: null,
@@ -847,7 +848,84 @@ function uploadSinglePhoto(recruitId) {
   input.click();
 }
 
+async function renderAssignmentsV2() {
+  const assignmentActivities = (state.system?.activities || state.journey.activities)
+    .filter(activity => !activity.assignment?.reuseAssignmentsFrom);
+  if (!assignmentActivities.some(item => (item.key || item.code) === state.assignmentActivity)) {
+    state.assignmentActivity = assignmentActivities[0]?.key || assignmentActivities[0]?.code;
+  }
+  const configured = configuredActivity(state.assignmentActivity);
+  const groupBased = configured?.assignment?.mode === "automatic_groups";
+  const roomRequests = groupBased ? [
+    api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms?status=published`),
+    api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms?status=preview`),
+  ] : [Promise.resolve(null), Promise.resolve(null)];
+  const [operation, publishedRooms, workingRooms, publishedRound, workingRound] = await Promise.all([
+    api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/operation`),
+    ...roomRequests,
+    api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}?status=published`),
+    api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}?status=preview`),
+  ]);
+  state.activityOperation = operation;
+  state.roomPlan = workingRooms || publishedRooms;
+  state.assignmentRound = workingRound || publishedRound;
+  const activityTabs = assignmentActivities.map((item) => {
+    const code = item.key || item.code;
+    const shared = sharedAssignmentTargets(code);
+    return `<button data-activity="${code}" class="${code === state.assignmentActivity ? "active" : ""}">${h([item.name, ...shared.map(row => row.name)].join(" & "))}</button>`;
+  }).join("");
+  const shared = sharedAssignmentTargets(state.assignmentActivity);
+  const assignmentName = [configuredActivityName(state.assignmentActivity), ...shared.map(item => item.name)].join(" & ");
+  const available = operation.evaluators.filter(item => item.available).length;
+  const roomVersion = `<div class="version-pair"><span>Published ${publishedRooms ? `v${publishedRooms.version}` : "—"}</span><span>Working ${workingRooms ? `v${workingRooms.version}` : "—"}</span></div>`;
+  const assignmentVersion = `<div class="version-pair"><span>Published ${publishedRound ? `v${publishedRound.version}` : "—"}</span><span>Working ${workingRound ? `v${workingRound.version}` : "—"}</span></div>`;
+  const displayedRound = workingRound || publishedRound;
+  const displayedRooms = workingRooms || publishedRooms;
+  const roomMismatch = groupBased && displayedRound && displayedRooms && displayedRound.roomPlanId !== displayedRooms.id;
+  const roomPanel = groupBased ? `<div class="panel operation-panel">
+    <div class="panel-header"><div><p class="eyebrow">Activity operation</p><h2>${h(configured.name)} rooms</h2>${roomVersion}<p class="muted">${available} evaluators available for this activity. Recruit and evaluator distributions are independent from other activities.</p></div>
+    <div class="inline-actions"><label class="compact-field">Rooms<input id="activityRoomCount" type="number" min="1" max="100" value="${operation.roomCount}"></label><button class="button ghost" id="saveActivityRoomCount">Update</button><button class="button secondary" id="activityAvailability">Evaluator availability</button><button class="button secondary" id="mandatoryRooms">Mandatory placements</button></div></div>
+    <div class="operation-actions"><button class="button ghost" id="copyFullRoomPlan" ${operation.roomSource ? "" : "disabled"}>Copy complete previous plan</button><button class="button ghost" id="copyRecruitRooms" ${operation.roomSource ? "" : "disabled"}>Copy recruit rooms only</button><button class="button ghost" id="generateRecruitRooms">Generate recruit rooms</button><button class="button ghost" id="distributeEvaluators">Distribute evaluators only</button><button class="button primary" id="prepareFullActivity">Prepare full activity</button>${publishedRooms && !workingRooms ? `<button class="button secondary" id="editPublishedRooms">Edit published</button>` : ""}${workingRooms ? `<button class="button primary" id="applyRoomChanges">Apply room changes</button>` : ""}<button class="button ghost" id="clearWorkingPlan">Clear working plan</button></div>
+    ${state.roomPlan ? renderRoomPlan(state.roomPlan) : `<div class="empty-state"><p>Copy or generate recruit rooms, then distribute evaluators.</p></div>`}
+  </div>` : `<div class="panel operation-availability-summary"><div><strong>${available}</strong><span>evaluators available for ${h(configured.name)}</span></div><button class="button secondary" id="activityAvailability">Evaluator availability</button></div>`;
+  host.innerHTML = `${sectionHeading("Distribution", "Rooms & assignments", "Prepare each activity independently. Applied changes become visible to evaluators atomically.")}
+    <div class="tabs assignment-activity-tabs">${activityTabs}</div>${roomPanel}
+    <div class="panel"><div class="panel-header"><div><h2>${h(assignmentName)} assignments</h2>${assignmentVersion}<p class="muted">${workingRound ? "Editing a private working version." : publishedRound ? "Showing the evaluator-visible version." : "No assignments prepared."}</p></div><div class="inline-actions"><button class="button ghost" id="generateAssignments">${workingRound ? "Regenerate automatic" : "Generate assignments"}</button>${publishedRound && !workingRound ? `<button class="button secondary" id="editPublishedAssignments">Edit published</button>` : ""}${workingRound ? `<button class="button primary" id="applyAssignments">Apply changes</button>` : ""}</div></div>
+      ${roomMismatch ? `<div class="warning-box">These assignments were prepared from an older room plan. They remain unchanged until you regenerate or edit them.</div>` : ""}${state.assignmentRound ? renderAssignmentRound(state.assignmentRound) : `<div class="empty-state"><p>Generate assignments or start from the published version.</p></div>`}
+    </div>`;
+  $$(".assignment-activity-tabs button", host).forEach(button => button.onclick = () => { state.assignmentActivity = button.dataset.activity; renderAssignments(); });
+  $("#activityAvailability").onclick = () => activityAvailabilityDialog(operation);
+  if ($("#mandatoryRooms")) $("#mandatoryRooms").onclick = () => mandatoryRoomsDialog(operation);
+  if ($("#saveActivityRoomCount")) $("#saveActivityRoomCount").onclick = async () => {
+    const room_count = Number($("#activityRoomCount").value);
+    if (!Number.isInteger(room_count) || room_count < 1 || room_count > 100) return toast("Enter a room count from 1 to 100.", "error");
+    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/room-count`, "PUT", { room_count, base_version: operation.version }, "Activity room count updated.", renderAssignments);
+  };
+  const roomPreview = (mode, message) => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/preview?mode=${mode}`, "POST", {}, message, renderAssignments);
+  if ($("#copyFullRoomPlan")) $("#copyFullRoomPlan").onclick = () => roomPreview("copy_full", "Previous rooms and available evaluator placements copied. Activity availability was kept unchanged.");
+  if ($("#copyRecruitRooms")) $("#copyRecruitRooms").onclick = () => roomPreview("copy_recruits", "Recruit rooms copied; evaluators distributed using this activity's availability.");
+  if ($("#generateRecruitRooms")) $("#generateRecruitRooms").onclick = () => roomPreview("recruits", "Unplaced recruit rooms generated; locked placements were preserved.");
+  if ($("#distributeEvaluators")) $("#distributeEvaluators").onclick = () => roomPreview("evaluators", "Evaluators redistributed without moving recruits.");
+  if ($("#prepareFullActivity")) $("#prepareFullActivity").onclick = async () => {
+    try {
+      await api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/preview?mode=full`, mutation("POST", {}));
+      await api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}/preview`, mutation("POST", {}));
+      toast("Full working room and assignment plan prepared."); await refreshJourney(); await renderAssignments();
+    } catch (error) { toast(error.message, "error"); }
+  };
+  if ($("#clearWorkingPlan")) $("#clearWorkingPlan").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/working-plan`, "DELETE", {}, "Working plan cleared. Published rooms and assignments were not changed.", renderAssignments);
+  if ($("#editPublishedRooms")) $("#editPublishedRooms").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${publishedRooms.id}/edit`, "POST", {}, "Published rooms copied into an editable working version.", renderAssignments);
+  if ($("#applyRoomChanges")) $("#applyRoomChanges").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${workingRooms.id}/publish?base_revision=${workingRooms.editRevision}`, "POST", {}, `Published room plan v${workingRooms.version}.`, renderAssignments);
+  if (workingRooms) wireRoomEditors(workingRooms);
+  $("#generateAssignments").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}/preview`, "POST", {}, "Working assignments generated.", renderAssignments);
+  if ($("#editPublishedAssignments")) $("#editPublishedAssignments").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${publishedRound.id}/edit`, "POST", {}, "Published assignments copied into an editable working version.", renderAssignments);
+  if ($("#applyAssignments")) $("#applyAssignments").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${workingRound.id}/publish?base_revision=${workingRound.editRevision}`, "POST", {}, `Published ${assignmentName} v${workingRound.version}.`, renderAssignments);
+  if (workingRound) wireAssignmentEditors(workingRound);
+}
+
 async function renderAssignments() {
+  return renderAssignmentsV2();
+  /* Legacy shared-room renderer retained temporarily for rollback reference. */
   const assignmentActivities = (state.system?.activities || state.journey.activities)
     .filter(activity => !activity.assignment?.reuseAssignmentsFrom);
   if (!assignmentActivities.some(item => item.key === state.assignmentActivity || item.code === state.assignmentActivity)) {
@@ -909,37 +987,100 @@ function warningHtml(warnings) {
   return (warnings || []).map((warning) => `<div class="warning-box">${h(warning)}</div>`).join("");
 }
 
+function activityAvailabilityDialog(operation) {
+  const evaluators = [...operation.evaluators];
+  const values = Object.fromEntries(evaluators.map(item => [item.id, Boolean(item.available)]));
+  openModal(`<form id="activityAvailabilityForm"><p class="eyebrow">${h(configuredActivityName(operation.activityCode))}</p><h2>Evaluator availability</h2><div class="evaluator-quick-toggle"><input id="activityAvailabilitySearch" autocomplete="off" placeholder="Type evaluator name and press Enter"><div id="activityAvailabilitySuggestions" class="search-suggestions" role="listbox"></div></div><div class="inline-actions compact-actions"><button type="button" class="button ghost" id="resetActivityAvailability">Reset from previous activity</button><span id="activityAvailabilityCount" class="subtle"></span></div><div id="activityAvailabilityList" class="mandatory-list"></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Apply availability</button></div></form>`, { wide: true });
+  $("#cancelModal").onclick = closeModal;
+  const draw = () => {
+    const ordered = [...evaluators].sort((a, b) => Number(values[b.id]) - Number(values[a.id]) || categoryRank(a.role) - categoryRank(b.role) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    $("#activityAvailabilityCount").textContent = `${ordered.filter(item => values[item.id]).length} available`;
+    $("#activityAvailabilityList").innerHTML = ordered.map(item => `<label class="mandatory-row activity-availability-row"><div><strong>${h(item.name)}</strong><small>${h(item.fullName || "Full name not recorded")}</small></div><span class="role-badge ${item.role}">${h(item.role)}</span><input class="large-check" type="checkbox" data-id="${item.id}" ${values[item.id] ? "checked" : ""}></label>`).join("");
+    $$(".activity-availability-row input", $("#activityAvailabilityList")).forEach(input => input.onchange = () => { values[input.dataset.id] = input.checked; draw(); });
+  };
+  const input = $("#activityAvailabilitySearch"), suggestions = $("#activityAvailabilitySuggestions");
+  const toggle = item => { values[item.id] = !values[item.id]; input.value = ""; suggestions.classList.remove("visible"); draw(); input.focus(); };
+  input.oninput = () => {
+    const matches = evaluatorSearchMatches(evaluators, input.value).slice(0, 8);
+    suggestions.innerHTML = matches.map(item => `<button type="button" data-id="${item.id}"><span><strong>${h(item.name)}</strong><small>${values[item.id] ? "Available" : "Unavailable"}</small></span><span class="role-badge ${item.role}">${h(item.role)}</span></button>`).join("");
+    suggestions.classList.toggle("visible", Boolean(input.value.trim() && matches.length));
+    $$("button", suggestions).forEach(button => button.onclick = () => toggle(evaluators.find(item => item.id === button.dataset.id)));
+  };
+  input.onkeydown = event => { if (event.key === "Enter") { event.preventDefault(); const item = resolveEvaluatorSearch(evaluators, input.value); if (item) toggle(item); else toast("Keep typing or select an evaluator.", "error"); } };
+  $("#resetActivityAvailability").onclick = async () => {
+    try { await api(`/api/admin/journeys/${state.journey.id}/activities/${operation.activityCode}/availability/reset`, mutation("POST", {})); closeModal(); toast("Availability reset from the preceding activity."); await renderAssignments(); } catch (error) { toast(error.message, "error"); }
+  };
+  $("#activityAvailabilityForm").onsubmit = async event => {
+    event.preventDefault();
+    const items = evaluators.map(item => ({ evaluator_id: item.id, available: values[item.id], base_version: item.availabilityVersion }));
+    try { await api(`/api/admin/journeys/${state.journey.id}/activities/${operation.activityCode}/availability`, mutation("PUT", { items })); closeModal(); toast("Activity availability applied."); await refreshJourney(); await renderAssignments(); } catch (error) { toast(error.message, "error"); }
+  };
+  draw(); setTimeout(() => input.focus(), 0);
+}
+
 function renderRoomPlan(plan) {
-  return `${warningHtml(plan.warnings)}<p class="subtle"><strong>${h(statusLabel(plan.status))} v${plan.version}</strong> · seed ${h(plan.seed)}</p><div class="room-grid">${plan.rooms.map((room) => `<article class="room-card"><h3>Room ${room.number}<span class="subtle">${room.recruits.length}R / ${room.evaluators.length}E</span></h3><small class="muted">Recruits</small><div class="member-list">${room.recruits.map((item) => `<div class="member-chip"><span>${h(item.name)}</span>${plan.status === "preview" ? roomSelector("recruit", item.id, room.number) : ""}</div>`).join("") || `<span class="subtle">None</span>`}</div><small class="muted" style="display:block;margin-top:12px">Evaluators</small><div class="member-list">${room.evaluators.map((item) => `<div class="member-chip"><span>${h(item.name)} ${item.mandatory ? "★" : ""}</span><span class="role-badge ${item.role}">${h(item.role)}</span>${plan.status === "preview" ? roomSelector("evaluator", item.id, room.number) : ""}</div>`).join("") || `<span class="subtle">None</span>`}</div></article>`).join("")}</div>${plan.status === "preview" ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="saveRoomMoves">Save manual room moves</button></div>` : ""}`;
+  const editable = plan.status === "preview";
+  const placedRecruits = new Set(plan.rooms.flatMap(room => room.recruits.map(item => item.id)));
+  const placedEvaluators = new Set(plan.rooms.flatMap(room => room.evaluators.map(item => item.id)));
+  const unassignedRecruits = state.journey.recruits.filter(item => item.active && item.present && !placedRecruits.has(item.id));
+  const availableEvaluatorIds = new Set((state.activityOperation?.evaluators || []).filter(item => item.available).map(item => item.id));
+  const unassignedEvaluators = state.journey.evaluators.filter(item => item.active && availableEvaluatorIds.has(item.id) && !placedEvaluators.has(item.id));
+  const person = (item, type, room) => `<div class="member-chip room-person"><span>${h(item.name)} ${item.mandatory ? "★" : ""}</span>${item.role ? `<span class="role-badge ${item.role}">${h(item.role)}</span>` : ""}${editable && type === "recruit" ? `<label class="room-lock" title="Keep this recruit in this room during automatic generation"><input class="recruit-lock" type="checkbox" data-id="${item.id}" ${item.locked ? "checked" : ""}> Lock</label>` : ""}${editable && type === "evaluator" && room != null && !item.mandatory ? `<label class="room-lock" title="Keep this evaluator in this room when redistributing evaluators"><input class="evaluator-lock" type="checkbox" data-id="${item.id}" ${item.locked ? "checked" : ""}> Lock</label>` : ""}${editable ? roomSelector(type, item.id, room) : ""}</div>`;
+  const unassigned = editable && (unassignedRecruits.length || unassignedEvaluators.length) ? `<article class="room-card unassigned-card"><h3>Unassigned</h3><small class="muted">Recruits</small><div class="member-list">${unassignedRecruits.map(item => person(item, "recruit", null)).join("") || `<span class="subtle">None</span>`}</div><small class="muted section-label">Evaluators</small><div class="member-list">${unassignedEvaluators.map(item => person(item, "evaluator", null)).join("") || `<span class="subtle">None</span>`}</div></article>` : "";
+  return `${warningHtml(plan.warnings)}<p class="subtle"><strong>${editable ? "Working" : "Published"} v${plan.version}</strong> · edit ${plan.editRevision || 1} · seed ${h(plan.seed)}</p><div class="room-grid">${plan.rooms.map(room => `<article class="room-card"><h3>Room ${room.number}<span class="subtle">${room.recruits.length}R / ${room.evaluators.length}E</span></h3><small class="muted">Recruits</small><div class="member-list">${room.recruits.map(item => person(item, "recruit", room.number)).join("") || `<span class="subtle">None</span>`}</div><small class="muted section-label">Evaluators</small><div class="member-list">${room.evaluators.map(item => person(item, "evaluator", room.number)).join("") || `<span class="subtle">None</span>`}</div></article>`).join("")}${unassigned}</div>${editable ? `<div class="inline-actions room-edit-actions"><button class="button secondary" id="bulkRoomMoves">Bulk paste placements</button><button class="button primary" id="saveRoomMoves">Save room changes</button></div>` : ""}`;
 }
 
 function roomSelector(type, id, selected) {
-  return `<select class="room-move table-input" data-type="${type}" data-id="${id}">${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}" ${index + 1 === selected ? "selected" : ""}>Room ${index + 1}</option>`).join("")}</select>`;
+  const roomCount = state.activityOperation?.roomCount || state.journey.roomCount;
+  return `<select class="room-move table-input" data-type="${type}" data-id="${id}"><option value="" ${selected == null ? "selected" : ""}>Unassigned</option>${Array.from({ length: roomCount }, (_, index) => `<option value="${index + 1}" ${index + 1 === selected ? "selected" : ""}>Room ${index + 1}</option>`).join("")}</select>`;
 }
 
 function wireRoomEditors(plan) {
-  const button = $("#saveRoomMoves");
-  if (!button) return;
-  button.onclick = async () => {
+  const save = async () => {
     const recruit_rooms = {}, evaluator_rooms = {};
-    $$(".room-move", host).forEach((select) => (select.dataset.type === "recruit" ? recruit_rooms : evaluator_rooms)[select.dataset.id] = Number(select.value));
-    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms }, "Manual room moves saved to preview.", renderAssignments);
+    $$(".room-move", host).forEach(select => (select.dataset.type === "recruit" ? recruit_rooms : evaluator_rooms)[select.dataset.id] = select.value ? Number(select.value) : null);
+    const locked_recruits = $$(".recruit-lock:checked", host).map(input => input.dataset.id);
+    const locked_evaluators = $$(".evaluator-lock:checked", host).map(input => input.dataset.id);
+    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms, locked_recruits, locked_evaluators, base_version: plan.editRevision }, "Manual room changes saved to the working plan.", renderAssignments);
+  };
+  $("#saveRoomMoves").onclick = save;
+  $("#bulkRoomMoves").onclick = () => {
+    openModal(`<form id="bulkRoomForm"><h2>Bulk room placements</h2><p class="muted">Paste one person per line as <strong>Name → room number</strong>. Existing placements not listed remain unchanged.</p><label>Placements<textarea name="placements" rows="12" placeholder="Jane Doe -> 1&#10;Alex Smith -> 2"></textarea></label><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Apply to working plan</button></div></form>`);
+    $("#cancelModal").onclick = closeModal;
+    $("#bulkRoomForm").onsubmit = event => {
+      event.preventDefault();
+      const lines = String(new FormData(event.currentTarget).get("placements") || "").split(/\r?\n/).map(value => value.trim()).filter(Boolean);
+      const availableIds = new Set((state.activityOperation?.evaluators || []).filter(item => item.available).map(item => item.id));
+      const all = [...state.journey.recruits.filter(item => item.active && item.present).map(item => ({ ...item, type: "recruit" })), ...state.journey.evaluators.filter(item => item.active && availableIds.has(item.id)).map(item => ({ ...item, type: "evaluator" }))];
+      const errors = [];
+      for (const line of lines) {
+        const match = line.match(/^(.+?)\s*(?:->|→|=|,)\s*(?:room\s*)?(\d+)$/i);
+        if (!match) { errors.push(`Invalid line: ${line}`); continue; }
+        const normalized = match[1].trim().toLocaleLowerCase();
+        const people = all.filter(item => [item.name, item.fullName].filter(Boolean).some(name => name.toLocaleLowerCase() === normalized));
+        const room = Number(match[2]);
+        if (people.length !== 1 || room < 1 || room > state.activityOperation.roomCount) { errors.push(`Could not uniquely place: ${line}`); continue; }
+        const select = $(`.room-move[data-type="${people[0].type}"][data-id="${people[0].id}"]`, host);
+        if (select) select.value = room;
+      }
+      if (errors.length) return toast(errors.slice(0, 3).join(" "), "error");
+      closeModal(); toast("Bulk placements applied. Press Save room changes to confirm.");
+    };
   };
 }
 
 function renderAssignmentRound(round) {
   const reused = configuredActivity(round.activityCode)?.assignment?.reuseAssignmentsFrom;
   const editable = round.status === "preview" && !reused;
-  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${h(statusLabel(round.status))} v${round.version}</strong> · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button ghost" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : ""}`;
+  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${round.status === "preview" ? "Working" : "Published"} v${round.version}</strong> · edit ${round.editRevision || 1} · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button primary" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : ""}`;
 }
 
 function wireAssignmentEditors(round) {
   $$(".remove-assignment", host).forEach((button) => button.onclick = () => button.closest(".assignment-row").remove());
   $("#addAssignment").onclick = () => {
-    const evaluators = state.journey.evaluators.filter((item) => item.active && item.present);
-    const recruits = state.journey.recruits.filter((item) => item.active && item.present);
-    const maximum = configuredActivity(round.activityCode)?.assignment?.maximumAssessors || 2;
-    openModal(`<form id="addPairForm"><h2>Add manual pairing</h2><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map((item) => `<option value="${item.id}">${h(item.name)} (${h(item.role)})</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map((item) => `<option value="${item.id}">${h(item.name)}</option>`).join("")}</select></label><label>Slot<select name="slot"><option value="1">Primary</option>${maximum > 1 ? `<option value="2">Secondary</option>` : ""}</select></label><label>Override reason (required for a forced repeat)<textarea name="reason"></textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add to preview</button></div></form>`);
+    const evaluators = state.journey.evaluators.filter(item => item.active);
+    const recruits = state.journey.recruits.filter(item => item.active);
+    openModal(`<form id="addPairForm"><h2>Add manual pairing</h2><p class="muted">Manual pairings may override availability, rooms, prior pairings, and workload. The system will warn without blocking.</p><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map(item => `<option value="${item.id}">${h(item.name)} (${h(item.role)})${item.present ? "" : " — absent"}</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map(item => `<option value="${item.id}">${h(item.name)}${item.present ? "" : " — absent"}</option>`).join("")}</select></label><label>Slot number<input name="slot" type="number" min="1" max="100" value="1"></label><label>Optional note<textarea name="reason"></textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add to working plan</button></div></form>`);
     $("#cancelModal").onclick = closeModal;
     $("#addPairForm").onsubmit = (event) => {
       event.preventDefault();
@@ -949,14 +1090,6 @@ function wireAssignmentEditors(round) {
       const slot = Number(form.get("slot"));
       const existing = $$(".assignment-row", host);
       if (existing.some((row) => row.dataset.evaluator === evaluator.id && row.dataset.recruit === recruit.id)) return toast("That evaluator–recruit pair already exists.", "error");
-      const recruitRows = existing.filter((row) => row.dataset.recruit === recruit.id);
-      if (recruitRows.length >= maximum) return toast(`A participant cannot have more than ${maximum} assessors.`, "error");
-      if (recruitRows.some((row) => Number(row.dataset.slot) === slot)) return toast(`This recruit already has a slot ${slot} evaluator.`, "error");
-      if (configuredActivity(round.activityCode)?.assignment?.mode === "automatic_groups" && state.roomPlan) {
-        const recruitRoom = state.roomPlan.rooms.find((room) => room.recruits.some((item) => item.id === recruit.id))?.number;
-        const evaluatorRoom = state.roomPlan.rooms.find((room) => room.evaluators.some((item) => item.id === evaluator.id))?.number;
-        if (!recruitRoom || recruitRoom !== evaluatorRoom) return toast("This activity must keep pairings inside the same group.", "error");
-      }
       const container = document.createElement("div");
       container.className = "assignment-row";
       container.dataset.evaluator = evaluator.id; container.dataset.recruit = recruit.id; container.dataset.slot = slot; container.dataset.room = ""; container.dataset.reason = form.get("reason");
@@ -968,16 +1101,18 @@ function wireAssignmentEditors(round) {
   };
   $("#saveAssignmentEdits").onclick = async () => {
     const items = $$(".assignment-row", host).map((row) => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, slot: Number(row.dataset.slot), room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
-    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items }, "Manual assignment edits saved to preview.", renderAssignments);
+    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
   };
 }
 
-function mandatoryRoomsDialog() {
-  const evaluators = state.journey.evaluators.filter((item) => item.active).sort(evaluatorAttendanceSort);
-  const placements = Object.fromEntries(evaluators.filter((item) => item.mandatoryRoom).map((item) => [item.id, item.mandatoryRoom]));
-  openModal(`<form id="mandatoryForm"><p class="eyebrow">Room constraints</p><h2>Mandatory evaluator placements</h2><p class="muted">Choose a room, type an evaluator, and press Enter. Enter assigns an unplaced evaluator, removes one already in that room, or moves one assigned to another room.</p><div class="mandatory-search-grid"><label>Target room<select id="mandatoryTargetRoom">${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}">Room ${index + 1}</option>`).join("")}</select></label><label>Required evaluator<div class="evaluator-quick-toggle"><input id="mandatorySearch" autocomplete="off" placeholder="Type evaluator name and press Enter"><div id="mandatorySuggestions" class="search-suggestions" role="listbox"></div></div></label></div><div id="mandatoryCount" class="formula-note"></div><div id="mandatoryList" class="mandatory-list"></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save placements</button></div></form>`, { wide: true });
+function mandatoryRoomsDialog(operation = null) {
+  const availableById = Object.fromEntries((operation?.evaluators || []).map(item => [item.id, item]));
+  const evaluators = (operation?.evaluators || state.journey.evaluators.filter(item => item.active)).map(item => ({ ...item, present: operation ? item.available : item.present })).sort(evaluatorAttendanceSort);
+  const placements = Object.fromEntries(evaluators.filter(item => operation ? item.mandatoryRoom : item.mandatoryRoom).map(item => [item.id, item.mandatoryRoom]));
+  const roomCount = operation?.roomCount || state.journey.roomCount;
+  openModal(`<form id="mandatoryForm"><p class="eyebrow">${operation ? h(configuredActivityName(operation.activityCode)) : "Room constraints"}</p><h2>Mandatory evaluator placements</h2><p class="muted">Choose a room, type an evaluator, and press Enter. Placements are used by automatic distribution and may be changed at any time.</p><div class="mandatory-search-grid"><label>Target room<select id="mandatoryTargetRoom">${Array.from({ length: roomCount }, (_, index) => `<option value="${index + 1}">Room ${index + 1}</option>`).join("")}</select></label><label>Required evaluator<div class="evaluator-quick-toggle"><input id="mandatorySearch" autocomplete="off" placeholder="Type evaluator name and press Enter"><div id="mandatorySuggestions" class="search-suggestions" role="listbox"></div></div></label></div><div id="mandatoryCount" class="formula-note"></div><div id="mandatoryList" class="mandatory-list"></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Save placements</button></div></form>`, { wide: true });
   $("#cancelModal").onclick = closeModal;
-  const roomOptions = (selected) => `<option value="" ${selected ? "" : "selected"}>No mandatory room</option>${Array.from({ length: state.journey.roomCount }, (_, index) => `<option value="${index + 1}" ${selected === index + 1 ? "selected" : ""}>Room ${index + 1}</option>`).join("")}`;
+  const roomOptions = selected => `<option value="" ${selected ? "" : "selected"}>No mandatory room</option>${Array.from({ length: roomCount }, (_, index) => `<option value="${index + 1}" ${selected === index + 1 ? "selected" : ""}>Room ${index + 1}</option>`).join("")}`;
   const drawList = () => {
     const count = Object.keys(placements).length;
     $("#mandatoryCount").textContent = `${count} mandatory evaluator${count === 1 ? "" : "s"} selected. Absent required evaluators will produce a room-planning warning.`;
@@ -1036,7 +1171,8 @@ function mandatoryRoomsDialog() {
   $("#mandatoryForm").onsubmit = async (event) => {
     event.preventDefault();
     const items = Object.entries(placements).map(([evaluator_id, room_number]) => ({ evaluator_id, room_number }));
-    try { await api(`/api/admin/journeys/${state.journey.id}/mandatory-rooms`, mutation("PUT", { items })); await refreshJourney(); closeModal(); toast("Mandatory placements saved."); } catch (error) { toast(error.message, "error"); }
+    const url = operation ? `/api/admin/journeys/${state.journey.id}/activities/${operation.activityCode}/mandatory-rooms` : `/api/admin/journeys/${state.journey.id}/mandatory-rooms`;
+    try { await api(url, mutation("PUT", { items })); await refreshJourney(); closeModal(); toast("Mandatory placements saved."); if (operation) await renderAssignments(); } catch (error) { toast(error.message, "error"); }
   };
 }
 
@@ -1222,10 +1358,10 @@ async function renderProfiles() {
 function profileHtml(profile) {
   const result = profile.result || { activities: {}, dimensions: {}, overallScore: 0, overallRank: "—", color: "red", missingCount: 8 };
   const arrival = profile.recruit.arrivalTime ? dateTimeInput(profile.recruit.arrivalTime).split("T")[1] : "Not recorded";
-  return `<div class="panel"><div class="profile-header">${profile.photoUrl ? `<button type="button" class="photo-zoom-trigger profile-photo-trigger" data-photo-viewer data-photo-url="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · ${profile.recruit.dateOfBirth ? `Date of birth: ${h(profile.recruit.dateOfBirth)}` : "Date of birth not recorded"} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${h(arrival)}</p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
+  return `<div class="panel profile-sticky-panel"><div class="profile-header">${profile.photoUrl ? `<button type="button" class="photo-zoom-trigger profile-photo-trigger" data-photo-viewer data-photo-url="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`}<div><h2>${h(profile.recruit.name)}</h2><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · ${profile.recruit.dateOfBirth ? `Date of birth: ${h(profile.recruit.dateOfBirth)}` : "Date of birth not recorded"} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${h(arrival)}</p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
     <div class="panel"><div class="panel-header"><div><h2>Dimension performance</h2><p class="muted">These six grades, plus the general assessment, determine the overall /20. Select a dimension to inspect every criterion and evaluator grade.</p></div></div><div class="profile-performance"><div class="radar-wrap">${dimensionRadar(result)}</div><div class="profile-dimension-grid">${dimensionOrder.map((code) => { const item = result.dimensions?.[code] || { score: 0, rank: "—", complete: false }; return `<button type="button" class="profile-activity dimension-card" data-dimension="${code}" aria-label="View ${h(dimensionNames[code])} criterion grading"><small>${h(dimensionNames[code])}</small><strong>${fmt(dimensionGrade(item.score))} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.complete ? "Complete" : "Incomplete"}</small><span class="dimension-card-action">View criteria →</span></button>`; }).join("")}</div></div></div>
     <div class="panel"><h2>Activity performance</h2><p class="muted">Select an activity to inspect and edit its evaluator submissions.</p><div class="profile-performance"><div class="radar-wrap">${activityRadar(result)}</div><div class="profile-activity-grid">${state.journey.activities.map((activity) => { const item = result.activities[activity.code] || { score: 0, rank: "—", submitted: 0, expected: 0 }; return `<button type="button" class="profile-activity profile-activity-button" data-activity-code="${activity.code}"><small>${h(activity.name)}</small><strong>${fmt(item.score)} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.submitted}/${item.expected}</small><span class="dimension-card-action">View evaluations →</span></button>`; }).join("")}</div></div></div>
-    <div class="two-column"><div class="panel"><h2>General assessment</h2><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5" placeholder="Add private administrative notes about this recruit">${h(profile.assessment.notes)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="discardProfile">Discard</button><button class="button primary">Save profile</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p></div></div>
+    <div class="two-column"><div class="panel"><div class="panel-header"><h2>General assessment</h2><span id="profileSaveStatus" class="save-state saved">Saved</span></div><form id="profileForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General admin comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5" placeholder="Add private administrative notes about this recruit">${h(profile.assessment.notes)}</textarea></label><div id="profileConflictActions" class="inline-actions hidden"><button type="button" class="button ghost" id="reloadProfile">Reload latest</button><button type="button" class="button warning" id="overwriteProfile">Overwrite with mine</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p></div></div>
     <div class="panel"><h2>Evaluator breakdown</h2>${Object.entries(profile.evaluations).map(([code, entries]) => `<h3 style="margin-top:16px">${h(statusLabel(code))}</h3>${entries.length ? `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Score</th><th>Status</th><th>Comment</th><th>Control</th></tr></thead><tbody>${entries.map((entry) => `<tr><td>${h(entry.evaluatorName)}</td><td>${h(entry.evaluatorRole)}</td><td>${entry.submission ? fmt(entry.submission.score) : "—"}</td><td>${entry.submission ? h(statusLabel(entry.submission.status)) : "Missing"}</td><td>${h(entry.submission?.comments || "")}</td><td>${entry.submission ? `<button type="button" class="button secondary small submission-detail" data-id="${entry.submission.id}">Edit evaluation</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No published evaluator assignment.</p>`}`).join("")}</div>
     <div class="panel"><h2>Profile audit history</h2>${profile.history.length ? `<div class="audit-list">${profile.history.map(auditItem).join("")}</div>` : `<p class="muted">No profile changes yet.</p>`}</div>`;
 }
@@ -1323,17 +1459,48 @@ function wireProfile(profile) {
   form.elements.comment.closest("label").classList.toggle("hidden", state.system?.features?.generalAssessment === false);
   form.elements.notes.closest("label").classList.toggle("hidden", state.system?.features?.notes === false);
   wireBoundedNumberInputs(form);
-  form.oninput = () => setDirty(true);
-  $("#discardProfile").onclick = () => { state.dirty = false; renderProfiles(); };
-  form.onsubmit = async (event) => {
-    event.preventDefault();
+  const status = $("#profileSaveStatus");
+  const conflictActions = $("#profileConflictActions");
+  let version = profile.assessment.version;
+  let timer = null;
+  let saving = false;
+  let queued = false;
+  let conflict = false;
+  const setStatus = (label, kind) => { status.textContent = label; status.className = `save-state ${kind}`; };
+  const payload = baseVersion => {
     const data = new FormData(form);
     const value = (key) => data.get(key) === "" ? null : Number(data.get(key));
+    return { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment") || "", notes: data.get("notes") || "", base_version: baseVersion };
+  };
+  const save = async (forceVersion = null) => {
+    clearTimeout(timer);
+    if (conflict && forceVersion == null) return;
+    if (saving) { queued = true; return; }
+    saving = true; queued = false; setStatus(navigator.onLine ? "Saving" : "Offline", navigator.onLine ? "saving" : "offline");
     try {
-      await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", { punctuality: value("punctuality"), respect: value("respect"), seriousness: value("seriousness"), comment: data.get("comment") || "", notes: data.get("notes") || "", base_version: profile.assessment.version }));
-      state.dirty = false; toast("Recruit profile saved."); await renderProfiles();
+      const result = await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`, mutation("PUT", payload(forceVersion ?? version)));
+      version = result.version; conflict = false; conflictActions.classList.add("hidden"); state.dirty = false; setStatus("Saved", "saved");
+    } catch (error) {
+      state.dirty = true;
+      if (error.status === 409) { conflict = true; setStatus("Conflict", "conflict"); conflictActions.classList.remove("hidden"); }
+      else { setStatus(navigator.onLine ? "Error" : "Offline", navigator.onLine ? "error" : "offline"); }
+    } finally {
+      saving = false;
+      if (queued && !conflict) save();
+    }
+  };
+  const schedule = () => { setDirty(true); setStatus(navigator.onLine ? "Saving" : "Offline", navigator.onLine ? "saving" : "offline"); clearTimeout(timer); timer = setTimeout(() => save(), 700); };
+  form.oninput = schedule;
+  form.addEventListener("focusout", () => { if (state.dirty && !conflict) save(); });
+  form.onsubmit = event => { event.preventDefault(); save(); };
+  $("#reloadProfile").onclick = () => { state.dirty = false; renderProfiles(); };
+  $("#overwriteProfile").onclick = async () => {
+    try {
+      const latest = await api(`/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/profile`);
+      conflict = false; await save(latest.assessment.version);
     } catch (error) { toast(error.message, "error"); }
   };
+  window.addEventListener("online", () => { if (state.dirty && !conflict) save(); }, { once: true });
   $$(".dimension-card", host).forEach((button) => button.onclick = () => showDimensionBreakdown(profile, button.dataset.dimension));
   $$(".profile-activity-button", host).forEach((button) => button.onclick = () => showActivityBreakdown(profile, button.dataset.activityCode));
   $$(".submission-detail", host).forEach((button) => button.onclick = () => showSubmissionDetail(button.dataset.id));

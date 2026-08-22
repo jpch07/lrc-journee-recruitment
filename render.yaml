@@ -37,3 +37,11 @@ services:
         value: List of Recruits
       - key: LRC_RECRUIT_SHEET_SYNC_SECONDS
         value: "300"
+      - key: LRC_R2_ENDPOINT_URL
+        sync: false
+      - key: LRC_R2_ACCESS_KEY_ID
+        sync: false
+      - key: LRC_R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: LRC_R2_BUCKET
+        sync: false

@@ -28,6 +28,10 @@ class Settings:
     recruit_sheet_name: str = "List of Recruits"
     recruit_sheet_sync_seconds: int = 300
     timezone: str = "Asia/Beirut"
+    r2_endpoint_url: str = ""
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
+    r2_bucket: str = ""
 
     @property
     def is_production(self) -> bool:
@@ -65,7 +69,14 @@ def load_settings() -> Settings:
     database_url = os.getenv("LRC_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
     if not database_url:
         database_url = f"sqlite:///{(DATA_DIR / 'journee.db').as_posix()}"
-    if database_url.startswith("postgres://"):
+    is_cockroach = "cockroachlabs.cloud" in database_url or database_url.startswith("cockroachdb")
+    if is_cockroach and database_url.startswith("cockroachdb://"):
+        database_url = "cockroachdb+psycopg://" + database_url[len("cockroachdb://") :]
+    elif is_cockroach and database_url.startswith("postgresql://"):
+        database_url = "cockroachdb+psycopg://" + database_url[len("postgresql://") :]
+    elif is_cockroach and database_url.startswith("postgres://"):
+        database_url = "cockroachdb+psycopg://" + database_url[len("postgres://") :]
+    elif database_url.startswith("postgres://"):
         database_url = "postgresql+psycopg://" + database_url[len("postgres://") :]
     elif database_url.startswith("postgresql://"):
         database_url = "postgresql+psycopg://" + database_url[len("postgresql://") :]
@@ -85,6 +96,10 @@ def load_settings() -> Settings:
         recruit_sheet_id=os.getenv("LRC_RECRUIT_SHEET_ID", "1jlVdC5Hwqy78ivZ2JhxEBcJv3SUWsJ6F").strip(),
         recruit_sheet_name=os.getenv("LRC_RECRUIT_SHEET_NAME", "List of Recruits").strip(),
         recruit_sheet_sync_seconds=max(60, int(os.getenv("LRC_RECRUIT_SHEET_SYNC_SECONDS", "300"))),
+        r2_endpoint_url=os.getenv("LRC_R2_ENDPOINT_URL", "").strip(),
+        r2_access_key_id=os.getenv("LRC_R2_ACCESS_KEY_ID", "").strip(),
+        r2_secret_access_key=os.getenv("LRC_R2_SECRET_ACCESS_KEY", "").strip(),
+        r2_bucket=os.getenv("LRC_R2_BUCKET", "").strip(),
     )
 
 

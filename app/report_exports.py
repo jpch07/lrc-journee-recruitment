@@ -39,6 +39,7 @@ from .scoring import configured_ranks
 from .services import latest_room_plan, result_snapshot
 from .utils import loads
 from .assessment_runtime import active_assessment_definition
+from .object_storage import has_photo, read_recruit_photo
 
 
 BEIRUT = ZoneInfo("Asia/Beirut")
@@ -306,7 +307,7 @@ def _dashboard_sheet(workbook: Workbook, journey: Journey, data: dict) -> None:
 def _attendance_sheets(workbook: Workbook, journey: Journey, data: dict) -> None:
     recruits = _new_sheet(workbook, "Recruit Attendance", landscape=True)
     _title(recruits, "Recruit Attendance", journey.name, 8)
-    rows = [[item.name, "Present" if item.present else "Absent", _local_time(item.arrival_time), item.attendance_comment or "", item.phone_number or "", item.date_of_birth, "Yes" if item.photo_data else "No"] for item in data["recruits"]]
+    rows = [[item.name, "Present" if item.present else "Absent", _local_time(item.arrival_time), item.attendance_comment or "", item.phone_number or "", item.date_of_birth, "Yes" if has_photo(item) else "No"] for item in data["recruits"]]
     _write_table(recruits, 4, ["Recruit", "Attendance", "Time of arrival (Beirut)", "Attendance comment", "Phone number", "Date of birth", "Photo"], rows, widths=[30, 14, 25, 30, 18, 16, 10], auto_filter=True)
     for row in range(5, 5 + len(rows)):
         _status_fill(recruits.cell(row, 2), str(recruits.cell(row, 2).value))
@@ -443,9 +444,10 @@ def _profile_sheet(workbook: Workbook, journey: Journey, data: dict, recruit: Re
         details.append(["Attendance comment", recruit.attendance_comment, "", ""])
     row = _write_table(sheet, 4, ["Profile field", "Value", "Profile field", "Value"], details, widths=[18, 25, 20, 25])
     _status_fill(sheet.cell(8, 2), color)
-    if recruit.photo_data:
+    photo_bytes = read_recruit_photo(recruit) if has_photo(recruit) else None
+    if photo_bytes:
         try:
-            source = io.BytesIO(recruit.photo_data)
+            source = io.BytesIO(photo_bytes)
             output = io.BytesIO()
             with PillowImage.open(source) as image:
                 image.convert("RGB").save(output, format="PNG")
@@ -819,7 +821,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
         data = by_id[journey.id]
         for recruit in data["recruits"]:
             profile_key = f"{journey.id}:{recruit.id}"
-            profile_photos.append((profile_key, _profile_photo_png(recruit.photo_data)))
+            profile_photos.append((profile_key, _profile_photo_png(read_recruit_photo(recruit) if has_photo(recruit) else None)))
             label = _profile_label(recruit, name_totals, name_seen)
             selector_labels.append(label)
             base_result = data["result_by_recruit"].get(recruit.id) or _fallback_result(recruit)

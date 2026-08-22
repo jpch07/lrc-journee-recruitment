@@ -34,6 +34,9 @@ from .db import get_db
 from .config import settings
 from .event_day import ProtectionControlError, cancel_monitor, dispatch_monitor, find_monitor_run, is_configured
 from .models import (
+    ActivityEvaluatorAvailability,
+    ActivityMandatoryEvaluator,
+    ActivityOperation,
     ActivityState,
     AdminEvaluation,
     Assignment,
@@ -77,6 +80,9 @@ from .assessment_runtime import (
 )
 from .report_exports import build_report_workbook, save_management_report
 from .schemas import (
+    ActivityAvailabilityRequest,
+    ActivityOperationRequest,
+    ActivityRoomPlanEditRequest,
     ActivityActionRequest,
     AdminCorrectionRequest,
     AdminEvaluationRequest,
@@ -102,15 +108,19 @@ from .schemas import (
 from .scoring import ScoringError, validate_general_factor
 from .recruit_directory import create_recruit_from_directory, ensure_recruit_directory
 from .services import (
+    activity_operation_payload,
     assignment_round_payload,
     create_assignment_preview,
+    create_activity_room_preview,
     create_journey,
     create_room_preview,
+    ensure_activity_operation,
     get_evaluator_or_404,
     get_journey_or_404,
     get_recruit_or_404,
     latest_room_plan,
     monitoring_snapshot,
+    operation_activity_code,
     past_pair_data,
     populate_journey_evaluators_from_directory,
     process_photo,
@@ -126,6 +136,7 @@ from .services import (
     update_recruit_attendance_fields,
 )
 from .utils import audit, dumps, loads
+from .object_storage import has_photo, read_recruit_photo, write_recruit_photo
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -530,9 +541,7 @@ def bulk_recruit_photos(
             continue
         recruit = next(iter(unique.values()))
         data, media_type = process_photo(photo.file.read())
-        recruit.photo_data = data
-        recruit.photo_type = media_type
-        recruit.photo_updated_at = utcnow()
+        write_recruit_photo(recruit, data, media_type)
         recruit.version += 1
         matched.append(recruit.name)
     audit(
@@ -641,7 +650,7 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
         workbook,
         "Recruits",
         ["Recruit UUID", "Name", "Phone Number", "Date of Birth", "Active", "Present", "Arrival UTC", "Attendance Comment", "Has photo"],
-        [[item.id, item.name, item.phone_number or "", item.date_of_birth.isoformat() if item.date_of_birth else "", item.active, item.present, item.arrival_time.isoformat() if item.arrival_time else "", item.attendance_comment or "", bool(item.photo_data)] for item in recruits],
+        [[item.id, item.name, item.phone_number or "", item.date_of_birth.isoformat() if item.date_of_birth else "", item.active, item.present, item.arrival_time.isoformat() if item.arrival_time else "", item.attendance_comment or "", has_photo(item)] for item in recruits],
     )
     _append_sheet(
         workbook,
@@ -831,11 +840,14 @@ def export_photos_zip(
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         for recruit in recruits:
-            if not recruit.photo_data:
+            if not has_photo(recruit):
+                continue
+            photo_bytes = read_recruit_photo(recruit)
+            if not photo_bytes:
                 continue
             label = recruit.name
             filename = re.sub(r"[^A-Za-z0-9_-]+", "-", label).strip("-") or recruit.id
-            archive.writestr(f"{filename}.webp", recruit.photo_data)
+            archive.writestr(f"{filename}.webp", photo_bytes)
     return StreamingResponse(
         io.BytesIO(output.getvalue()),
         media_type="application/zip",
@@ -975,9 +987,13 @@ def duplicate_journey(
     clone = create_journey(db, f"{source.name} Copy", source.event_date, source.room_count, context.actor_name)
     evaluator_id_map: dict[str, str] = {}
     for item in db.scalars(select(Recruit).where(Recruit.journey_id == source.id, Recruit.active.is_(True))):
-        db.add(Recruit(journey_id=clone.id, name=item.name, phone_number=item.phone_number,
-                       date_of_birth=item.date_of_birth, attendance_comment=item.attendance_comment,
-                       photo_data=item.photo_data, photo_type=item.photo_type))
+        copied_recruit = Recruit(journey_id=clone.id, name=item.name, phone_number=item.phone_number,
+                                  date_of_birth=item.date_of_birth, attendance_comment=item.attendance_comment)
+        db.add(copied_recruit)
+        db.flush()
+        photo = read_recruit_photo(item) if has_photo(item) else None
+        if photo:
+            write_recruit_photo(copied_recruit, photo, item.photo_type or "image/webp")
     clone_evaluators = list(db.scalars(select(Evaluator).where(Evaluator.journey_id == clone.id)))
     clone_by_directory = {item.directory_id: item for item in clone_evaluators if item.directory_id}
     clone_by_name = {item.name.casefold(): item for item in clone_evaluators}
@@ -1426,9 +1442,7 @@ def upload_recruit_photo(
     require_csrf(request, context.csrf_token)
     recruit = get_recruit_or_404(db, journey_id, recruit_id)
     data, media_type = process_photo(photo.file.read())
-    recruit.photo_data = data
-    recruit.photo_type = media_type
-    recruit.photo_updated_at = utcnow()
+    write_recruit_photo(recruit, data, media_type)
     recruit.version += 1
     audit(db, journey_id=journey_id, actor_type="admin", actor_name=context.actor_name, action="recruit.photo_updated", entity_type="recruit", entity_id=recruit.id)
     _commit(db)
@@ -1439,14 +1453,356 @@ def upload_recruit_photo(
 def admin_recruit_photo(
     journey_id: str,
     recruit_id: str,
+    request: Request,
     context: AdminContext = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
     del context
     recruit = get_recruit_or_404(db, journey_id, recruit_id)
-    if not recruit.photo_data:
+    if not has_photo(recruit):
         raise HTTPException(status_code=404, detail="No photo available.")
-    return Response(content=recruit.photo_data, media_type=recruit.photo_type or "image/webp", headers={"Cache-Control": "private, max-age=300"})
+    data = read_recruit_photo(recruit)
+    if not data:
+        raise HTTPException(status_code=404, detail="No photo available.")
+    headers = {"Cache-Control": "private, max-age=86400"}
+    if recruit.photo_sha256:
+        headers["ETag"] = f'"{recruit.photo_sha256}"'
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
+    return Response(content=data, media_type=recruit.photo_type or "image/webp", headers=headers)
+
+
+@router.get("/journeys/{journey_id}/activities/{activity_code}/operation")
+def read_activity_operation(
+    journey_id: str,
+    activity_code: str,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    if activity_code not in RUBRICS:
+        raise HTTPException(status_code=404, detail="Unknown activity.")
+    payload = activity_operation_payload(db, journey, activity_code)
+    _commit(db)
+    return payload
+
+
+@router.put("/journeys/{journey_id}/activities/{activity_code}/availability")
+def update_activity_availability(
+    journey_id: str,
+    activity_code: str,
+    payload: ActivityAvailabilityRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    operation = activity_operation_payload(db, journey, activity_code)
+    code = operation["activityCode"]
+    records = {item.evaluator_id: item for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+    ))}
+    before = {key: value.available for key, value in records.items()}
+    seen: set[str] = set()
+    for item in payload.items:
+        evaluator = get_evaluator_or_404(db, journey.id, item.evaluator_id)
+        if evaluator.id in seen:
+            raise HTTPException(status_code=422, detail=f"{evaluator.name} appears more than once.")
+        seen.add(evaluator.id)
+        record = records.get(evaluator.id)
+        if not record:
+            record = ActivityEvaluatorAvailability(journey_id=journey.id, activity_code=code,
+                                                   evaluator_id=evaluator.id, available=item.available)
+            db.add(record)
+        else:
+            if item.base_version is not None and item.base_version != record.version:
+                raise HTTPException(status_code=409, detail=f"{evaluator.name}'s activity availability changed in another tab.")
+            record.available = item.available
+            record.version += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="activity.availability_saved", entity_type="activity_operation", entity_id=code,
+          before=before, after={key: records[key].available for key in records})
+    journey.version += 1
+    _commit(db)
+    return activity_operation_payload(db, journey, code)
+
+
+@router.post("/journeys/{journey_id}/activities/{activity_code}/availability/reset")
+def reset_activity_availability(
+    journey_id: str,
+    activity_code: str,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    operation_payload = activity_operation_payload(db, journey, activity_code)
+    code = operation_payload["activityCode"]
+    operation = db.scalar(select(ActivityOperation).where(
+        ActivityOperation.journey_id == journey.id, ActivityOperation.activity_code == code))
+    source = operation.initialized_from
+    if source:
+        ensure_activity_operation(db, journey, source)
+    source_values = {item.evaluator_id: item.available for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == source,
+    ))} if source else {item.id: item.present for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
+    for record in db.scalars(select(ActivityEvaluatorAvailability).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == code,
+    )):
+        record.available = source_values.get(record.evaluator_id, False)
+        record.version += 1
+    journey.version += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="activity.availability_reset", entity_type="activity_operation", entity_id=code,
+          after={"copiedFrom": source or "journey_attendance"})
+    _commit(db)
+    return activity_operation_payload(db, journey, code)
+
+
+@router.put("/journeys/{journey_id}/activities/{activity_code}/mandatory-rooms")
+def update_activity_mandatory_rooms(
+    journey_id: str,
+    activity_code: str,
+    payload: MandatoryRoomRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    operation_payload = activity_operation_payload(db, journey, activity_code)
+    code, room_count = operation_payload["activityCode"], operation_payload["roomCount"]
+    seen: set[str] = set()
+    for item in payload.items:
+        get_evaluator_or_404(db, journey.id, item.evaluator_id)
+        if item.evaluator_id in seen:
+            raise HTTPException(status_code=422, detail="An evaluator can be mandatory in only one room for this activity.")
+        if item.room_number > room_count:
+            raise HTTPException(status_code=422, detail="Mandatory room exceeds this activity's room count.")
+        seen.add(item.evaluator_id)
+    before = [{"evaluatorId": item.evaluator_id, "roomNumber": item.room_number} for item in db.scalars(
+        select(ActivityMandatoryEvaluator).where(ActivityMandatoryEvaluator.journey_id == journey.id,
+                                                 ActivityMandatoryEvaluator.activity_code == code))]
+    db.execute(delete(ActivityMandatoryEvaluator).where(
+        ActivityMandatoryEvaluator.journey_id == journey.id,
+        ActivityMandatoryEvaluator.activity_code == code,
+    ))
+    for item in payload.items:
+        db.add(ActivityMandatoryEvaluator(journey_id=journey.id, activity_code=code,
+                                          evaluator_id=item.evaluator_id, room_number=item.room_number))
+    journey.version += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="activity.mandatory_saved", entity_type="activity_operation", entity_id=code,
+          before=before, after=[item.model_dump() for item in payload.items])
+    _commit(db)
+    return activity_operation_payload(db, journey, code)
+
+
+@router.put("/journeys/{journey_id}/activities/{activity_code}/room-count")
+def update_activity_room_count(
+    journey_id: str,
+    activity_code: str,
+    payload: ActivityOperationRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    activity_operation_payload(db, journey, activity_code)
+    code = operation_activity_code(activity_code)
+    operation = db.scalar(select(ActivityOperation).where(
+        ActivityOperation.journey_id == journey.id, ActivityOperation.activity_code == code).with_for_update())
+    if payload.base_version != operation.version:
+        raise HTTPException(status_code=409, detail="This activity plan changed in another tab.")
+    before = operation.room_count
+    operation.room_count = payload.room_count
+    operation.version += 1
+    journey.version += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="activity.room_count_changed", entity_type="activity_operation", entity_id=code,
+          before={"roomCount": before}, after={"roomCount": payload.room_count})
+    _commit(db)
+    return activity_operation_payload(db, journey, code)
+
+
+@router.get("/journeys/{journey_id}/activities/{activity_code}/rooms")
+def read_activity_rooms(
+    journey_id: str,
+    activity_code: str,
+    status: str = Query(default="published", pattern="^(preview|published)$"),
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    plan = latest_room_plan(db, journey.id, status, activity_code)
+    return room_plan_payload(db, plan) if plan else None
+
+
+@router.post("/journeys/{journey_id}/activities/{activity_code}/rooms/preview")
+def preview_activity_rooms(
+    journey_id: str,
+    activity_code: str,
+    payload: PreviewRequest,
+    request: Request,
+    mode: str = Query(default="full", pattern="^(full|recruits|evaluators|copy_recruits|copy_full)$"),
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    plan = create_activity_room_preview(db, journey, activity_code, context.actor_name,
+                                        payload.seed or secrets.token_hex(8), mode)
+    _commit(db)
+    return room_plan_payload(db, plan)
+
+
+@router.post("/journeys/{journey_id}/activities/{activity_code}/rooms/{plan_id}/edit")
+def edit_published_activity_rooms(
+    journey_id: str,
+    activity_code: str,
+    plan_id: str,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    source = db.get(RoomPlan, plan_id)
+    code = operation_activity_code(activity_code)
+    if not source or source.journey_id != journey.id or source.activity_code != code or source.status != "published":
+        raise HTTPException(status_code=409, detail="Published room plan not found.")
+    db.execute(update(RoomPlan).where(RoomPlan.journey_id == journey.id,
+                                      RoomPlan.activity_code == code,
+                                      RoomPlan.status == "preview").values(status="superseded"))
+    version = (db.scalar(select(func.max(RoomPlan.version)).where(RoomPlan.journey_id == journey.id)) or 0) + 1
+    plan = RoomPlan(journey_id=journey.id, activity_code=code, version=version, status="preview",
+                    seed=source.seed, warnings_json=source.warnings_json, created_by=context.actor_name)
+    db.add(plan); db.flush()
+    for item in db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == source.id)):
+        db.add(RoomPlanRecruit(plan_id=plan.id, recruit_id=item.recruit_id,
+                               room_number=item.room_number, locked=item.locked))
+    for item in db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == source.id)):
+        db.add(RoomPlanEvaluator(plan_id=plan.id, evaluator_id=item.evaluator_id,
+                                 room_number=item.room_number, mandatory=item.mandatory,
+                                 locked=item.locked))
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="room_plan.published_edit_started", entity_type="room_plan", entity_id=plan.id,
+          before={"publishedVersion": source.version}, after={"workingVersion": version})
+    _commit(db)
+    return room_plan_payload(db, plan)
+
+
+@router.put("/journeys/{journey_id}/activities/{activity_code}/rooms/{plan_id}")
+def update_activity_room_preview(
+    journey_id: str,
+    activity_code: str,
+    plan_id: str,
+    payload: ActivityRoomPlanEditRequest,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    plan = db.get(RoomPlan, plan_id)
+    code = operation_activity_code(activity_code)
+    operation_payload = activity_operation_payload(db, journey, code)
+    if not plan or plan.journey_id != journey.id or plan.activity_code != code or plan.status != "preview":
+        raise HTTPException(status_code=409, detail="Editable working room plan not found.")
+    if payload.base_version is not None and payload.base_version != plan.edit_revision:
+        raise HTTPException(status_code=409, detail="This working room plan changed in another tab.")
+    valid_recruits = set(db.scalars(select(Recruit.id).where(Recruit.journey_id == journey.id, Recruit.active.is_(True))))
+    valid_evaluators = set(db.scalars(select(Evaluator.id).where(Evaluator.journey_id == journey.id, Evaluator.active.is_(True))))
+    if not set(payload.recruit_rooms).issubset(valid_recruits) or not set(payload.evaluator_rooms).issubset(valid_evaluators):
+        raise HTTPException(status_code=422, detail="The room plan contains a person outside this Journee.")
+    assigned_rooms = [value for value in [*payload.recruit_rooms.values(), *payload.evaluator_rooms.values()] if value is not None]
+    if any(value < 1 or value > operation_payload["roomCount"] for value in assigned_rooms):
+        raise HTTPException(status_code=422, detail="One or more room numbers are invalid.")
+    before = room_plan_payload(db, plan)
+    db.execute(delete(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == plan.id))
+    db.execute(delete(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == plan.id))
+    locked = set(payload.locked_recruits)
+    locked_evaluators = set(payload.locked_evaluators)
+    placed_evaluator_ids = {key for key, value in payload.evaluator_rooms.items() if value is not None}
+    if not locked_evaluators.issubset(placed_evaluator_ids):
+        raise HTTPException(status_code=422, detail="Only evaluators placed in a room can be locked.")
+    for recruit_id, room in payload.recruit_rooms.items():
+        if room is not None:
+            db.add(RoomPlanRecruit(plan_id=plan.id, recruit_id=recruit_id, room_number=room,
+                                   locked=recruit_id in locked))
+    mandatory = {item.evaluator_id: item.room_number for item in db.scalars(select(ActivityMandatoryEvaluator).where(
+        ActivityMandatoryEvaluator.journey_id == journey.id, ActivityMandatoryEvaluator.activity_code == code))}
+    for evaluator_id, room in payload.evaluator_rooms.items():
+        if room is not None:
+            db.add(RoomPlanEvaluator(plan_id=plan.id, evaluator_id=evaluator_id, room_number=room,
+                                     mandatory=mandatory.get(evaluator_id) == room,
+                                     locked=(evaluator_id in locked_evaluators and mandatory.get(evaluator_id) != room)))
+    plan.edit_revision += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="room_plan.manually_edited", entity_type="room_plan", entity_id=plan.id,
+          before=before, after={"recruitRooms": payload.recruit_rooms,
+                               "evaluatorRooms": payload.evaluator_rooms,
+                               "lockedRecruits": payload.locked_recruits,
+                               "lockedEvaluators": payload.locked_evaluators})
+    _commit(db)
+    return room_plan_payload(db, plan)
+
+
+@router.post("/journeys/{journey_id}/activities/{activity_code}/rooms/{plan_id}/publish")
+def publish_activity_rooms(
+    journey_id: str,
+    activity_code: str,
+    plan_id: str,
+    request: Request,
+    base_revision: int | None = Query(default=None, ge=1),
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    plan = db.get(RoomPlan, plan_id)
+    if not plan or plan.activity_code != operation_activity_code(activity_code):
+        raise HTTPException(status_code=404, detail="Working room plan not found.")
+    if base_revision is not None and base_revision != plan.edit_revision:
+        raise HTTPException(status_code=409, detail="This working room plan changed in another tab. Reload before applying it.")
+    publish_room_plan(db, journey, plan, context.actor_name, override_reason="Activity-specific plan applied.")
+    journey.version += 1
+    _commit(db)
+    return room_plan_payload(db, plan)
+
+
+@router.delete("/journeys/{journey_id}/activities/{activity_code}/working-plan")
+def clear_activity_working_plan(
+    journey_id: str,
+    activity_code: str,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    code = operation_activity_code(activity_code)
+    room_count = db.execute(update(RoomPlan).where(
+        RoomPlan.journey_id == journey.id, RoomPlan.activity_code == code,
+        RoomPlan.status == "preview",
+    ).values(status="superseded")).rowcount
+    assignment_count = db.execute(update(AssignmentRound).where(
+        AssignmentRound.journey_id == journey.id, AssignmentRound.activity_code == code,
+        AssignmentRound.status == "preview",
+    ).values(status="superseded")).rowcount
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="activity.working_plan_cleared", entity_type="activity_operation", entity_id=code,
+          before={"roomPreviews": room_count, "assignmentPreviews": assignment_count})
+    _commit(db)
+    return {"ok": True, "roomPreviews": room_count, "assignmentPreviews": assignment_count}
 
 
 @router.put("/journeys/{journey_id}/mandatory-rooms")
@@ -1668,6 +2024,140 @@ def preview_assignments(
     return assignment_round_payload(db, round_record)
 
 
+@router.post("/journeys/{journey_id}/assignments/{round_id}/edit")
+def edit_published_assignments(
+    journey_id: str,
+    round_id: str,
+    request: Request,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    require_csrf(request, context.csrf_token)
+    journey = get_journey_or_404(db, journey_id)
+    source = db.get(AssignmentRound, round_id)
+    if not source or source.journey_id != journey.id or source.status != "published":
+        raise HTTPException(status_code=409, detail="Published assignment version not found.")
+    configured = activity_definition(source.activity_code)
+    if configured and configured.assignment.reuseAssignmentsFrom:
+        raise HTTPException(status_code=409, detail="Edit the shared source assignment instead.")
+    db.execute(update(AssignmentRound).where(
+        AssignmentRound.journey_id == journey.id,
+        AssignmentRound.activity_code == source.activity_code,
+        AssignmentRound.status == "preview",
+    ).values(status="superseded"))
+    version = (db.scalar(select(func.max(AssignmentRound.version)).where(
+        AssignmentRound.journey_id == journey.id,
+        AssignmentRound.activity_code == source.activity_code,
+    )) or 0) + 1
+    working = AssignmentRound(
+        journey_id=journey.id, activity_code=source.activity_code, version=version,
+        status="preview", seed=source.seed, warnings_json=source.warnings_json,
+        created_by=context.actor_name, room_plan_id=source.room_plan_id,
+    )
+    db.add(working); db.flush()
+    for item in db.scalars(select(Assignment).where(Assignment.round_id == source.id)):
+        db.add(Assignment(
+            round_id=working.id, evaluator_id=item.evaluator_id, recruit_id=item.recruit_id,
+            room_number=item.room_number, slot=item.slot, repeated_pair=item.repeated_pair,
+            repeat_reason=item.repeat_reason, task_key=item.task_key or item.id,
+        ))
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name,
+          action="assignments.published_edit_started", entity_type="assignment_round", entity_id=working.id,
+          before={"publishedVersion": source.version}, after={"workingVersion": version})
+    _commit(db)
+    return assignment_round_payload(db, working)
+
+
+def _save_unrestricted_assignment_preview(
+    db: Session,
+    journey: Journey,
+    round_record: AssignmentRound,
+    payload: AssignmentEditRequest,
+    actor_name: str,
+):
+    if payload.base_version is not None and payload.base_version != round_record.edit_revision:
+        raise HTTPException(status_code=409, detail="This working assignment version changed in another tab.")
+    pair_keys: set[tuple[str, str]] = set()
+    recruit_counts: Counter = Counter()
+    evaluator_counts: Counter = Counter()
+    past_pairs, _secondary_counts = past_pair_data(db, journey.id, round_record.activity_code)
+    operation_code = operation_activity_code(round_record.activity_code)
+    ensure_activity_operation(db, journey, operation_code)
+    available_ids = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
+        ActivityEvaluatorAvailability.journey_id == journey.id,
+        ActivityEvaluatorAvailability.activity_code == operation_code,
+        ActivityEvaluatorAvailability.available.is_(True),
+    )))
+    warnings: list[str] = []
+    people: list[tuple] = []
+    for item in payload.items:
+        evaluator = get_evaluator_or_404(db, journey.id, item.evaluator_id)
+        recruit = get_recruit_or_404(db, journey.id, item.recruit_id)
+        pair = (item.evaluator_id, item.recruit_id)
+        if pair in pair_keys:
+            raise HTTPException(status_code=422, detail=f"Duplicate evaluator-recruit task: {evaluator.name} -> {recruit.name}.")
+        pair_keys.add(pair)
+        people.append((item, evaluator, recruit))
+        recruit_counts[recruit.id] += 1
+        evaluator_counts[evaluator.id] += 1
+        if not evaluator.active or not evaluator.present:
+            warnings.append(f"{evaluator.name} is not active/present in Journey attendance.")
+        if evaluator.id not in available_ids:
+            warnings.append(f"{evaluator.name} is unavailable for this activity (manual override).")
+        if not recruit.active or not recruit.present:
+            warnings.append(f"{recruit.name} is not active/present in Journey attendance.")
+        if pair in past_pairs:
+            warnings.append(f"Repeated pair: {evaluator.name} -> {recruit.name}.")
+    present_recruits = set(db.scalars(select(Recruit.id).where(
+        Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True))))
+    uncovered = present_recruits - set(recruit_counts)
+    if uncovered:
+        names = list(db.scalars(select(Recruit.name).where(Recruit.id.in_(uncovered))))
+        warnings.append("Uncovered present recruits: " + ", ".join(sorted(names)))
+    for recruit_id, count in recruit_counts.items():
+        if count > 2:
+            warnings.append(f"{get_recruit_or_404(db, journey.id, recruit_id).name} has {count} evaluators (manual override).")
+    for evaluator_id, count in evaluator_counts.items():
+        if count > 1:
+            warnings.append(f"{get_evaluator_or_404(db, journey.id, evaluator_id).name} has {count} recruits (manual workload).")
+    recruit_rooms: dict[str, int] = {}
+    evaluator_rooms: dict[str, int] = {}
+    if round_record.activity_code in ROOM_ACTIVITIES:
+        room_plan = latest_room_plan(db, journey.id, "published", round_record.activity_code)
+        if room_plan:
+            recruit_rooms = {item.recruit_id: item.room_number for item in db.scalars(
+                select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == room_plan.id))}
+            evaluator_rooms = {item.evaluator_id: item.room_number for item in db.scalars(
+                select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == room_plan.id))}
+            for item, evaluator, recruit in people:
+                if recruit_rooms.get(recruit.id) != evaluator_rooms.get(evaluator.id):
+                    warnings.append(f"Cross-room manual pair: {evaluator.name} -> {recruit.name}.")
+        else:
+            warnings.append("No published room plan; manual assignments have no room context.")
+    existing_task_keys = {(item.evaluator_id, item.recruit_id): item.task_key or item.id for item in db.scalars(
+        select(Assignment).where(Assignment.round_id == round_record.id))}
+    db.execute(delete(Assignment).where(Assignment.round_id == round_record.id))
+    for item, _evaluator, _recruit in people:
+        repeated = (item.evaluator_id, item.recruit_id) in past_pairs
+        db.add(Assignment(
+            round_id=round_record.id,
+            evaluator_id=item.evaluator_id,
+            recruit_id=item.recruit_id,
+            room_number=item.room_number if item.room_number is not None else recruit_rooms.get(item.recruit_id),
+            slot=item.slot,
+            repeated_pair=repeated,
+            repeat_reason=item.override_reason if repeated else None,
+            task_key=existing_task_keys.get((item.evaluator_id, item.recruit_id)) or new_id(),
+        ))
+    round_record.warnings_json = dumps(list(dict.fromkeys(warnings)))
+    round_record.edit_revision += 1
+    audit(db, journey_id=journey.id, actor_type="admin", actor_name=actor_name,
+          action="assignments.manually_edited", entity_type="assignment_round", entity_id=round_record.id,
+          after={"count": len(payload.items), "warnings": list(dict.fromkeys(warnings))})
+    _commit(db)
+    return assignment_round_payload(db, round_record)
+
+
 @router.put("/journeys/{journey_id}/assignments/{round_id}")
 def edit_assignment_preview(
     journey_id: str,
@@ -1686,6 +2176,7 @@ def edit_assignment_preview(
     if configured_activity and configured_activity.assignment.reuseAssignmentsFrom:
         source = RUBRICS[configured_activity.assignment.reuseAssignmentsFrom].name
         raise HTTPException(status_code=409, detail=f"{configured_activity.name} reuses {source} assignments and cannot be edited independently.")
+    return _save_unrestricted_assignment_preview(db, journey, round_record, payload, context.actor_name)
     pair_keys: set[tuple[str, str]] = set()
     recruit_counts: dict[str, int] = Counter()
     evaluator_counts: dict[str, int] = Counter()
@@ -1766,6 +2257,7 @@ def confirm_assignments(
     journey_id: str,
     round_id: str,
     request: Request,
+    base_revision: int | None = Query(default=None, ge=1),
     context: AdminContext = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -1774,6 +2266,8 @@ def confirm_assignments(
     round_record = db.get(AssignmentRound, round_id)
     if not round_record:
         raise HTTPException(status_code=404, detail="Assignment preview not found.")
+    if base_revision is not None and base_revision != round_record.edit_revision:
+        raise HTTPException(status_code=409, detail="This working assignment version changed in another tab. Reload before applying it.")
     publish_assignment_round(db, journey, round_record, context.actor_name)
     _commit(db)
     return assignment_round_payload(db, round_record)
@@ -2561,7 +3055,7 @@ def recruit_profile(
     )
     return {
         "recruit": serialize_recruit(recruit),
-        "photoUrl": f"/api/admin/journeys/{journey.id}/recruits/{recruit.id}/photo" if recruit.photo_data else None,
+        "photoUrl": f"/api/admin/journeys/{journey.id}/recruits/{recruit.id}/photo" if has_photo(recruit) else None,
         "result": result_row,
         "dimensionBreakdowns": _dimension_breakdowns(details, result_row),
         "dimensionAverages": results["dimensionAverages"],

@@ -158,10 +158,10 @@ function profileHtml(profile) {
   const activityItems = activities.map(activity => ({ name: activity.name, score: result.activities?.[activity.code]?.score || 0 }));
   const photo = profile.photoUrl ? `<button class="photo-zoom-trigger profile-photo-trigger" data-view-photo="${profile.photoUrl}" data-photo-name="${h(profile.recruit.name)}"><img class="profile-photo" src="${profile.photoUrl}" alt="${h(profile.recruit.name)}"></button>` : `<span class="profile-photo avatar placeholder">${h(profile.recruit.name[0])}</span>`;
   const missing = result.missingComponents || [];
-  return `<div class="panel"><div class="profile-header">${photo}<div><h2>${h(profile.recruit.name)}</h2><p class="eyebrow">${h(profile.journey?.name || "")}</p><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · ${profile.recruit.dateOfBirth ? `Date of birth: ${h(profile.recruit.dateOfBirth)}` : "Date of birth not recorded"} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${profile.recruit.arrivalTime ? h(localDateTime(profile.recruit.arrivalTime)) : "Not recorded"}${profile.recruit.attendanceComment ? `<small class="profile-attendance-note">${h(profile.recruit.attendanceComment)}</small>` : ""}</p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
+  return `<div class="panel profile-sticky-panel"><div class="profile-header">${photo}<div><h2>${h(profile.recruit.name)}</h2><p class="eyebrow">${h(profile.journey?.name || "")}</p><p class="muted">${h(profile.recruit.phoneNumber || "No phone number")} · ${profile.recruit.dateOfBirth ? `Date of birth: ${h(profile.recruit.dateOfBirth)}` : "Date of birth not recorded"} · ${profile.recruit.present ? "Present" : "Absent"}</p><p class="profile-arrival"><strong>Arrival time:</strong> ${profile.recruit.arrivalTime ? h(localDateTime(profile.recruit.arrivalTime)) : "Not recorded"}${profile.recruit.attendanceComment ? `<small class="profile-attendance-note">${h(profile.recruit.attendanceComment)}</small>` : ""}</p></div><div class="profile-score-group"><div class="grade-orb ${result.color}"><strong>${h(result.color)}</strong><small>Color grade</small></div><div class="score-orb"><div><strong>${fmt(result.overallScore)}</strong><small>/20 · rank ${result.overallRank ?? "—"}</small></div></div></div></div></div>
     <div class="panel"><div class="panel-header"><div><h2>Dimension performance</h2><p class="muted">Select a dimension to inspect every criterion and evaluator grade.</p></div></div><div class="profile-performance"><div class="radar-wrap">${radar(result, dimensionItems, dimensionMaximums[dimensionOrder[0]]||5)}</div><div class="profile-dimension-grid">${dimensionOrder.map(code => { const item = result.dimensions[code]; return `<button class="profile-activity dimension-card" data-dimension="${code}"><small>${h(dimensionNames[code])}</small><strong>${fmt(dimensionGrade(item.score,code))} /${dimensionMaximums[code]||5}</strong><small>Rank ${item.rank ?? "—"} · ${item.complete ? "Complete" : "Incomplete"}</small><span class="dimension-card-action">View criteria →</span></button>`; }).join("")}</div></div></div>
     <div class="panel"><h2>Activity performance</h2><p class="muted">Select an activity to inspect its evaluator submissions.</p><div class="profile-performance"><div class="radar-wrap">${radar(result, activityItems, 5)}</div><div class="profile-activity-grid">${activities.map(activity => { const item = result.activities[activity.code]; return `<button class="profile-activity activity-card-button" data-activity="${activity.code}"><small>${h(activity.name)}</small><strong>${fmt(item.score)} /5</strong><small>Rank ${item.rank ?? "—"} · ${item.submitted}/${item.expected}</small><span class="dimension-card-action">View evaluations →</span></button>`; }).join("")}</div></div></div>
-    <div class="two-column"><div class="panel"><h2>General assessment</h2><form id="viewerGeneralAssessmentForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5">${h(profile.assessment.notes)}</textarea></label><div class="inline-actions"><button type="button" class="button ghost" id="viewerDiscardAssessment">Discard</button><button class="button primary" id="viewerSaveAssessment">Save general assessment</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p>${missing.length ? `<div class="member-list">${missing.map(item => `<span class="member-chip">${h(item)}</span>`).join("")}</div>` : `<p class="success-text">All activities and general grades are complete.</p>`}</div></div>
+    <div class="two-column"><div class="panel"><div class="panel-header"><h2>General assessment</h2><span id="viewerProfileSaveStatus" class="save-state saved">Saved</span></div><form id="viewerGeneralAssessmentForm" class="stack"><div class="three-column"><label>Punctuality<input name="punctuality" type="number" min="0" max="1" step="0.1" value="${profile.assessment.punctuality ?? ""}"></label><label>Respect to us<input name="respect" type="number" min="0" max="1" step="0.1" value="${profile.assessment.respect ?? ""}"></label><label>Seriousness<input name="seriousness" type="number" min="0" max="1" step="0.1" value="${profile.assessment.seriousness ?? ""}"></label></div><label>General comment<textarea name="comment">${h(profile.assessment.comment)}</textarea></label><label>Notes<textarea name="notes" rows="5">${h(profile.assessment.notes)}</textarea></label><div id="viewerConflictActions" class="inline-actions hidden"><button type="button" class="button ghost" id="viewerReloadProfile">Reload latest</button><button type="button" class="button warning" id="viewerOverwriteProfile">Overwrite with mine</button></div></form></div><div class="panel"><h2>Completion</h2><p><strong>${result.missingCount}</strong> missing component${result.missingCount === 1 ? "" : "s"}</p>${missing.length ? `<div class="member-list">${missing.map(item => `<span class="member-chip">${h(item)}</span>`).join("")}</div>` : `<p class="success-text">All activities and general grades are complete.</p>`}</div></div>
     <div class="panel"><h2>Evaluator breakdown</h2>${Object.entries(profile.evaluations).map(([code, entries]) => `<h3 style="margin-top:16px">${h(state.data.activities.find(item => item.code === code)?.name || statusLabel(code))}</h3>${entries.length ? `<div class="table-wrap"><table><thead><tr><th>Evaluator</th><th>Role</th><th>Score</th><th>Status</th><th>Comment</th><th>Evaluation</th></tr></thead><tbody>${entries.map((entry, index) => `<tr><td>${h(entry.evaluatorName)}</td><td>${h(entry.evaluatorRole)}</td><td>${entry.submission ? fmt(entry.submission.score) : "—"}</td><td>${entry.submission ? h(statusLabel(entry.submission.status)) : "Missing"}</td><td>${h(entry.submission?.comments || "")}</td><td>${entry.submission ? `<button class="button secondary small view-evaluation" data-code="${code}" data-index="${index}">View evaluation</button>` : "—"}</td></tr>`).join("")}</tbody></table></div>` : `<p class="subtle">No published evaluator assignment.</p>`}`).join("")}</div>
     <div class="panel"><h2>Profile audit history</h2>${profile.history.length ? `<div class="audit-list">${profile.history.map(auditItem).join("")}</div>` : `<p class="muted">No profile changes yet.</p>`}</div>`;
 }
@@ -189,13 +189,47 @@ async function renderProfile() {
     assessmentForm.elements.comment.closest("label").classList.toggle("hidden", systemConfiguration?.features?.generalAssessment === false);
     assessmentForm.elements.notes.closest("label").classList.toggle("hidden", systemConfiguration?.features?.notes === false);
   }
-  $("#viewerDiscardAssessment")?.addEventListener("click", () => renderProfile());
+  if (assessmentForm) {
+    const status = $("#viewerProfileSaveStatus");
+    const actions = $("#viewerConflictActions");
+    let version = profile.assessment.version, timer = null, saving = false, queued = false, conflict = false;
+    const setStatus = (label, kind) => { status.textContent = label; status.className = `save-state ${kind}`; };
+    const values = baseVersion => {
+      const form = new FormData(assessmentForm);
+      const optionalGrade = name => form.get(name) === "" ? null : Number(form.get(name));
+      return { punctuality: optionalGrade("punctuality"), respect: optionalGrade("respect"), seriousness: optionalGrade("seriousness"), comment: form.get("comment") || "", notes: form.get("notes") || "", base_version: baseVersion };
+    };
+    const save = async (forceVersion = null) => {
+      clearTimeout(timer);
+      if (conflict && forceVersion == null) return;
+      if (saving) { queued = true; return; }
+      saving = true; queued = false; setStatus(navigator.onLine ? "Saving" : "Offline", navigator.onLine ? "saving" : "offline");
+      try {
+        const result = await api(`/api/view/journeys/${profile.journey.id}/recruits/${profile.recruit.id}/profile`, {
+          method: "PUT", headers: { "X-CSRF-Token": state.session.csrfToken }, body: values(forceVersion ?? version),
+        });
+        version = result.version; conflict = false; actions.classList.add("hidden"); setStatus("Saved", "saved");
+      } catch (error) {
+        if (error.status === 409) { conflict = true; actions.classList.remove("hidden"); setStatus("Conflict", "conflict"); }
+        else setStatus(navigator.onLine ? "Error" : "Offline", navigator.onLine ? "error" : "offline");
+      } finally { saving = false; if (queued && !conflict) save(); }
+    };
+    const schedule = () => { setStatus(navigator.onLine ? "Saving" : "Offline", navigator.onLine ? "saving" : "offline"); clearTimeout(timer); timer = setTimeout(() => save(), 700); };
+    assessmentForm.addEventListener("input", schedule);
+    assessmentForm.addEventListener("focusout", () => save());
+    assessmentForm.addEventListener("submit", event => { event.preventDefault(); save(); });
+    $("#viewerReloadProfile").onclick = () => renderProfile();
+    $("#viewerOverwriteProfile").onclick = async () => {
+      try {
+        const latest = await api(`/api/view/journeys/${profile.journey.id}/recruits/${profile.recruit.id}/profile`);
+        conflict = false; await save(latest.assessment.version);
+      } catch (error) { toast(error.message, "error"); }
+    };
+    window.addEventListener("online", () => { if (!conflict) save(); }, { once: true });
+  }
+  /* Legacy explicit-save handler removed: management edits now autosave. */
+  /*
   $("#viewerGeneralAssessmentForm")?.addEventListener("submit", async event => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    const optionalGrade = name => form.get(name) === "" ? null : Number(form.get(name));
-    const saveButton = $("#viewerSaveAssessment");
-    saveButton.disabled = true;
     try {
       await api(`/api/view/journeys/${profile.journey.id}/recruits/${profile.recruit.id}/profile`, {
         method: "PUT",
@@ -215,7 +249,7 @@ async function renderProfile() {
       toast(error.message, "error");
       saveButton.disabled = false;
     }
-  });
+  }); */
 }
 
 function showDimension(profile, code) {

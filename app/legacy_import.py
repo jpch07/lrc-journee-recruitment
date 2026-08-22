@@ -17,6 +17,7 @@ from .models import (ActivityState, Assignment, AssignmentRound, EvaluationSubmi
 from .rubric import ACTIVITY_ORDER, RUBRICS
 from .scoring import sport_score
 from .services import create_journey, process_photo, result_snapshot
+from .object_storage import write_recruit_photo
 from .utils import audit, dumps
 
 SHEETS = {"sport": "Sport Evaluations", "escape_room": "Escape Room Evaluations",
@@ -254,9 +255,11 @@ class LegacyWorkbookImporter:
         for source in recruit_source:
             recruit = Recruit(journey_id=journey.id, name=source["name"], present=True, active=True)
             if source["photo"]:
-                recruit.photo_data, recruit.photo_type = process_photo(source["photo"])
-                recruit.photo_updated_at = datetime.now(timezone.utc)
-            db.add(recruit); db.flush()
+                photo, photo_type = process_photo(source["photo"])
+                db.add(recruit); db.flush()
+                write_recruit_photo(recruit, photo, photo_type)
+            else:
+                db.add(recruit); db.flush()
             recruits[normalize_name(recruit.name)] = recruit
 
         names = {normalize_name(row.evaluator): row.evaluator for rows in evaluation_rows.values() for row in rows}

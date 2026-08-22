@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import re
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import STATIC_DIR, settings
@@ -27,11 +27,21 @@ from .utils import loads
 from sqlalchemy import select
 
 
+database_startup_error: str | None = None
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    global database_startup_error
     settings.validate_production()
     validate_rubrics()
-    initialize_database()
+    try:
+        initialize_database()
+        database_startup_error = None
+    except Exception as exc:  # Keep liveness and diagnostics available.
+        database_startup_error = str(exc)
+        yield
+        return
     with SessionLocal() as db:
         system = db.scalar(select(AssessmentSystem).order_by(AssessmentSystem.created_at).limit(1).execution_options(bypass_recruitment_scope=True))
         if not system and not settings.is_production:
@@ -169,6 +179,14 @@ def _runtime_for_system(system_id: str):
 @app.middleware("http")
 async def prevent_stale_frontend_assets(request: Request, call_next):
     """Keep deployments from mixing cached HTML/JS files from different releases."""
+    if request.url.path == "/health/live":
+        return await call_next(request)
+    if database_startup_error and request.url.path != "/health/ready":
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "The data service is temporarily unavailable.", "ready": False},
+            headers={"Retry-After": "15"},
+        )
     system_id = _request_system_id(request)
     system_token = select_system(system_id)
     runtime_token = None
@@ -198,21 +216,24 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
 
 @app.get("/health/live", include_in_schema=False)
 def health_live():
-    return {"status": "ok"}
+    return {"status": "ok", "databaseReady": database_startup_error is None}
 
 
 @app.get("/health/ready", include_in_schema=False)
 def health_ready():
+    global database_startup_error
     try:
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0015_global_owner_accounts":
+            if revision != "0017_room_evaluator_locks":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0015_global_owner_accounts'."
+                    f"Database migration is {revision!r}, expected '0017_room_evaluator_locks'."
                 )
+        database_startup_error = None
         return {"status": "ready"}
     except Exception as exc:
+        database_startup_error = str(exc)
         raise HTTPException(status_code=503, detail=f"Database not ready: {exc}") from exc
 
 

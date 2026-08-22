@@ -339,10 +339,36 @@ def generate_room_plan(
     for index, recruit in enumerate(shuffled_recruits):
         recruit_rooms[recruit.id] = index % room_count + 1
 
+    evaluator_rooms, mandatory_present, warnings = distribute_evaluators_to_rooms(
+        recruit_rooms, evaluators_list, mandatory_rooms, room_count, seed, primary_role_order
+    )
+    return RoomPlanResult(
+        recruit_rooms=recruit_rooms,
+        evaluator_rooms=evaluator_rooms,
+        mandatory_evaluators=mandatory_present,
+        warnings=warnings,
+    )
+
+
+def distribute_evaluators_to_rooms(
+    recruit_rooms: dict[str, int],
+    evaluators: Iterable[EvaluatorCandidate],
+    mandatory_rooms: dict[str, int],
+    room_count: int,
+    seed: str,
+    primary_role_order: list[str] | None = None,
+    locked_rooms: dict[str, int] | None = None,
+) -> tuple[dict[str, int], set[str], list[str]]:
+    """Distribute evaluators without ever changing the supplied recruit rooms."""
+    if room_count < 1:
+        raise ValueError("At least one room is required.")
+    randomizer = random.Random(int.from_bytes(hashlib.sha256(seed.encode()).digest()[:8], "big"))
+    evaluators_list = list(evaluators)
     evaluator_by_id = {item.id: item for item in evaluators_list}
     evaluator_rooms: dict[str, int] = {}
     mandatory_present: set[str] = set()
     warnings: list[str] = []
+    locked_rooms = locked_rooms or {}
     for evaluator_id, room_number in mandatory_rooms.items():
         if room_number < 1 or room_number > room_count:
             warnings.append(f"Mandatory evaluator {evaluator_id} refers to invalid room {room_number}.")
@@ -352,6 +378,16 @@ def generate_room_plan(
             continue
         evaluator_rooms[evaluator_id] = room_number
         mandatory_present.add(evaluator_id)
+
+    for evaluator_id, room_number in locked_rooms.items():
+        if evaluator_id in evaluator_rooms:
+            continue
+        if evaluator_id not in evaluator_by_id:
+            continue
+        if room_number < 1 or room_number > room_count:
+            warnings.append(f"Locked evaluator {evaluator_by_id[evaluator_id].name} refers to invalid room {room_number} and was redistributed.")
+            continue
+        evaluator_rooms[evaluator_id] = room_number
 
     remaining = [item for item in evaluators_list if item.id not in evaluator_rooms]
     randomizer.shuffle(remaining)
@@ -396,9 +432,4 @@ def generate_room_plan(
         if evaluator_count > recruit_count * 2 and recruit_count:
             warnings.append(f"Room {room} has evaluators who will remain on standby because recruits accept at most two evaluators.")
 
-    return RoomPlanResult(
-        recruit_rooms=recruit_rooms,
-        evaluator_rooms=evaluator_rooms,
-        mandatory_evaluators=mandatory_present,
-        warnings=warnings,
-    )
+    return evaluator_rooms, mandatory_present, warnings

@@ -14,6 +14,7 @@ class Base(DeclarativeBase):
 
 
 IS_SQLITE = settings.database_url.startswith("sqlite")
+IS_COCKROACH = settings.database_url.startswith("cockroachdb") or "cockroachlabs.cloud" in settings.database_url
 POSTGRES_SEARCH_PATH_SQL = "set local search_path to journee_recruitment, public"
 
 
@@ -128,12 +129,25 @@ def initialize_database() -> None:
     with engine.begin() as connection:
         if not IS_SQLITE:
             connection.execute(text("create schema if not exists journee_recruitment"))
+        if IS_COCKROACH:
+            connection.execute(text(
+                "create table if not exists journee_recruitment.deployment_migration_lock "
+                "(id integer primary key, holder varchar(200), updated_at timestamptz default current_timestamp)"
+            ))
+            connection.execute(text(
+                "insert into journee_recruitment.deployment_migration_lock (id, holder) values (1, 'alembic') "
+                "on conflict (id) do nothing"
+            ))
+            connection.execute(text(
+                "select id from journee_recruitment.deployment_migration_lock where id=1 for update"
+            ))
+        if not IS_SQLITE and not IS_COCKROACH:
             connection.execute(text("select pg_advisory_lock(hashtext('lrc_journee_migrations'))"))
         try:
             configuration.attributes["connection"] = connection
             command.upgrade(configuration, "head")
         finally:
-            if not IS_SQLITE:
+            if not IS_SQLITE and not IS_COCKROACH:
                 connection.execute(text("select pg_advisory_unlock(hashtext('lrc_journee_migrations'))"))
 
 

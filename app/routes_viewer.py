@@ -32,6 +32,7 @@ from .services import (
     serialize_journey,
     serialize_recruit,
 )
+from .object_storage import has_photo, read_recruit_photo
 
 router = APIRouter(prefix="/api/view", tags=["read-only-management"])
 
@@ -247,12 +248,20 @@ def update_profile_general_assessment(
 
 
 @router.get("/journeys/{journey_id}/recruits/{recruit_id}/photo")
-def profile_photo(journey_id: str, recruit_id: str, context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
+def profile_photo(journey_id: str, recruit_id: str, request: Request, context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
     del context
     recruit = db.get(Recruit, recruit_id)
-    if not recruit or recruit.journey_id != journey_id or not recruit.photo_data:
+    if not recruit or recruit.journey_id != journey_id or not has_photo(recruit):
         raise HTTPException(status_code=404, detail="Photo not found.")
-    return Response(recruit.photo_data, media_type=recruit.photo_type or "image/webp", headers={"Cache-Control": "private, no-store"})
+    data = read_recruit_photo(recruit)
+    if not data:
+        raise HTTPException(status_code=404, detail="Photo not found.")
+    headers = {"Cache-Control": "private, max-age=86400"}
+    if recruit.photo_sha256:
+        headers["ETag"] = f'"{recruit.photo_sha256}"'
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
+    return Response(data, media_type=recruit.photo_type or "image/webp", headers=headers)
 
 
 @router.get("/journeys/{journey_id}/submissions/{submission_id}")

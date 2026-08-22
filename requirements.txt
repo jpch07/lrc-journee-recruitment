@@ -10,3 +10,5 @@ pillow==12.3.0
 openpyxl==3.1.5
 qrcode[pil]==8.2
 httpx==0.28.1
+boto3==1.40.21
+sqlalchemy-cockroachdb==2.0.4

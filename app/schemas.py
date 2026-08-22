@@ -144,6 +144,29 @@ class MandatoryRoomRequest(BaseModel):
     items: list[MandatoryRoomItem]
 
 
+class ActivityAvailabilityItem(BaseModel):
+    evaluator_id: str
+    available: bool
+    base_version: int | None = Field(default=None, ge=1)
+
+
+class ActivityAvailabilityRequest(BaseModel):
+    items: list[ActivityAvailabilityItem]
+
+
+class ActivityOperationRequest(BaseModel):
+    room_count: int = Field(ge=1, le=100)
+    base_version: int = Field(ge=1)
+
+
+class ActivityRoomPlanEditRequest(BaseModel):
+    recruit_rooms: dict[str, int | None]
+    evaluator_rooms: dict[str, int | None]
+    locked_recruits: list[str] = Field(default_factory=list)
+    locked_evaluators: list[str] = Field(default_factory=list)
+    base_version: int | None = Field(default=None, ge=1)
+
+
 class PreviewRequest(BaseModel):
     seed: str | None = Field(default=None, max_length=100)
 
@@ -161,13 +184,14 @@ class RoomCountRequest(BaseModel):
 class AssignmentEditItem(BaseModel):
     evaluator_id: str
     recruit_id: str
-    slot: Literal[1, 2]
+    slot: int = Field(default=1, ge=1, le=100)
     room_number: int | None = None
     override_reason: str | None = Field(default=None, max_length=500)
 
 
 class AssignmentEditRequest(BaseModel):
     items: list[AssignmentEditItem]
+    base_version: int | None = Field(default=None, ge=1)
 
 
 class ActivityActionRequest(BaseModel):

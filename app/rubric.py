@@ -10,7 +10,7 @@ from typing import Any
 _LRC_ACTIVITY_ORDER = ["sport", "escape_room", "negotiation", "skills", "simulation"]
 # Escape Room and Negotiation are constrained by the published room plan.
 # Skills is generated globally after Negotiation, and Simulation copies Skills.
-_LRC_ROOM_ACTIVITIES = {"escape_room", "negotiation"}
+_LRC_ROOM_ACTIVITIES = {"escape_room", "negotiation", "skills", "simulation"}
 _LRC_BEHAVIORAL_DIMENSIONS = ["willingness", "adaptability", "respect", "intelligence"]
 _LRC_DIMENSION_ORDER = [*_LRC_BEHAVIORAL_DIMENSIONS, "application", "physical_ability"]
 _LRC_DIMENSION_NAMES = {

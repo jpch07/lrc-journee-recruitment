@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.config import Settings
+from app.config import Settings, load_settings
 
 
 def production_settings(**overrides) -> Settings:
@@ -46,3 +46,11 @@ def test_development_settings_keep_local_defaults() -> None:
         session_secret="short",
         cookie_secure=False,
     ).validate_production()
+
+
+def test_cockroach_cloud_url_uses_required_sqlalchemy_dialect(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "LRC_DATABASE_URL",
+        "postgresql://user:password@sample.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full",
+    )
+    assert load_settings().database_url.startswith("cockroachdb+psycopg://")

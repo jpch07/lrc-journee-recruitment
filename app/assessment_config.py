@@ -304,8 +304,8 @@ def _lrc_definition_from_current_rubric() -> AssessmentSystemDefinition:
         "sport": AssignmentPolicy(mode="automatic_global"),
         "escape_room": AssignmentPolicy(mode="automatic_groups", mandatoryPlacements=True),
         "negotiation": AssignmentPolicy(mode="automatic_groups", predecessor="escape_room", mandatoryPlacements=True),
-        "skills": AssignmentPolicy(mode="automatic_global", predecessor="negotiation", parallelGroup="skills_simulation"),
-        "simulation": AssignmentPolicy(mode="automatic_global", predecessor="negotiation", reuseAssignmentsFrom="skills", parallelGroup="skills_simulation"),
+        "skills": AssignmentPolicy(mode="automatic_groups", predecessor="negotiation", parallelGroup="skills_simulation", mandatoryPlacements=True),
+        "simulation": AssignmentPolicy(mode="automatic_groups", predecessor="negotiation", reuseAssignmentsFrom="skills", parallelGroup="skills_simulation", mandatoryPlacements=True),
     }
     for key in ACTIVITY_ORDER:
         rubric = RUBRICS[key]

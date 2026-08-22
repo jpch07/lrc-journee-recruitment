@@ -32,6 +32,7 @@ from .rubric import ACTIVITY_ORDER, RUBRICS, evaluator_rubric
 from .schemas import EvaluationPayload, EvaluatorSessionRequest
 from .services import latest_room_plan, save_submission
 from .utils import dumps, loads
+from .object_storage import has_photo, read_recruit_photo
 
 
 router = APIRouter(tags=["evaluator"])
@@ -225,11 +226,11 @@ def _home_payload(db: Session, journey: Journey, evaluator: Evaluator) -> dict:
             )
             tasks.append(
                 {
-                    "assignmentId": assignment.id,
+                    "assignmentId": assignment.task_key or assignment.id,
                     "recruitId": recruit.id,
                     "recruitName": recruit.name,
-                    "hasPhoto": bool(recruit.photo_data),
-                    "photoUrl": f"/api/evaluator/tasks/{assignment.id}/photo" if recruit.photo_data else None,
+                    "hasPhoto": has_photo(recruit),
+                    "photoUrl": f"/api/evaluator/tasks/{assignment.task_key or assignment.id}/photo" if has_photo(recruit) else None,
                     "roomNumber": assignment.room_number,
                     "slot": assignment.slot,
                     "status": task_status,
@@ -295,12 +296,21 @@ def _assigned_task(
     assignment_id: str,
 ) -> tuple[Journey, Evaluator, Assignment, AssignmentRound, ActivityState]:
     journey, evaluator = _session_entities(db, context)
-    assignment = db.get(Assignment, assignment_id)
+    assignment = db.scalar(
+        select(Assignment)
+        .join(AssignmentRound, AssignmentRound.id == Assignment.round_id)
+        .where(
+            Assignment.task_key == assignment_id,
+            Assignment.evaluator_id == evaluator.id,
+            AssignmentRound.journey_id == journey.id,
+            AssignmentRound.status == "published",
+        )
+    ) or db.get(Assignment, assignment_id)
     if not assignment or assignment.evaluator_id != evaluator.id:
         raise HTTPException(status_code=404, detail="Assigned task not found.")
     round_record = db.get(AssignmentRound, assignment.round_id)
     if not round_record or round_record.journey_id != journey.id or round_record.status != "published":
-        raise HTTPException(status_code=404, detail="This assignment is no longer current.")
+        raise HTTPException(status_code=409, detail="Assignment changed. Refresh your tasks before submitting.")
     state = db.scalar(
         select(ActivityState).where(
             ActivityState.journey_id == journey.id,
@@ -309,24 +319,33 @@ def _assigned_task(
         )
     )
     if not state:
-        raise HTTPException(status_code=404, detail="This assignment is no longer current.")
+        raise HTTPException(status_code=409, detail="Assignment changed. Refresh your tasks before submitting.")
     return journey, evaluator, assignment, round_record, state
 
 
 @router.get("/api/evaluator/tasks/{assignment_id}/photo")
 def assigned_recruit_photo(
     assignment_id: str,
+    request: Request,
     context: EvaluatorContext = Depends(require_evaluator),
     db: Session = Depends(get_db),
 ):
     _journey, _evaluator, assignment, _round, _state = _assigned_task(db, context, assignment_id)
     recruit = db.get(Recruit, assignment.recruit_id)
-    if not recruit or not recruit.photo_data:
+    if not recruit or not has_photo(recruit):
         raise HTTPException(status_code=404, detail="No photo available.")
+    data = read_recruit_photo(recruit)
+    if not data:
+        raise HTTPException(status_code=404, detail="No photo available.")
+    headers = {"Cache-Control": "private, max-age=86400"}
+    if recruit.photo_sha256:
+        headers["ETag"] = f'"{recruit.photo_sha256}"'
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
     return Response(
-        content=recruit.photo_data,
+        content=data,
         media_type=recruit.photo_type or "image/webp",
-        headers={"Cache-Control": "private, max-age=120"},
+        headers=headers,
     )
 
 

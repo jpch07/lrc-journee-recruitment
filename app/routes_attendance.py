@@ -43,6 +43,7 @@ from .services import (
     update_recruit_attendance_fields,
 )
 from .utils import audit
+from .object_storage import clear_recruit_photo, has_photo, read_recruit_photo, write_recruit_photo
 
 
 router = APIRouter(tags=["recruit-attendance"])
@@ -352,17 +353,26 @@ def remove_recruit_from_attendance(
 @router.get("/api/recruit-attendance/recruits/{recruit_id}/photo")
 def recruit_attendance_photo(
     recruit_id: str,
+    request: Request,
     context: RecruitAttendanceContext = Depends(require_recruit_attendance),
     db: Session = Depends(get_db),
 ):
     journey = _session_journey(db, context)
     recruit = get_recruit_or_404(db, journey.id, recruit_id)
-    if not recruit.active or not recruit.photo_data:
+    if not recruit.active or not has_photo(recruit):
         raise HTTPException(status_code=404, detail="No photo available.")
+    data = read_recruit_photo(recruit)
+    if not data:
+        raise HTTPException(status_code=404, detail="No photo available.")
+    headers = {"Cache-Control": "private, max-age=86400"}
+    if recruit.photo_sha256:
+        headers["ETag"] = f'"{recruit.photo_sha256}"'
+        if request.headers.get("if-none-match") == headers["ETag"]:
+            return Response(status_code=304, headers=headers)
     return Response(
-        content=recruit.photo_data,
+        content=data,
         media_type=recruit.photo_type or "image/webp",
-        headers={"Cache-Control": "private, max-age=300"},
+        headers=headers,
     )
 
 
@@ -379,11 +389,9 @@ def upload_recruit_attendance_photo(
     recruit = get_recruit_or_404(db, journey.id, recruit_id)
     if not recruit.active:
         raise HTTPException(status_code=404, detail="Recruit not found.")
-    before = {"hasPhoto": bool(recruit.photo_data), "version": recruit.version}
+    before = {"hasPhoto": has_photo(recruit), "version": recruit.version}
     data, media_type = process_photo(photo.file.read())
-    recruit.photo_data = data
-    recruit.photo_type = media_type
-    recruit.photo_updated_at = utcnow()
+    write_recruit_photo(recruit, data, media_type)
     recruit.version += 1
     audit(
         db,
@@ -410,12 +418,10 @@ def remove_recruit_attendance_photo(
     require_csrf(request, context.csrf_token)
     journey = _session_journey(db, context)
     recruit = get_recruit_or_404(db, journey.id, recruit_id)
-    if not recruit.active or not recruit.photo_data:
+    if not recruit.active or not has_photo(recruit):
         raise HTTPException(status_code=404, detail="No photo available.")
     before = {"hasPhoto": True, "version": recruit.version}
-    recruit.photo_data = None
-    recruit.photo_type = None
-    recruit.photo_updated_at = utcnow()
+    clear_recruit_photo(recruit)
     recruit.version += 1
     audit(
         db,

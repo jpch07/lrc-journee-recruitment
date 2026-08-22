@@ -17,7 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, deferred
 
 from .db import Base
 
@@ -118,8 +118,14 @@ class Recruit(Base):
     arrival_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attendance_comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    photo_data: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    # Legacy fallback only.  Keeping this deferred is critical: attendance,
+    # assignment, monitoring, and scoring queries must never transfer image
+    # bytes merely because they loaded a Recruit ORM row.
+    photo_data: Mapped[bytes | None] = deferred(mapped_column(LargeBinary, nullable=True))
     photo_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    photo_object_key: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    photo_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    photo_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     photo_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -253,13 +259,61 @@ class MandatoryRoomEvaluator(Base):
     room_number: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+class ActivityOperation(Base):
+    """Independent operational settings for one activity or shared activity group."""
+
+    __tablename__ = "activity_operations"
+    __table_args__ = (
+        UniqueConstraint("journey_id", "activity_code", name="uq_activity_operation"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    activity_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    room_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    initialized_from: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ActivityEvaluatorAvailability(Base):
+    __tablename__ = "activity_evaluator_availability"
+    __table_args__ = (
+        UniqueConstraint("journey_id", "activity_code", "evaluator_id", name="uq_activity_evaluator_availability"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    activity_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    evaluator_id: Mapped[str] = mapped_column(ForeignKey("evaluators.id", ondelete="CASCADE"), nullable=False)
+    available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ActivityMandatoryEvaluator(Base):
+    __tablename__ = "activity_mandatory_evaluators"
+    __table_args__ = (
+        UniqueConstraint("journey_id", "activity_code", "evaluator_id", name="uq_activity_mandatory_evaluator"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    activity_code: Mapped[str] = mapped_column(String(30), nullable=False)
+    evaluator_id: Mapped[str] = mapped_column(ForeignKey("evaluators.id", ondelete="CASCADE"), nullable=False)
+    room_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class RoomPlan(Base):
     __tablename__ = "room_plans"
     __table_args__ = (UniqueConstraint("journey_id", "version", name="uq_room_plan_version"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
     journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    activity_code: Mapped[str] = mapped_column(String(30), nullable=False, default="escape_room")
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    edit_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="preview")
     seed: Mapped[str] = mapped_column(String(100), nullable=False)
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
@@ -278,6 +332,7 @@ class RoomPlanRecruit(Base):
     plan_id: Mapped[str] = mapped_column(ForeignKey("room_plans.id", ondelete="CASCADE"), nullable=False)
     room_number: Mapped[int] = mapped_column(Integer, nullable=False)
     recruit_id: Mapped[str] = mapped_column(ForeignKey("recruits.id", ondelete="CASCADE"), nullable=False)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class RoomPlanEvaluator(Base):
@@ -291,6 +346,7 @@ class RoomPlanEvaluator(Base):
     room_number: Mapped[int] = mapped_column(Integer, nullable=False)
     evaluator_id: Mapped[str] = mapped_column(ForeignKey("evaluators.id", ondelete="CASCADE"), nullable=False)
     mandatory: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class AssignmentRound(Base):
@@ -304,10 +360,12 @@ class AssignmentRound(Base):
     journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
     activity_code: Mapped[str] = mapped_column(String(30), nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False)
+    edit_revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="preview")
     seed: Mapped[str] = mapped_column(String(100), nullable=False)
     warnings_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
     reused_from_id: Mapped[str | None] = mapped_column(ForeignKey("assignment_rounds.id"), nullable=True)
+    room_plan_id: Mapped[str | None] = mapped_column(ForeignKey("room_plans.id"), nullable=True)
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -322,6 +380,7 @@ class Assignment(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    task_key: Mapped[str | None] = mapped_column(String(36), nullable=True, default=new_id, index=True)
     round_id: Mapped[str] = mapped_column(ForeignKey("assignment_rounds.id", ondelete="CASCADE"), nullable=False)
     evaluator_id: Mapped[str] = mapped_column(ForeignKey("evaluators.id", ondelete="CASCADE"), nullable=False)
     recruit_id: Mapped[str] = mapped_column(ForeignKey("recruits.id", ondelete="CASCADE"), nullable=False)
