@@ -1172,7 +1172,13 @@ function mandatoryRoomsDialog(operation = null) {
     event.preventDefault();
     const items = Object.entries(placements).map(([evaluator_id, room_number]) => ({ evaluator_id, room_number }));
     const url = operation ? `/api/admin/journeys/${state.journey.id}/activities/${operation.activityCode}/mandatory-rooms` : `/api/admin/journeys/${state.journey.id}/mandatory-rooms`;
-    try { await api(url, mutation("PUT", { items })); await refreshJourney(); closeModal(); toast("Mandatory placements saved."); if (operation) await renderAssignments(); } catch (error) { toast(error.message, "error"); }
+    try {
+      await api(url, mutation("PUT", { items }));
+      await refreshJourney();
+      if (operation) await renderAssignments();
+      closeModal();
+      toast("Mandatory placements saved.");
+    } catch (error) { toast(error.message, "error"); }
   };
 }
 
