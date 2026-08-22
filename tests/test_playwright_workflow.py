@@ -99,6 +99,8 @@ def test_admin_create_and_mobile_layout(tmp_path):
 
             page.click("#menuButton")
             page.click('#workspaceNav button[data-section="assignments"]')
+            page.click('.assignment-activity-tabs button[data-activity="escape_room"]')
+            page.wait_for_selector("#mandatoryRooms")
             page.click("#mandatoryRooms")
             page.fill("#mandatorySearch", "Wahle")
             page.press("#mandatorySearch", "Enter")
