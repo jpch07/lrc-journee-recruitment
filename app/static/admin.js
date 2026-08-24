@@ -160,6 +160,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     state.workspaceName = result.recruitment?.name || state.system?.name || "Assessment Workspace";
     showApp();
     await loadLibrary();
+    if (/\/admin\/access\/?$/.test(location.pathname) && state.isOwner) await openLibraryPermissions();
   } catch (error) {
     $("#loginError").textContent = error.message;
   }
@@ -1071,42 +1072,6 @@ function wireRoomEditors(plan) {
       if (errors.length) return toast(errors.slice(0, 3).join(" "), "error");
       closeModal(); toast("Bulk placements applied. Press Save room changes to confirm.");
     };
-  };
-}
-
-function legacyRenderAssignmentRound(round) {
-  const reused = configuredActivity(round.activityCode)?.assignment?.reuseAssignmentsFrom;
-  const editable = round.status === "preview" && !reused;
-  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${round.status === "preview" ? "Working" : "Published"} v${round.version}</strong> · edit ${round.editRevision || 1} · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button primary" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : ""}`;
-}
-
-function legacyWireAssignmentEditors(round) {
-  $$(".remove-assignment", host).forEach((button) => button.onclick = () => button.closest(".assignment-row").remove());
-  $("#addAssignment").onclick = () => {
-    const evaluators = state.journey.evaluators.filter(item => item.active);
-    const recruits = state.journey.recruits.filter(item => item.active);
-    openModal(`<form id="addPairForm"><h2>Add manual pairing</h2><p class="muted">Manual pairings may override availability, rooms, prior pairings, and workload. The system will warn without blocking.</p><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map(item => `<option value="${item.id}">${h(item.name)} (${h(item.role)})${item.present ? "" : " — absent"}</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map(item => `<option value="${item.id}">${h(item.name)}${item.present ? "" : " — absent"}</option>`).join("")}</select></label><label>Slot number<input name="slot" type="number" min="1" max="100" value="1"></label><label>Optional note<textarea name="reason"></textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Add to working plan</button></div></form>`);
-    $("#cancelModal").onclick = closeModal;
-    $("#addPairForm").onsubmit = (event) => {
-      event.preventDefault();
-      const form = new FormData(event.currentTarget);
-      const evaluator = evaluators.find((item) => item.id === form.get("evaluator"));
-      const recruit = recruits.find((item) => item.id === form.get("recruit"));
-      const slot = Number(form.get("slot"));
-      const existing = $$(".assignment-row", host);
-      if (existing.some((row) => row.dataset.evaluator === evaluator.id && row.dataset.recruit === recruit.id)) return toast("That evaluator–recruit pair already exists.", "error");
-      const container = document.createElement("div");
-      container.className = "assignment-row";
-      container.dataset.evaluator = evaluator.id; container.dataset.recruit = recruit.id; container.dataset.slot = slot; container.dataset.room = ""; container.dataset.reason = form.get("reason");
-      container.innerHTML = `<span><strong>${h(evaluator.name)}</strong></span><span>→</span><span><strong>${h(recruit.name)}</strong> <small>slot ${h(form.get("slot"))}</small></span><button class="button ghost small remove-assignment">Remove</button>`;
-      $(".assignment-list").append(container);
-      $(".remove-assignment", container).onclick = () => container.remove();
-      closeModal();
-    };
-  };
-  $("#saveAssignmentEdits").onclick = async () => {
-    const items = $$(".assignment-row", host).map((row) => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, slot: Number(row.dataset.slot), room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
-    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
   };
 }
 
