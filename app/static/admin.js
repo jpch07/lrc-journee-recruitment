@@ -127,6 +127,7 @@ async function initialize() {
     state.workspaceName = session.recruitment?.name || state.system?.name || "Assessment Workspace";
     showApp();
     await loadLibrary();
+    if (/\/admin\/access\/?$/.test(location.pathname) && state.isOwner) await openLibraryPermissions();
   } catch {
     showLogin();
   }
@@ -182,10 +183,11 @@ async function loadLibrary() {
   clearInterval(state.pollTimer);
   const include = $("#showArchived").checked;
   state.journeys = await api(`/api/admin/journeys?include_archived=${include}`);
+  document.body.classList.remove("permissions-standalone");
   $("#libraryView").classList.remove("hidden");
   $("#workspaceView").classList.add("hidden");
   $("#journeyCrumb").textContent = "Journee library";
-  $("#permissionsNav").classList.toggle("hidden", !state.isOwner);
+  $("#permissionsNav").classList.add("hidden");
   $("#libraryPermissionsButton").classList.toggle("hidden", !state.isOwner);
   $("#configureSystemButton").classList.toggle("hidden", !state.isOwner);
   $("#configureSystemButton").href = state.workspaceSlug ? `/${encodeURIComponent(state.workspaceSlug)}/configure` : "/configure";
@@ -198,10 +200,11 @@ async function openLibraryPermissions() {
   clearInterval(state.pollTimer);
   state.journey = null;
   state.section = "permissions";
+  document.body.classList.add("permissions-standalone");
   $("#libraryView").classList.add("hidden");
   $("#workspaceView").classList.remove("hidden");
   $("#journeyCrumb").textContent = "Access & permissions";
-  $$("#workspaceNav button:not(#permissionsNav)").forEach((button) => button.classList.add("hidden"));
+  history.replaceState({}, "", state.workspaceSlug ? `/${encodeURIComponent(state.workspaceSlug)}/admin/access` : "/admin/access");
   await renderSection();
 }
 
@@ -273,12 +276,12 @@ async function openJourney(id, section = "dashboard") {
   clearInterval(state.pollTimer);
   if (!state.journey || state.journey.id !== id) state.profileId = null;
   state.journey = await api(`/api/admin/journeys/${id}`);
+  document.body.classList.remove("permissions-standalone");
   state.section = section;
   state.dirty = false;
   $("#libraryView").classList.add("hidden");
   $("#workspaceView").classList.remove("hidden");
   $("#journeyCrumb").textContent = state.journey.name;
-  $$("#workspaceNav button:not(#permissionsNav)").forEach((button) => button.classList.remove("hidden"));
   await renderSection();
   state.pollTimer = setInterval(async () => {
     if (document.hidden || state.dirty || !state.journey) return;
@@ -304,6 +307,8 @@ async function returnToLibrary() {
   if (!guardDirty()) return;
   state.journey = null;
   state.dirty = false;
+  document.body.classList.remove("permissions-standalone");
+  history.replaceState({}, "", state.workspaceSlug ? `/${encodeURIComponent(state.workspaceSlug)}/admin` : "/admin");
   await loadLibrary();
 }
 
@@ -1069,13 +1074,13 @@ function wireRoomEditors(plan) {
   };
 }
 
-function renderAssignmentRound(round) {
+function legacyRenderAssignmentRound(round) {
   const reused = configuredActivity(round.activityCode)?.assignment?.reuseAssignmentsFrom;
   const editable = round.status === "preview" && !reused;
   return `${warningHtml(round.warnings)}<p class="subtle"><strong>${round.status === "preview" ? "Working" : "Published"} v${round.version}</strong> · edit ${round.editRevision || 1} · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-slot="${item.slot}" data-room="${item.roomNumber ?? ""}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong> <small>slot ${item.slot}${item.roomNumber ? ` · room ${item.roomNumber}` : ""}</small></span>${editable ? `<button class="button ghost small remove-assignment">Remove</button>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("")}</div>${editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button primary" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : ""}`;
 }
 
-function wireAssignmentEditors(round) {
+function legacyWireAssignmentEditors(round) {
   $$(".remove-assignment", host).forEach((button) => button.onclick = () => button.closest(".assignment-row").remove());
   $("#addAssignment").onclick = () => {
     const evaluators = state.journey.evaluators.filter(item => item.active);
@@ -1101,6 +1106,58 @@ function wireAssignmentEditors(round) {
   };
   $("#saveAssignmentEdits").onclick = async () => {
     const items = $$(".assignment-row", host).map((row) => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, slot: Number(row.dataset.slot), room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
+    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
+  };
+}
+
+// Modern manual assignment editor. Internal database ordering is intentionally
+// hidden: administrators manage people and notes, not numbered slots.
+function renderAssignmentRound(round) {
+  const reused = configuredActivity(round.activityCode)?.assignment?.reuseAssignmentsFrom;
+  const editable = round.status === "preview" && !reused;
+  const rows = round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-room="${item.roomNumber ?? ""}" data-reason="${h(item.repeatReason || "")}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(item.evaluatorRole)}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong>${item.roomNumber ? ` <small>Room ${item.roomNumber}</small>` : ""}${item.repeatReason ? `<small class="assignment-note">${h(item.repeatReason)}</small>` : ""}</span>${editable ? `<div class="assignment-row-actions"><button type="button" class="button ghost small edit-assignment">Edit</button><button type="button" class="button ghost small remove-assignment">Remove</button></div>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("");
+  const controls = editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button primary" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : "";
+  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${round.status === "preview" ? "Working" : "Published"} v${round.version}</strong> · edit ${round.editRevision || 1} · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${rows}</div>${controls}`;
+}
+
+function wireAssignmentEditors(round) {
+  const evaluators = state.journey.evaluators.filter(item => item.active);
+  const recruits = state.journey.recruits.filter(item => item.active);
+  const wireRow = (container) => {
+    $(".remove-assignment", container).onclick = () => container.remove();
+    $(".edit-assignment", container).onclick = () => openPairDialog(container);
+  };
+  const drawRow = (container, evaluator, recruit, reason = "") => {
+    container.className = "assignment-row";
+    container.dataset.evaluator = evaluator.id;
+    container.dataset.recruit = recruit.id;
+    container.dataset.room = "";
+    container.dataset.reason = reason;
+    container.innerHTML = `<span><strong>${h(evaluator.name)}</strong> <span class="role-badge ${evaluator.role}">${h(evaluator.role)}</span></span><span>→</span><span><strong>${h(recruit.name)}</strong>${reason ? `<small class="assignment-note">${h(reason)}</small>` : ""}</span><div class="assignment-row-actions"><button type="button" class="button ghost small edit-assignment">Edit</button><button type="button" class="button ghost small remove-assignment">Remove</button></div>`;
+    wireRow(container);
+  };
+  const openPairDialog = (container = null) => {
+    const selectedEvaluator = container?.dataset.evaluator || evaluators[0]?.id || "";
+    const selectedRecruit = container?.dataset.recruit || recruits[0]?.id || "";
+    openModal(`<form id="pairForm"><h2>${container ? "Edit" : "Add"} manual pairing</h2><p class="muted">Choose any evaluator and recruit. Manual choices are accepted even when they create an operational warning.</p><div class="stack"><label>Evaluator<select name="evaluator">${evaluators.map(item => `<option value="${item.id}" ${item.id === selectedEvaluator ? "selected" : ""}>${h(item.name)} (${h(item.role)})${item.present ? "" : " — absent"}</option>`).join("")}</select></label><label>Recruit<select name="recruit">${recruits.map(item => `<option value="${item.id}" ${item.id === selectedRecruit ? "selected" : ""}>${h(item.name)}${item.present ? "" : " — absent"}</option>`).join("")}</select></label><label>Note (optional)<textarea name="reason" maxlength="500">${h(container?.dataset.reason || "")}</textarea></label></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">${container ? "Save pairing" : "Add to working plan"}</button></div></form>`);
+    $("#cancelModal").onclick = closeModal;
+    $("#pairForm").onsubmit = (event) => {
+      event.preventDefault();
+      const form = new FormData(event.currentTarget);
+      const evaluator = evaluators.find(item => item.id === form.get("evaluator"));
+      const recruit = recruits.find(item => item.id === form.get("recruit"));
+      const duplicate = $$(".assignment-row", host).some(row => row !== container && row.dataset.evaluator === evaluator.id && row.dataset.recruit === recruit.id);
+      if (duplicate) return toast("That evaluator–recruit pair already exists.", "error");
+      const target = container || document.createElement("div");
+      drawRow(target, evaluator, recruit, String(form.get("reason") || "").trim());
+      if (!container) $(".assignment-list").append(target);
+      closeModal();
+    };
+  };
+  $$(".assignment-row", host).forEach(wireRow);
+  $("#addAssignment").onclick = () => openPairDialog();
+  $("#saveAssignmentEdits").onclick = async () => {
+    const items = $$(".assignment-row", host).map(row => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
     await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
   };
 }
@@ -1627,9 +1684,10 @@ async function renderPermissions() {
   const eligibleWhatsApp = presentWhatsAppAccounts(accounts);
   const presentShareAction = state.journey ? `<button class="button whatsapp" id="sharePresentCredentials" ${eligibleWhatsApp.length ? "" : "disabled"}>WhatsApp present evaluators (${eligibleWhatsApp.length})</button>` : "";
   const attendanceHeading = state.journey ? `${state.journey.name} attendance` : "Attendance access by Journee";
-  host.innerHTML = `${sectionHeading("Security", "Access & permissions", state.journey ? "" : "Workspace-wide accounts and permissions. Attendance access remains Journee-specific.", `${presentShareAction}<button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
+  host.innerHTML = `${sectionHeading("Security", "Access & permissions", state.journey ? "" : "Workspace-wide accounts and permissions. Attendance access remains Journee-specific.", `${state.journey ? "" : `<button class="button ghost" id="permissionsBackToLibrary">← Journee library</button>`}${presentShareAction}<button class="button secondary" id="generateAccounts">Generate missing evaluator passwords</button><button class="button primary" id="addAccount">Add account</button>`)}
     <div class="panel permissions-panel"><div class="permissions-toolbar"><label class="permissions-search-label" for="permissionsSearch">Find an account</label><input id="permissionsSearch" class="search-input" type="search" autocomplete="off" placeholder="Search username, full name, or phone"></div><div class="table-wrap"><table class="permissions-table"><colgroup><col class="permissions-user"><col class="permissions-password"><col class="permissions-role"><col class="permissions-toggle"><col class="permissions-toggle"><col class="permissions-attendance"><col class="permissions-toggle"><col class="permissions-actions-column"></colgroup><thead><tr><th>Username</th><th>Password</th><th>Role</th><th>Admin</th><th>Results</th><th class="permissions-attendance-heading">${h(attendanceHeading)}</th><th>Active</th><th>Actions</th></tr></thead><tbody>${accounts.map((account) => `<tr data-account-id="${account.id}" data-version="${account.version}" data-account-search="${h(normalizedName(`${account.username} ${account.fullName || ""} ${account.phoneNumber || ""}`))}"><td><div class="account-identity"><strong>${h(account.username)}</strong>${account.isOwner ? `<small class="success-text">Owner</small>` : ""}<small>${h(account.fullName || "Full name not recorded")}</small>${account.phoneNumber ? `<small>${h(account.phoneNumber)}</small>` : ""}</div></td><td>${account.isOwner ? `<span class="subtle">Owner-managed</span>` : account.managedPassword ? `<div class="managed-password"><input class="managed-password-value" type="password" readonly value="${h(account.managedPassword)}" aria-label="${h(account.username)} password"><button type="button" class="button ghost small reveal-password">Show</button><button type="button" class="button ghost small copy-password">Copy</button></div>` : `<span class="danger-text">Generate password</span>`}</td><td><select class="account-role" ${account.isOwner ? "disabled" : ""}></select></td><td><input class="account-admin attendance-check" type="checkbox" ${account.canAdmin ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><input class="account-results attendance-check" type="checkbox" ${account.canResults ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td>${permissionAttendanceCell(account)}</td><td><input class="account-active attendance-check" type="checkbox" ${account.active ? "checked" : ""} ${account.isOwner ? "disabled" : ""}></td><td><div class="permissions-actions"><button class="button whatsapp small whatsapp-account" ${whatsAppAccountReady(account) ? "" : "disabled"} title="${h(whatsAppAccountReady(account) ? `Open WhatsApp for ${account.username}` : "A phone number and visible password are required")}">WhatsApp</button><button class="button ghost small edit-account">Edit info</button><button class="button secondary small save-account" ${account.isOwner ? "disabled" : ""}>Save access</button><button class="button ghost small reset-account">Reset password</button><button class="button danger small delete-account" ${account.isOwner ? "disabled" : ""}>Delete</button></div></td></tr>`).join("")}</tbody></table></div><p id="permissionsNoResults" class="muted hidden">No account matches this search.</p></div><div class="panel"><div class="panel-header"><h2>Account security log</h2><span class="subtle">${accountAudit.length} events</span></div><div class="audit-list">${accountAudit.map(auditItem).join("") || `<p class="muted">No account changes yet.</p>`}</div></div>`;
   $$(".account-role", host).forEach((select, index) => { select.innerHTML = categoryOptions(accounts[index].evaluatorRole); });
+  if ($("#permissionsBackToLibrary")) $("#permissionsBackToLibrary").onclick = returnToLibrary;
   $("#permissionsSearch").oninput = (event) => {
     const query = normalizedName(event.currentTarget.value);
     let visible = 0;

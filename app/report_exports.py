@@ -357,8 +357,8 @@ def _assignments_sheet(workbook: Workbook, journey: Journey, data: dict) -> None
         recruit = data["recruit_by_id"].get(assignment.recruit_id)
         evaluator = data["evaluator_by_id"].get(assignment.evaluator_id)
         submission = data["submissions"].get(assignment.id)
-        rows.append([RUBRICS[code].name if code else "Unknown", assignment.room_number or "—", recruit.name if recruit else "Unknown", evaluator.name if evaluator else "Unknown", evaluator.role.title() if evaluator else "", assignment.slot, _label(submission.status) if submission else "Missing", float(submission.score) if submission else ""])
-    _write_table(sheet, 4, ["Activity", "Room", "Recruit", "Evaluator", "Role", "Slot", "Evaluation status", "Score /5"], rows, widths=[20, 9, 28, 28, 13, 9, 18, 13], number_formats={8: "0.00"}, auto_filter=True)
+        rows.append([RUBRICS[code].name if code else "Unknown", assignment.room_number or "—", recruit.name if recruit else "Unknown", evaluator.name if evaluator else "Unknown", evaluator.role.title() if evaluator else "", _label(submission.status) if submission else "Missing", float(submission.score) if submission else ""])
+    _write_table(sheet, 4, ["Activity", "Room", "Recruit", "Evaluator", "Role", "Evaluation status", "Score /5"], rows, widths=[20, 9, 28, 28, 13, 18, 13], number_formats={7: "0.00"}, auto_filter=True)
 
 
 def _evaluation_sheet(workbook: Workbook, journey: Journey, data: dict) -> None:

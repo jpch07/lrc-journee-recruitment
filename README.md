@@ -18,7 +18,7 @@ Digital administration and evaluator system for Lebanese Red Cross recruitment J
 - Fixed 2026 dimension-weighted rubric, live monitoring, six-dimension profiles/rankings, activity statistics, comments, and exports.
 - Versioned submissions, audit events, private recruit photos, and browser/server drafts.
 
-The production application is at `https://lrc-journee-recruitment.onrender.com`. The admin
+The production application is at `https://evalday.onrender.com`. The admin
 application is served at `/admin`. The permanent evaluator URL at `/evaluate` and its QR code
 automatically resolve the single Active Journee. PostgreSQL remains authoritative in production. The Google Sheet
 is used only as the source for the cached recruit directory; Journee attendance and all operational data stay in

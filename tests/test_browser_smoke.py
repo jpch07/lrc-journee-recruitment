@@ -85,8 +85,11 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "admin.js?v=20260820.3" in admin
-    assert "?v=20260820.3" in evaluator
+    assert "admin.js?v=20260824.1" in admin
+    assert "?v=20260824.1" in evaluator
+    assert "eval-task-switcher" in evaluator_js
+    assert "openPairDialog" in admin_js
+    assert "Slot number" not in admin_js[admin_js.rfind("function renderAssignmentRound"):]
     assert "common.js?v=20260810.1" in admin_js
     assert "common.js?v=20260810.1" in evaluator_js
 

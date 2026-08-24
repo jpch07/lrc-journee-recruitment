@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: lrc-journee-recruitment
+    name: evalday
     runtime: docker
     plan: free
     region: virginia

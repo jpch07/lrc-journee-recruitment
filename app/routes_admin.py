@@ -2137,16 +2137,20 @@ def _save_unrestricted_assignment_preview(
     existing_task_keys = {(item.evaluator_id, item.recruit_id): item.task_key or item.id for item in db.scalars(
         select(Assignment).where(Assignment.round_id == round_record.id))}
     db.execute(delete(Assignment).where(Assignment.round_id == round_record.id))
+    internal_slots: Counter = Counter()
     for item, _evaluator, _recruit in people:
         repeated = (item.evaluator_id, item.recruit_id) in past_pairs
+        internal_slots[item.recruit_id] += 1
         db.add(Assignment(
             round_id=round_record.id,
             evaluator_id=item.evaluator_id,
             recruit_id=item.recruit_id,
             room_number=item.room_number if item.room_number is not None else recruit_rooms.get(item.recruit_id),
-            slot=item.slot,
+            # Kept only for backwards-compatible ordering and uniqueness.
+            # Administrators edit people and notes, never internal slot values.
+            slot=internal_slots[item.recruit_id],
             repeated_pair=repeated,
-            repeat_reason=item.override_reason if repeated else None,
+            repeat_reason=item.override_reason,
             task_key=existing_task_keys.get((item.evaluator_id, item.recruit_id)) or new_id(),
         ))
     round_record.warnings_json = dumps(list(dict.fromkeys(warnings)))

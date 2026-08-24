@@ -184,7 +184,6 @@ class RoomCountRequest(BaseModel):
 class AssignmentEditItem(BaseModel):
     evaluator_id: str
     recruit_id: str
-    slot: int = Field(default=1, ge=1, le=100)
     room_number: int | None = None
     override_reason: str | None = Field(default=None, max_length=500)
 

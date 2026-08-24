@@ -156,7 +156,9 @@ function renderForm(payload) {
   const task = state.activeTask;
   const rubric = activity.rubric;
   const locked = activity.status !== "open";
+  const taskSwitcher = activity.tasks.length > 1 ? `<nav class="eval-task-switcher" aria-label="Assigned recruits"><div class="eval-task-switcher-heading"><strong>Switch recruit</strong><small>Your draft is kept when you switch.</small></div><div class="eval-task-switcher-list">${activity.tasks.map((candidate) => `<button type="button" class="eval-task-switch ${candidate.assignmentId === task.assignmentId ? "active" : ""}" data-assignment="${candidate.assignmentId}" ${candidate.assignmentId === task.assignmentId ? "aria-current=\"true\"" : ""}><span>${h(candidate.recruitName)}</span><small>${h(statusLabel(candidate.status))}</small></button>`).join("")}</div></nav>` : "";
   host.innerHTML = `<form id="evaluationForm" class="evaluation-form">
+    ${taskSwitcher}
     <section class="form-recruit">${task.photoUrl ? `<button type="button" class="photo-zoom-trigger" data-photo-viewer data-photo-url="${task.photoUrl}" data-photo-name="${h(task.recruitName)}"><img class="avatar" src="${task.photoUrl}" alt="${h(task.recruitName)}"></button>` : `<span class="avatar placeholder">${h(task.recruitName[0])}</span>`}<div><p class="eyebrow" style="color:#ffc8d4">${h(activity.name)} evaluation</p><h2>${h(task.recruitName)}</h2><small>${h(state.home.evaluator.name)}${task.roomNumber ? ` · Room ${task.roomNumber}` : ""}</small></div></section>
     <div class="panel" style="margin:0"><div class="panel-header"><span><strong id="completionCount">0/${rubric.criteria.length}</strong> criteria complete</span><span class="status-pill ${activity.status}">${h(statusLabel(activity.status))}</span></div>${locked ? `<div class="warning-box">This activity is closed. The evaluation is read-only.</div>` : ""}<p class="muted">Grade every criterion. Explanations describe the behavior being assessed.</p></div>
     ${rubric.criteria.map((criterion) => criterionField(criterion, rubric.kind, payload, locked)).join("")}
@@ -169,6 +171,12 @@ function renderForm(payload) {
   wireDurationPickers(form);
   wireBoundedNumberInputs(form);
   updateCompletion();
+  form.querySelectorAll(".eval-task-switch:not(.active)").forEach((button) => button.onclick = async () => {
+    clearTimeout(state.debounce);
+    if (!locked) await queueServerDraft(true);
+    openTask(activity.code, button.dataset.assignment);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
   if (!locked) {
     form.oninput = () => {
       updateCompletion();
