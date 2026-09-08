@@ -47,6 +47,17 @@ def test_evaluator_only_distribution_preserves_manual_locks():
     assert set(rooms) == {"e0", "e1", "e2", "e3"}
 
 
+def test_room_standby_warning_uses_the_configured_assessor_maximum():
+    _rooms, _mandatory, warnings = distribute_evaluators_to_rooms(
+        {"r0": 1}, evaluators(4), {}, 1, "custom-maximum", maximum_assessors=3,
+    )
+
+    assert warnings == [
+        "Room 1 has evaluators who will remain on standby because the activity allows "
+        "at most 3 assessors per participant."
+    ]
+
+
 def test_seed_reproduces_room_and_pairing_preview():
     first = generate_room_plan(recruits(12), evaluators(10, overall=4), {}, 3, "same-seed")
     second = generate_room_plan(recruits(12), evaluators(10, overall=4), {}, 3, "same-seed")
@@ -68,6 +79,80 @@ def test_dossards_have_priority_for_secondary_slots():
     result = generate_pairings(recruits(2), evaluators(4, overall=2), room_based=False, seed="dossard-secondary")
     secondary_ids = {item.evaluator_id for item in result.assignments if item.slot == 2}
     assert secondary_ids == {"e2", "e3"}
+
+
+def test_automatic_assignment_supports_three_assessors_per_recruit():
+    result = generate_pairings(
+        recruits(2),
+        evaluators(6, overall=2),
+        room_based=False,
+        seed="three-per-recruit",
+        maximum_assessors=3,
+    )
+    counts = Counter(item.recruit_id for item in result.assignments)
+    roles = {item.id: item.role for item in evaluators(6, overall=2)}
+
+    assert counts == {"r0": 3, "r1": 3}
+    assert {item.slot for item in result.assignments} == {1, 2, 3}
+    assert all(roles[item.evaluator_id] == "overall" for item in result.assignments if item.slot == 1)
+    assert all(roles[item.evaluator_id] == "dossard" for item in result.assignments if item.slot > 1)
+    assert len({item.evaluator_id for item in result.assignments}) == 6
+
+
+def test_partial_additional_capacity_is_distributed_fairly():
+    result = generate_pairings(
+        recruits(3),
+        evaluators(8, overall=3),
+        room_based=False,
+        seed="fair-partial-third-layer",
+        maximum_assessors=3,
+    )
+    counts = Counter(item.recruit_id for item in result.assignments)
+    loads = Counter(item.evaluator_id for item in result.assignments)
+
+    assert sorted(counts.values()) == [2, 3, 3]
+    assert set(counts) == {"r0", "r1", "r2"}
+    assert max(loads.values()) == 1
+
+
+def test_more_than_two_assessors_respect_room_boundaries():
+    room_recruits = recruits(2, 1) + [
+        RecruitCandidate(f"x{index}", f"X {index}", 2) for index in range(2)
+    ]
+    room_evaluators = evaluators(6, 1, overall=2) + [
+        EvaluatorCandidate(f"x{index}", f"XE {index}", "overall" if index < 2 else "dossard", 2)
+        for index in range(6)
+    ]
+    result = generate_pairings(
+        room_recruits,
+        room_evaluators,
+        room_based=True,
+        seed="three-inside-rooms",
+        maximum_assessors=3,
+    )
+    recruit_rooms = {item.id: item.room_number for item in room_recruits}
+    evaluator_rooms = {item.id: item.room_number for item in room_evaluators}
+
+    assert Counter(item.recruit_id for item in result.assignments) == {
+        "r0": 3, "r1": 3, "x0": 3, "x1": 3,
+    }
+    assert all(
+        recruit_rooms[item.recruit_id] == evaluator_rooms[item.evaluator_id]
+        for item in result.assignments
+    )
+
+
+def test_explicit_maximum_two_preserves_default_pairing_exactly():
+    candidates = evaluators(9, overall=5)
+    default = generate_pairings(
+        recruits(5), candidates, room_based=False, seed="compatibility"
+    )
+    explicit = generate_pairings(
+        recruits(5), candidates, room_based=False, seed="compatibility", maximum_assessors=2
+    )
+
+    assert explicit.assignments == default.assignments
+    assert explicit.warnings == default.warnings
 
 
 def test_shortage_balances_loads_and_has_no_secondaries():

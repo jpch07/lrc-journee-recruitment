@@ -1,5 +1,5 @@
 import { api, escapeHtml as h, selectedAccount, toast, wireAccountPicker, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
-import { initializeSystemUI } from "/static/system-ui.js?v=20260820.3";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
 
 const host = document.querySelector("#recruitAttendanceHost");
 const journeyLabel = document.querySelector("#attendanceJourneyName");

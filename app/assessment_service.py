@@ -139,10 +139,24 @@ def structural_signature(definition: AssessmentSystemDefinition) -> dict:
         } for item in definition.assessors.categories],
         "dimensions": [{"key": item.key, "source": item.source, "activityKey": item.activityKey}
                        for item in definition.dimensions],
-        "generalFactors": [item.storageKey for item in definition.generalFactors],
+        "generalFactors": [{
+            "key": item.storageKey,
+            "maximum": str(item.maximum),
+            "step": str(item.step),
+        } for item in definition.generalFactors],
         "components": [{"source": item.source, "key": item.key, "weight": str(item.weight)}
                        for item in definition.scoring.components],
         "officialMaximum": str(definition.scoring.officialMaximum),
+        "assessorAggregation": definition.scoring.assessorAggregation,
+        "missingComponents": definition.scoring.missingComponents,
+        "ranking": definition.scoring.ranking,
+        "bands": [{
+            "key": item.key,
+            "name": item.name,
+            "minimum": str(item.minimum),
+            "color": item.color,
+        } for item in definition.scoring.bands],
+        "generalAssessment": definition.features.generalAssessment,
     }
 
 

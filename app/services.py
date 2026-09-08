@@ -73,6 +73,7 @@ from .assessment_runtime import (
     primary_category_order,
     secondary_category_order,
 )
+from .general_assessment import configured_general_assessment_values
 
 
 def get_journey_or_404(db: Session, journey_id: str) -> Journey:
@@ -480,6 +481,8 @@ def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: st
             operation.room_count,
             seed,
             primary_role_order=primary_category_order(),
+            maximum_assessors=(activity_definition(code).assignment.maximumAssessors
+                               if activity_definition(code) else 2),
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -670,7 +673,9 @@ def create_activity_room_preview(
     if mode in {"evaluators", "copy_recruits"}:
         evaluator_rooms, mandatory_present, warnings = distribute_evaluators_to_rooms(
             recruit_rooms, evaluators, mandatory, operation.room_count, seed, primary_category_order(),
-            locked_rooms=locked_evaluators if mode == "evaluators" else None)
+            locked_rooms=locked_evaluators if mode == "evaluators" else None,
+            maximum_assessors=(activity_definition(code).assignment.maximumAssessors
+                               if activity_definition(code) else 2))
     elif mode == "copy_full":
         mandatory_present = set(mandatory)
         missing_from_source = available_ids - set(evaluator_rooms)
@@ -804,7 +809,7 @@ def past_pair_data(db: Session, journey_id: str, current_activity: str) -> tuple
         )
     ).all()
     pairs = {(row.evaluator_id, row.recruit_id) for row in rows}
-    secondary_counts = Counter(row.recruit_id for row in rows if row.slot == 2)
+    secondary_counts = Counter(row.recruit_id for row in rows if row.slot > 1)
     return pairs, dict(secondary_counts)
 
 
@@ -1284,8 +1289,20 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                     for response in response_payloads:
                         try:
                             grade = Decimal(str(response[criterion.key]))
-                            if (grade < Decimal(configured_criterion.minimum)
-                                    or grade > Decimal(configured_criterion.maximum)):
+                            # Target-based submissions keep the measured count or
+                            # duration in raw_payload_json and the target-converted
+                            # /5 score in responses_json.  Dimension aggregation
+                            # must always consume that converted score.  Rating
+                            # activities retain their configurable input scale.
+                            response_minimum = (
+                                Decimal("0") if activity.scoring == "target_average"
+                                else Decimal(configured_criterion.minimum)
+                            )
+                            response_maximum = (
+                                Decimal("5") if activity.scoring == "target_average"
+                                else Decimal(configured_criterion.maximum)
+                            )
+                            if grade < response_minimum or grade > response_maximum:
                                 raise ValueError
                             grades.append(grade)
                         except (KeyError, TypeError, ValueError, ArithmeticError):
@@ -1299,8 +1316,15 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                     else:
                         criterion_average = Decimal("0")
                         complete = False
-                    minimum = Decimal(configured_criterion.minimum)
-                    scale = Decimal(configured_criterion.maximum) - minimum
+                    minimum = (
+                        Decimal("0") if activity.scoring == "target_average"
+                        else Decimal(configured_criterion.minimum)
+                    )
+                    maximum = (
+                        Decimal("5") if activity.scoring == "target_average"
+                        else Decimal(configured_criterion.maximum)
+                    )
+                    scale = maximum - minimum
                     weighted_value += ((criterion_average - minimum) / scale) * criterion.weight
             value = weighted_value / total_weight if total_weight else Decimal("0")
             dimension_values[dimension] = value
@@ -1314,8 +1338,9 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             }
 
         assessment = assessments.get(recruit.id)
-        general_values = {factor.storageKey: getattr(assessment, factor.storageKey) if assessment else None
-                          for factor in definition.generalFactors}
+        general_values = configured_general_assessment_values(
+            assessment, (factor.storageKey for factor in definition.generalFactors)
+        )
         general = general_average(general_values)
         general_missing = sum(1 for value in general_values.values() if value is None)
         complete_components = {("dimension", key) for key, item in dimensions_payload.items() if item["complete"]}

@@ -37,6 +37,7 @@ def activate_assessment_definition(definition: AssessmentSystemDefinition):
     """
     definition_token = _active_definition.set(definition)
     activities = [item for item in definition.activities if item.enabled]
+    dimension_names = {item.key: item.name for item in definition.dimensions}
     dimension_activities = [
         activity.key for activity in activities
         if any(criterion.dimensionKey for criterion in activity.criteria)
@@ -49,7 +50,11 @@ def activate_assessment_definition(definition: AssessmentSystemDefinition):
             kind="sport" if activity.scoring == "target_average" else "weighted",
             criteria=tuple(Criterion(
                 key=item.key,
-                dimension=DIMENSION_NAMES.get(item.dimensionKey, item.dimensionName),
+                # Resolve display names from the definition being activated.  The
+                # shared runtime mapping still contains the preceding workspace
+                # until set_runtime_data() runs below, and criterion.dimensionName
+                # is retained only for backwards-compatible serialized drafts.
+                dimension=dimension_names.get(item.dimensionKey, item.dimensionName),
                 name=item.name,
                 explanation=item.explanation,
                 weight=Decimal(item.weight),
@@ -63,7 +68,7 @@ def activate_assessment_definition(definition: AssessmentSystemDefinition):
         "room_activities": {item.key for item in activities if item.assignment.mode == "automatic_groups"},
         "behavioral_dimensions": [item.key for item in definition.dimensions if item.source == "criteria"],
         "dimension_order": [item.key for item in definition.dimensions],
-        "dimension_names": {item.key: item.name for item in definition.dimensions},
+        "dimension_names": dimension_names,
         "dimension_activities": dimension_activities,
         "rubrics": rubrics,
     })

@@ -61,6 +61,47 @@ def _permission_ids(db: Session, account_id: str) -> list[str]:
     )
 
 
+def _enabled_non_owner_access_profiles():
+    """Return account-creation presets in their configured display order."""
+    return [
+        profile
+        for profile in active_assessment_definition().accessProfiles
+        if profile.enabled and profile.key != "owner"
+    ]
+
+
+def _resolve_account_access_profile(requested_key: str | None):
+    profiles = _enabled_non_owner_access_profiles()
+    if not profiles:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No account permission preset is available. Add and enable a non-owner "
+                "access profile in Configure Assessment System before creating accounts."
+            ),
+        )
+    requested = (requested_key or "").strip()
+    exact = next((profile for profile in profiles if profile.key == requested), None)
+    if exact:
+        return exact
+    # Older clients omit this field and Pydantic supplies the historical
+    # ``assessor`` default. Keep those clients working after an owner renames or
+    # removes that preset, without silently accepting other misspelled keys.
+    if requested in {"", "assessor"}:
+        return next(
+            (profile for profile in profiles if "evaluate" in profile.capabilities),
+            profiles[0],
+        )
+    raise HTTPException(status_code=422, detail="Select an enabled non-owner access profile.")
+
+
+def _apply_account_access_profile(account: UserAccount, profile) -> None:
+    """Copy a preset once; subsequent account permission edits stay independent."""
+    account.can_admin = "admin" in profile.capabilities
+    account.can_results = "results" in profile.capabilities
+    account.can_evaluate = "evaluate" in profile.capabilities
+
+
 def account_payload(
     db: Session,
     account: UserAccount,
@@ -376,6 +417,7 @@ def add_account(
     if not (context.is_owner or context.can_admin):
         raise HTTPException(status_code=403, detail="Admin access is required to add accounts.")
     require_csrf(request, context.csrf_token)
+    profile = _resolve_account_access_profile(payload.access_profile)
     account = create_account_record(
         db,
         payload.username,
@@ -384,13 +426,7 @@ def add_account(
         payload.full_name,
         payload.phone_number,
     )
-    profile = next((item for item in active_assessment_definition().accessProfiles
-                    if item.enabled and item.key == payload.access_profile), None)
-    if not profile or profile.key == "owner":
-        raise HTTPException(status_code=422, detail="Select an enabled non-owner access profile.")
-    account.can_admin = "admin" in profile.capabilities
-    account.can_results = "results" in profile.capabilities
-    account.can_evaluate = "evaluate" in profile.capabilities
+    _apply_account_access_profile(account, profile)
     if "attendance" in profile.capabilities and payload.attendance_journey_id:
         if not db.get(Journey, payload.attendance_journey_id):
             raise HTTPException(status_code=422, detail="Attendance Journey not found.")
@@ -400,6 +436,7 @@ def add_account(
           after={
               "username": account.username,
               "evaluatorRole": account.evaluator_role,
+              "permissionPreset": profile.key,
               "fullName": " ".join((payload.full_name or "").split()),
               "phoneNumber": (payload.phone_number or "").strip(),
           })
@@ -422,11 +459,10 @@ def generate_missing_accounts(
         directory
         for directory in db.scalars(
             select(EvaluatorDirectory)
-            .where(EvaluatorDirectory.active.is_(True), func.lower(EvaluatorDirectory.name) != "marita")
+            .where(EvaluatorDirectory.active.is_(True))
             .order_by(func.lower(EvaluatorDirectory.name))
         )
         if directory.id not in existing_directory_ids
-        and directory.name.casefold() != "jp chaaya"
         and directory.name.casefold() not in existing_usernames
     ]
     accounts_without_managed_password = list(db.scalars(
@@ -435,7 +471,6 @@ def generate_missing_accounts(
             UserAccount.active.is_(True),
             UserAccount.is_owner.is_(False),
             UserAccount.managed_password.is_(None),
-            func.lower(UserAccount.username) != "marita",
         )
         .order_by(func.lower(UserAccount.username))
     ))
@@ -443,6 +478,11 @@ def generate_missing_accounts(
         ("reset", account) for account in accounts_without_managed_password
     ] + [("create", directory) for directory in missing_directories]
     batch = pending[:ACCOUNT_GENERATION_BATCH_SIZE]
+    creation_profile = (
+        _resolve_account_access_profile("assessor")
+        if any(action == "create" for action, _item in batch)
+        else None
+    )
     credentials: list[dict] = []
     reset_count = 0
     for action, item in batch:
@@ -458,6 +498,7 @@ def generate_missing_accounts(
         else:
             directory = item
             account = create_account_record(db, directory.name, password, directory.default_role)
+            _apply_account_access_profile(account, creation_profile)
         credentials.append({"username": account.username, "password": password, "role": account.evaluator_role})
     audit(db, journey_id=None, actor_type="owner", actor_name=context.username,
           action="accounts.initial_password_batch_generated", entity_type="user_account",
@@ -544,7 +585,16 @@ def update_account(
         account.can_results = True
         account.can_evaluate = True
         account.active = True
-        account.evaluator_role = "dossard" if "dossard" in assessor_category_keys() else default_assessor_category()
+        definition = active_assessment_definition()
+        if (
+            definition.branding.organizationName.casefold() == "lebanese red cross"
+            and "dossard" in assessor_category_keys()
+        ):
+            # Preserve the established LRC owner category without turning this
+            # organization-specific rule into generic workspace behavior.
+            account.evaluator_role = "dossard"
+        elif account.evaluator_role not in assessor_category_keys():
+            account.evaluator_role = default_assessor_category()
     if payload.evaluator_role is not None and directory:
         directory.default_role = account.evaluator_role
     if payload.attendance_journey_ids is not None:

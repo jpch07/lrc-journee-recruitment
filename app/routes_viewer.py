@@ -15,7 +15,11 @@ from .models import Evaluator, Journey, MandatoryRoomEvaluator, Recruit
 from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 from .scoring import configured_ranks
 from .assessment_runtime import active_assessment_definition
-from .report_exports import build_management_report_workbook, save_management_report
+from .report_exports import (
+    build_management_report_workbook,
+    management_report_filename,
+    save_management_report,
+)
 from .routes_admin import (
     _activity_states,
     export_results_xlsx,
@@ -308,7 +312,7 @@ def management_report(
         io.BytesIO(output.getvalue()),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": 'attachment; filename="LRC-Journee-management-report.xlsx"',
+            "Content-Disposition": f'attachment; filename="{management_report_filename()}"',
             "Cache-Control": "no-store",
         },
     )

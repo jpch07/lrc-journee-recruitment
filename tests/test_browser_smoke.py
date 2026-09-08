@@ -20,9 +20,10 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Edit evaluation" in admin_js
     assert "row.generalComment" in admin_js
     assert "results-comment-cell" in admin_js
-    assert 'Dimension averages /5' in admin_js
-    assert 'Grade /5' in admin_js
-    assert 'dimensionGrade(item.score)' in admin_js
+    assert 'Dimension averages' in admin_js
+    assert 'dimensionMaximums' in admin_js
+    assert 'Grade /${maximum}' in admin_js
+    assert 'dimensionGrade(' in admin_js
     assert "attendance-check" in admin_js
     assert "Type evaluator name and press Enter" in admin_js
     assert "evaluatorAttendanceSort" in admin_js
@@ -72,12 +73,12 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Evaluator breakdown" in viewer_js
     assert "row.generalComment" in viewer_js
     assert "results-comment-cell" in viewer_js
-    assert 'Grade /5' in viewer_js
-    assert 'dimensionGrade(item.score)' in viewer_js
+    assert 'Grade /${activityScoreMaximum}' in viewer_js
+    assert 'dimensionGrade(' in viewer_js
     assert "Download interactive Excel report" not in viewer_js
     assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260820.3" in viewer
+    assert "viewer.js?v=20260908.1" in viewer
     assert "platformLoginForm" in home
     assert "platformSignupForm" in home
     assert "workspaceList" in home
@@ -85,8 +86,8 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "admin.js?v=20260824.1" in admin
-    assert "?v=20260824.1" in evaluator
+    assert "admin.js?v=20260908.1" in admin
+    assert "evaluator.js?v=20260908.1" in evaluator
     assert "eval-task-switcher" in evaluator_js
     assert "openPairDialog" in admin_js
     assert "Slot number" not in admin_js[admin_js.rfind("function renderAssignmentRound"):]
@@ -102,6 +103,9 @@ def test_static_workspace_shells_are_neutral_before_configuration_loads():
         assert ">LRC<" not in content
     configurator = (static / "configurator.js").read_text(encoding="utf-8")
     assert "Use LRC preset" not in configurator
+    assert "Balance across activities" in configurator
+    assert "configured tie-break order" not in configurator
+    assert '||"Assessors"' in configurator
 
 
 def test_frontend_responses_prevent_stale_release_mixing(client):

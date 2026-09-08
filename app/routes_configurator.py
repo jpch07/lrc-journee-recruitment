@@ -54,7 +54,7 @@ def _google_csv_url(url: str, sheet_name: str) -> str:
     if not match:
         raise HTTPException(status_code=422, detail="Enter a valid Google Sheet URL for the assessor directory.")
     return (f"https://docs.google.com/spreadsheets/d/{match.group(1)}/gviz/tq"
-            f"?tqx=out:csv&sheet={quote(sheet_name or 'Evaluators', safe='')}")
+            f"?tqx=out:csv&sheet={quote(sheet_name or 'Assessors', safe='')}")
 
 
 def _row_value(row: dict[str, str], *aliases: str) -> str:
@@ -125,8 +125,12 @@ def public_system_configuration(db: Session = Depends(get_db)):
                        for item in definition.activities if item.enabled],
         "dimensions": [item.model_dump(mode="json") for item in definition.dimensions],
         "generalFactors": [item.model_dump(mode="json") for item in definition.generalFactors],
+        "performanceBands": [item.model_dump(mode="json") for item in definition.scoring.bands],
         "assessorCategories": [item.model_dump(mode="json") for item in definition.assessors.categories],
         "accessProfiles": [item.model_dump(mode="json") for item in definition.accessProfiles if item.enabled],
+        # Activity results are normalized to this common scale by the scoring engine.
+        # Exposing it keeps every client label and chart tied to the same contract.
+        "activityScoreMaximum": 5,
         "scoreMaximum": float(definition.scoring.officialMaximum),
         "publishedVersion": system.published_version if system else 0,
         "configured": bool(system),

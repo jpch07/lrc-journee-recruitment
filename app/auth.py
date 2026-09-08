@@ -71,9 +71,6 @@ def verify_password(password_hash: str, password: str) -> bool:
 def ensure_owner_account(db: Session) -> UserAccount:
     from .assessment_runtime import default_assessor_category, assessor_category_keys
     owner_category = "dossard" if "dossard" in assessor_category_keys() else default_assessor_category()
-    marita = db.scalar(select(EvaluatorDirectory).where(EvaluatorDirectory.name.ilike("Marita")))
-    if marita:
-        marita.active = False
     owner_directory = db.scalar(select(EvaluatorDirectory).where(EvaluatorDirectory.name.ilike("JP Chaaya")))
     account = db.scalar(select(UserAccount).where(UserAccount.username.ilike("JP Chaaya")))
     if account:

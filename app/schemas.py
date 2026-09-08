@@ -210,6 +210,7 @@ class EvaluationSimulationRequest(BaseModel):
 
 
 class GeneralAssessmentRequest(BaseModel):
+    values: dict[str, float | None] | None = None
     punctuality: float | None = None
     respect: float | None = None
     seriousness: float | None = None

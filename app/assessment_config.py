@@ -43,24 +43,23 @@ class ParticipantSettings(BaseModel):
     attendanceCommentEnabled: bool = True
     linkedDirectoryEnabled: bool = True
     directorySheetUrl: str = ""
-    directorySheetName: str = "List of Recruits"
+    directorySheetName: str = "Participants"
 
 
 class AssessorCategory(BaseModel):
     key: str
     name: str
-    primaryPriority: int = Field(default=0, ge=0, le=20)
-    secondaryPriority: int = Field(default=0, ge=0, le=20)
+    primaryPriority: int = Field(default=0, ge=0, le=100)
+    secondaryPriority: int = Field(default=0, ge=0, le=100)
     color: str = "#64748b"
 
 
 class AssessorSettings(BaseModel):
     categories: list[AssessorCategory]
-    maximumPerParticipant: int = Field(default=2, ge=1, le=2)
     attendanceEnabled: bool = True
     linkedDirectoryEnabled: bool = True
     directorySheetUrl: str = ""
-    directorySheetName: str = "Evaluators"
+    directorySheetName: str = "Assessors"
 
 
 class CriterionDefinition(BaseModel):
@@ -84,6 +83,12 @@ class CriterionDefinition(BaseModel):
             raise ValueError(f"Invalid criterion key: {self.key}")
         if self.maximum <= self.minimum:
             raise ValueError(f"{self.name}: maximum must be greater than minimum.")
+        if self.inputType == "rating" and (
+            (self.maximum - self.minimum) / self.step
+        ) != ((self.maximum - self.minimum) / self.step).to_integral_value():
+            raise ValueError(
+                f"{self.name}: the rating step must divide evenly between the minimum and maximum."
+            )
         if self.inputType in {"integer", "number", "duration"} and (
             self.target is None or self.target <= 0
         ):
@@ -93,7 +98,7 @@ class CriterionDefinition(BaseModel):
 
 class AssignmentPolicy(BaseModel):
     mode: Literal["automatic_global", "automatic_groups", "manual"] = "automatic_global"
-    maximumAssessors: int = Field(default=2, ge=1, le=2)
+    maximumAssessors: int = Field(default=2, ge=1, le=100)
     avoidRepeatPairs: bool = True
     predecessor: str = ""
     reuseAssignmentsFrom: str = ""
@@ -135,10 +140,20 @@ class DimensionDefinition(BaseModel):
 
 
 class GeneralFactorDefinition(BaseModel):
-    storageKey: Literal["punctuality", "respect", "seriousness"]
+    storageKey: str = Field(min_length=1, max_length=40)
     name: str
-    maximum: Decimal = Field(default=Decimal("1"), gt=0, le=5)
+    maximum: Decimal = Field(default=Decimal("1"), gt=0, le=100)
     step: Decimal = Field(default=Decimal("0.1"), gt=0)
+
+    @model_validator(mode="after")
+    def validate_factor(self):
+        if not KEY_PATTERN.fullmatch(self.storageKey):
+            raise ValueError(f"Invalid general-factor key: {self.storageKey}")
+        if self.step > self.maximum:
+            raise ValueError(f"{self.name}: step cannot be greater than the maximum.")
+        if self.maximum / self.step != (self.maximum / self.step).to_integral_value():
+            raise ValueError(f"{self.name}: step must divide evenly into the maximum.")
+        return self
 
 
 class ScoreComponent(BaseModel):
@@ -197,11 +212,17 @@ class DashboardSettings(BaseModel):
 
 
 class AccessProfile(BaseModel):
-    key: Literal["owner", "administrator", "assessor", "management", "attendance"]
+    key: str = Field(min_length=1, max_length=30)
     name: str
     description: str = ""
     enabled: bool = True
     capabilities: list[Literal["evaluate", "admin", "results", "attendance"]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_profile(self):
+        if not KEY_PATTERN.fullmatch(self.key):
+            raise ValueError(f"Invalid access-profile key: {self.key}")
+        return self
 
 
 class AssessmentSystemDefinition(BaseModel):
@@ -262,6 +283,49 @@ class AssessmentSystemDefinition(BaseModel):
                     raise ValueError(f"{activity.name}: shared-assignment activities must use the same assignment mode.")
             if policy.mandatoryPlacements and policy.mode != "automatic_groups":
                 raise ValueError(f"{activity.name}: mandatory placements require group-based assignment.")
+
+        criteria_dimensions = {
+            item.key: item for item in self.dimensions if item.source == "criteria"
+        }
+        for dimension_key, dimension in criteria_dimensions.items():
+            total = sum(
+                (
+                    criterion.weight
+                    for activity in activities
+                    for criterion in activity.criteria
+                    if criterion.dimensionKey == dimension_key
+                ),
+                Decimal("0"),
+            )
+            if total != Decimal("1"):
+                raise ValueError(
+                    f"Criterion weights for dimension '{dimension.name}' total "
+                    f"{total * 100}%; expected 100%."
+                )
+        for activity in activities:
+            activity_level_criteria = [
+                criterion for criterion in activity.criteria if not criterion.dimensionKey
+            ]
+            if not activity_level_criteria:
+                continue
+            total = sum((criterion.weight for criterion in activity_level_criteria), Decimal("0"))
+            if total != Decimal("1"):
+                source_dimension = next(
+                    (
+                        dimension.name
+                        for dimension in self.dimensions
+                        if dimension.source == "activity" and dimension.activityKey == activity.key
+                    ),
+                    None,
+                )
+                scope = (
+                    f"activity '{activity.name}' (dimension '{source_dimension}')"
+                    if source_dimension else f"activity '{activity.name}'"
+                )
+                raise ValueError(
+                    f"Criterion weights within {scope} total "
+                    f"{total * 100}%; expected 100%."
+                )
         dependency_map = {
             item.key: item.assignment.predecessor for item in activities if item.assignment.predecessor
         }
@@ -273,7 +337,15 @@ class AssessmentSystemDefinition(BaseModel):
                     raise ValueError("Activity dependencies contain a circular reference.")
                 visited.add(current)
                 current = dependency_map[current]
-        known_general = {item.storageKey for item in self.generalFactors}
+        general_keys = [item.storageKey for item in self.generalFactors]
+        if len(general_keys) != len(set(general_keys)):
+            raise ValueError("General assessment factor keys must be unique.")
+        known_general = set(general_keys)
+        if not self.features.generalAssessment and self.generalFactors:
+            raise ValueError(
+                "General assessment cannot be disabled while general factors are configured. "
+                "Enable it or remove the factors and their overall-score component."
+            )
         component_total = sum((item.weight for item in self.scoring.components), Decimal("0"))
         if component_total != Decimal("1"):
             raise ValueError(f"Overall score component weights total {component_total}; expected 1.00.")
@@ -340,11 +412,11 @@ def _lrc_definition_from_current_rubric() -> AssessmentSystemDefinition:
             organizationName="Lebanese Red Cross", shortMark="LRC",
             primaryColor="#b20d2d", darkColor="#192331",
         ),
-        participants=ParticipantSettings(),
+        participants=ParticipantSettings(directorySheetName="List of Recruits"),
         assessors=AssessorSettings(categories=[
             AssessorCategory(key="overall", name="Overall", primaryPriority=0, secondaryPriority=1, color="#b20d2d"),
             AssessorCategory(key="dossard", name="Dossard", primaryPriority=1, secondaryPriority=0, color="#23384d"),
-        ]),
+        ], directorySheetName="Evaluators"),
         activities=activities,
         dimensions=[
             DimensionDefinition(key=key, name=DIMENSION_NAMES[key], source="activity" if key in {"application", "physical_ability"} else "criteria",
@@ -394,15 +466,17 @@ def blank_assessment_definition() -> AssessmentSystemDefinition:
         terminology=Terminology(),
         branding=Branding(),
         participants=ParticipantSettings(),
-        assessors=AssessorSettings(categories=[
-            AssessorCategory(key="primary", name="Primary", primaryPriority=0, secondaryPriority=1),
-            AssessorCategory(key="secondary", name="Secondary", primaryPriority=1, secondaryPriority=0),
-        ]),
+        assessors=AssessorSettings(
+            categories=[AssessorCategory(
+                key="assessor", name="Assessor", primaryPriority=0, secondaryPriority=0,
+            )],
+        ),
         activities=[ActivityDefinition(
             key="evaluation", name="Evaluation", criteria=[CriterionDefinition(
                 key="performance", dimensionKey="performance", dimensionName="Performance",
                 name="Performance", explanation="Rate the participant's demonstrated performance.",
             )],
+            assignment=AssignmentPolicy(maximumAssessors=1),
         )],
         dimensions=[DimensionDefinition(key="performance", name="Performance", source="criteria")],
         generalFactors=[],
@@ -418,10 +492,7 @@ def blank_assessment_definition() -> AssessmentSystemDefinition:
         features=FeatureSettings(groupsAndRooms=False, mandatoryPlacements=False),
         accessProfiles=[
             AccessProfile(key="owner", name="Owner", capabilities=["evaluate", "admin", "results", "attendance"]),
-            AccessProfile(key="administrator", name="Administrator", capabilities=["evaluate", "admin", "results", "attendance"]),
             AccessProfile(key="assessor", name="Assessor", capabilities=["evaluate"]),
-            AccessProfile(key="management", name="Management viewer", capabilities=["results"]),
-            AccessProfile(key="attendance", name="Attendance operator", capabilities=["attendance"]),
         ],
     )
 

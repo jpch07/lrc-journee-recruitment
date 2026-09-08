@@ -197,17 +197,26 @@ def _primary_matching(
 def _secondary_matching(
     recruits: list[RecruitCandidate],
     evaluators: list[EvaluatorCandidate],
-    primary: list[Pairing],
+    existing_assignments: list[Pairing],
     past_pairs: set[tuple[str, str]],
     prior_secondary_counts: dict[str, int],
     seed: str,
     preferred_roles: list[str],
+    slot: int = 2,
 ) -> list[Pairing]:
-    used_evaluators = {pair.evaluator_id for pair in primary}
-    primary_pairs = {(pair.evaluator_id, pair.recruit_id) for pair in primary}
+    used_evaluators = {pair.evaluator_id for pair in existing_assignments}
+    existing_pairs = {(pair.evaluator_id, pair.recruit_id) for pair in existing_assignments}
     available = [evaluator for evaluator in evaluators if evaluator.id not in used_evaluators]
-    if not available or len(primary) < len(recruits):
+    covered_recruits = {pair.recruit_id for pair in existing_assignments}
+    if not available or len(covered_recruits) < len(recruits):
         return []
+
+    current_additional_counts: dict[str, int] = {}
+    for pairing in existing_assignments:
+        if pairing.slot > 1:
+            current_additional_counts[pairing.recruit_id] = (
+                current_additional_counts.get(pairing.recruit_id, 0) + 1
+            )
 
     target_count = min(len(available), len(recruits))
     source = 0
@@ -220,14 +229,17 @@ def _secondary_matching(
         evaluator_node = evaluator_start + evaluator_index
         flow_graph.add_edge(source, evaluator_node, 1, 0)
         for recruit_index, recruit in enumerate(recruits):
-            if (evaluator.id, recruit.id) in primary_pairs:
+            if (evaluator.id, recruit.id) in existing_pairs:
                 continue
             repeated = (evaluator.id, recruit.id) in past_pairs
             repeat_cost = 1_000_000 if repeated else 0
             # After coverage and repeat avoidance, use the configured secondary-category order.
             role_order = {role.casefold(): index for index, role in enumerate(preferred_roles)}
             role_cost = role_order.get(evaluator.role.casefold(), len(role_order)) * 100_000
-            fairness_cost = prior_secondary_counts.get(recruit.id, 0) * 10_000
+            fairness_cost = (
+                prior_secondary_counts.get(recruit.id, 0)
+                + current_additional_counts.get(recruit.id, 0)
+            ) * 10_000
             tie_cost = _stable_tie(seed, "secondary", evaluator.id, recruit.id)
             edge = flow_graph.add_edge(evaluator_node, recruit_start + recruit_index, 1, repeat_cost + role_cost + fairness_cost + tie_cost)
             edge_lookup.append((edge, evaluator, recruit))
@@ -245,9 +257,9 @@ def _secondary_matching(
                     evaluator_id=evaluator.id,
                     recruit_id=recruit.id,
                     room_number=recruit.room_number,
-                    slot=2,
+                    slot=slot,
                     repeated_pair=repeated,
-                    repeat_reason="No zero-repeat secondary matching satisfied the current constraints." if repeated else None,
+                    repeat_reason="No zero-repeat additional-assessor matching satisfied the current constraints." if repeated else None,
                 )
             )
             seen_recruits.add(recruit.id)
@@ -275,6 +287,40 @@ def generate_pairings(
     primary_role_order = primary_role_order or ["overall", "dossard"]
     secondary_role_order = secondary_role_order or ["dossard", "overall"]
 
+    def add_additional_assignments(
+        scope_recruits: list[RecruitCandidate],
+        scope_evaluators: list[EvaluatorCandidate],
+        primary: list[Pairing],
+        scope_seed: str,
+    ) -> list[Pairing]:
+        """Use each surplus assessor once, filling one fair layer at a time.
+
+        The first additional layer deliberately uses the exact historic seed and
+        cost calculation so configurations capped at two remain reproducible.
+        Later layers share the configured additional-assessor category order.
+        """
+        if maximum_assessors < 2 or len(scope_evaluators) < len(scope_recruits):
+            return []
+        result: list[Pairing] = []
+        existing = list(primary)
+        for slot in range(2, maximum_assessors + 1):
+            layer_seed = scope_seed if slot == 2 else f"{scope_seed}:additional:{slot}"
+            layer = _secondary_matching(
+                scope_recruits,
+                scope_evaluators,
+                existing,
+                past_pairs,
+                prior_secondary_counts,
+                layer_seed,
+                secondary_role_order,
+                slot,
+            )
+            if not layer:
+                break
+            result.extend(layer)
+            existing.extend(layer)
+        return result
+
     if room_based:
         rooms = sorted({item.room_number for item in recruits_list if item.room_number is not None})
         for room_number in rooms:
@@ -285,31 +331,24 @@ def generate_pairings(
             )
             assignments.extend(primary)
             warnings.extend(f"Room {room_number}: {warning}" for warning in scope_warnings)
-            if maximum_assessors >= 2 and len(room_evaluators) >= len(room_recruits):
-                assignments.extend(
-                    _secondary_matching(
-                        room_recruits,
-                        room_evaluators,
-                        primary,
-                        past_pairs,
-                        prior_secondary_counts,
-                        f"{seed}:room:{room_number}",
-                        secondary_role_order,
-                    )
-                )
+            assignments.extend(add_additional_assignments(
+                room_recruits,
+                room_evaluators,
+                primary,
+                f"{seed}:room:{room_number}",
+            ))
     else:
         primary, scope_warnings, _used = _primary_matching(
             recruits_list, evaluators_list, past_pairs, seed, primary_role_order
         )
         assignments.extend(primary)
         warnings.extend(scope_warnings)
-        if maximum_assessors >= 2 and len(evaluators_list) >= len(recruits_list):
-            assignments.extend(
-                _secondary_matching(
-                    recruits_list, evaluators_list, primary, past_pairs, prior_secondary_counts, seed,
-                    secondary_role_order,
-                )
-            )
+        assignments.extend(add_additional_assignments(
+            recruits_list,
+            evaluators_list,
+            primary,
+            seed,
+        ))
 
     repeat_count = sum(1 for assignment in assignments if assignment.repeated_pair)
     if repeat_count:
@@ -324,6 +363,7 @@ def generate_room_plan(
     room_count: int,
     seed: str,
     primary_role_order: list[str] | None = None,
+    maximum_assessors: int = 2,
 ) -> RoomPlanResult:
     recruits_list = list(recruits)
     evaluators_list = list(evaluators)
@@ -340,7 +380,8 @@ def generate_room_plan(
         recruit_rooms[recruit.id] = index % room_count + 1
 
     evaluator_rooms, mandatory_present, warnings = distribute_evaluators_to_rooms(
-        recruit_rooms, evaluators_list, mandatory_rooms, room_count, seed, primary_role_order
+        recruit_rooms, evaluators_list, mandatory_rooms, room_count, seed, primary_role_order,
+        maximum_assessors=maximum_assessors,
     )
     return RoomPlanResult(
         recruit_rooms=recruit_rooms,
@@ -358,6 +399,7 @@ def distribute_evaluators_to_rooms(
     seed: str,
     primary_role_order: list[str] | None = None,
     locked_rooms: dict[str, int] | None = None,
+    maximum_assessors: int = 2,
 ) -> tuple[dict[str, int], set[str], list[str]]:
     """Distribute evaluators without ever changing the supplied recruit rooms."""
     if room_count < 1:
@@ -429,7 +471,11 @@ def distribute_evaluators_to_rooms(
             warnings.append(
                 f"Room {room} has {recruit_count} recruits and {evaluator_count} evaluators; shortage multi-load rules will apply."
             )
-        if evaluator_count > recruit_count * 2 and recruit_count:
-            warnings.append(f"Room {room} has evaluators who will remain on standby because recruits accept at most two evaluators.")
+        if evaluator_count > recruit_count * maximum_assessors and recruit_count:
+            assessor_label = "assessor" if maximum_assessors == 1 else "assessors"
+            warnings.append(
+                f"Room {room} has evaluators who will remain on standby because the activity allows "
+                f"at most {maximum_assessors} {assessor_label} per participant."
+            )
 
     return evaluator_rooms, mandatory_present, warnings

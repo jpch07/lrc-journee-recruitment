@@ -456,6 +456,7 @@ class GeneralAssessment(Base):
     punctuality: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     respect: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
     seriousness: Mapped[Decimal | None] = mapped_column(Numeric(3, 2), nullable=True)
+    values_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     comment: Mapped[str] = mapped_column(Text, nullable=False, default="")
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

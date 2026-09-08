@@ -120,6 +120,8 @@ textarea { min-height: 105px; resize: vertical; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 15px; }
 .two-column { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(280px, .65fr); gap: 18px; }
 .three-column { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.general-factor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+.field-scale { margin-left: 4px; color: var(--muted); font-weight: 600; }
 .activity-strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
 .activity-mini { padding: 13px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .activity-mini strong { display: block; margin-bottom: 5px; }

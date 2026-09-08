@@ -39,6 +39,7 @@ from .scoring import configured_ranks
 from .services import latest_room_plan, result_snapshot
 from .utils import loads
 from .assessment_runtime import active_assessment_definition
+from .general_assessment import configured_general_assessment_values
 from .object_storage import has_photo, read_recruit_photo
 
 
@@ -71,6 +72,31 @@ def _dimension_grade(value: object, code: str | None = None) -> float:
 
 def _official_maximum() -> float:
     return float(active_assessment_definition().scoring.officialMaximum)
+
+
+def _all_completed_label() -> str:
+    """Return the report scope label using the active workspace terminology."""
+    return f"All completed {active_assessment_definition().terminology.sessionPlural}"
+
+
+def management_report_filename() -> str:
+    """Return a safe, workspace-specific management-report filename."""
+    name = active_assessment_definition().name
+    safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", name).strip("-") or "assessment"
+    return f"{safe_name}-management-report.xlsx"
+
+
+def format_criterion_target(criterion: object) -> str | float:
+    """Format duration targets as time while leaving other targets numeric."""
+    target = getattr(criterion, "target", None)
+    if target is None:
+        return ""
+    if getattr(criterion, "input_type", getattr(criterion, "inputType", "")) == "duration":
+        seconds = max(0, int(Decimal(str(target))))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+    return float(target)
 
 
 def _profile_photo_png(photo_data: bytes | None) -> bytes:
@@ -390,12 +416,12 @@ def _evaluation_sheet(workbook: Workbook, journey: Journey, data: dict) -> None:
 
 def _rubric_sheet(workbook: Workbook, journey: Journey) -> None:
     sheet = _new_sheet(workbook, "Rubric Guide", landscape=True)
-    _title(sheet, "2026 Evaluation Rubric", f"Read-only scoring reference · {journey.name}", 9)
+    _title(sheet, "Scoring guide", f"Read-only scoring reference · {journey.name}", 9)
     rows = []
     for code in ACTIVITY_ORDER:
         for criterion in RUBRICS[code].criteria:
-            rows.append([RUBRICS[code].name, criterion.dimension, criterion.name, float(criterion.weight), criterion.explanation, _label(criterion.input_type), float(criterion.target) if criterion.target is not None else "", criterion.unit])
-    _write_table(sheet, 4, ["Activity", "Dimension / theme", "Criterion", "Activity weight", "Explanation", "Input", "Target", "Unit"], rows, widths=[18, 20, 36, 16, 60, 14, 12, 14], number_formats={4: "0%"}, auto_filter=True)
+            rows.append([RUBRICS[code].name, criterion.dimension, criterion.name, float(criterion.weight), criterion.explanation, _label(criterion.input_type), format_criterion_target(criterion), criterion.unit])
+    _write_table(sheet, 4, [active_assessment_definition().terminology.stage, "Dimension / theme", "Criterion", "Weight within dimension", "Explanation", "Input", "Full-score target", "Unit"], rows, widths=[18, 20, 36, 22, 60, 14, 18, 14], number_formats={4: "0%"}, auto_filter=True)
 
 
 def _results_sheets(workbook: Workbook, journey: Journey, data: dict) -> None:
@@ -481,10 +507,14 @@ def _profile_sheet(workbook: Workbook, journey: Journey, data: dict, recruit: Re
 
     row = max(row, 36)
     row = _section(sheet, row, "General assessment, comments and notes", 12)
+    factor_values = configured_general_assessment_values(
+        assessment,
+        (factor.storageKey for factor in active_assessment_definition().generalFactors),
+    )
     general_values = [
         [f"{factor.name} /{float(factor.maximum):g}",
-         float(getattr(assessment, factor.storageKey))
-         if assessment and getattr(assessment, factor.storageKey) is not None else "Missing"]
+         float(factor_values[factor.storageKey])
+         if factor_values[factor.storageKey] is not None else "Missing"]
         for factor in active_assessment_definition().generalFactors
     ]
     general_values.append(["General average", (result or {}).get("generalAverage", 0)])
@@ -543,9 +573,6 @@ def _audit_sheet(workbook: Workbook, journey: Journey, db: Session) -> None:
 def build_report_workbook(db: Session, journey: Journey, *, full: bool) -> Workbook:
     del journey, full
     return build_management_report_workbook(db)
-
-
-ALL_COMPLETED = "All completed Journees"
 
 
 def _combined_results(journey_data: list[tuple[Journey, dict]]) -> dict:
@@ -688,28 +715,30 @@ def _scalar_lookup_formula(key_expression: str, lookup_range: str, result_range:
 
 
 def _management_attendance_sheet(workbook: Workbook, db: Session, journeys: list[Journey], by_id: dict[str, dict]) -> None:
+    terms = active_assessment_definition().terminology
+    all_completed = _all_completed_label()
     sheet = _new_sheet(workbook, "Attendance", landscape=True)
     sheet.freeze_panes = "A6"
-    _title(sheet, "Recruit attendance", "Confirmed recruit attendance for completed Journees", 7)
-    _style_selector(sheet, "A3", "B3", "Journee view")
-    scopes = [ALL_COMPLETED, *[journey.name for journey in journeys]]
-    sheet["B3"] = ALL_COMPLETED
+    _title(sheet, f"{terms.participant} attendance", f"Confirmed {terms.participant.lower()} attendance for completed {terms.sessionPlural}", 7)
+    _style_selector(sheet, "A3", "B3", f"{terms.session} view")
+    scopes = [all_completed, *[journey.name for journey in journeys]]
+    sheet["B3"] = all_completed
     rows: list[list] = []
     for journey in journeys:
         data = by_id[journey.id]
-        record_scopes = [journey.name, ALL_COMPLETED]
+        record_scopes = [journey.name, all_completed]
         for scope in record_scopes:
             for recruit in data["recruits"]:
                 rows.append([scope, journey.name, recruit.name, recruit.phone_number or "", recruit.date_of_birth, "Present" if recruit.present else "Absent", _local_time(recruit.arrival_time) if recruit.arrival_time else "", recruit.attendance_comment or ""])
     rows = _with_lookup_keys(rows, 0)
-    start, end = _write_hidden_rows(sheet, 13, ["Scope", "Journee", "Name", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment", "Lookup key"], rows)
+    start, end = _write_hidden_rows(sheet, 13, ["Scope", terms.session, terms.participant, "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment", "Lookup key"], rows)
     scope_col = 23
     for index, value in enumerate(scopes, 2):
         sheet.cell(index, scope_col, value)
     sheet.cell(1, scope_col, "Scope options")
     sheet.column_dimensions[get_column_letter(scope_col)].hidden = True
     _validation(sheet, "B3", "W", len(scopes))
-    headers = ["Journee", "Recruit", "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment"]
+    headers = [terms.session, terms.participant, "Phone number", "Date of birth", "Status", "Arrival time", "Attendance comment"]
     for column, header in enumerate(headers, 1):
         cell = sheet.cell(5, column, header); cell.fill = PatternFill("solid", fgColor=NAVY); cell.font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     maximum_rows = max(Counter(row[0] for row in rows).values(), default=1)
@@ -742,25 +771,27 @@ def _result_rows(scope: str, journey_name: str, results: dict) -> list[list]:
 
 
 def _management_results_sheet(workbook: Workbook, journeys: list[Journey], by_id: dict[str, dict], combined: dict) -> None:
+    terms = active_assessment_definition().terminology
+    all_completed = _all_completed_label()
     sheet = _new_sheet(workbook, "Results", landscape=True)
     sheet.freeze_panes = "A6"
     _title(sheet, "Results & rankings", "Overall, dimension, and activity rankings", 10)
-    _style_selector(sheet, "A3", "B3", "Journee view")
+    _style_selector(sheet, "A3", "B3", f"{terms.session} view")
     _style_selector(sheet, "D3", "E3", "Result view")
-    scopes = [ALL_COMPLETED, *[journey.name for journey in journeys]]
+    scopes = [all_completed, *[journey.name for journey in journeys]]
     views = ["Overall ranking", *[DIMENSION_NAMES[code] for code in DIMENSION_ORDER], *[RUBRICS[code].name for code in ACTIVITY_ORDER]]
-    sheet["B3"] = ALL_COMPLETED; sheet["E3"] = "Overall ranking"
-    rows = _result_rows(ALL_COMPLETED, "", combined)
+    sheet["B3"] = all_completed; sheet["E3"] = "Overall ranking"
+    rows = _result_rows(all_completed, "", combined)
     for journey in journeys:
         rows.extend(_result_rows(journey.name, journey.name, by_id[journey.id]["results"]))
     rows = _with_lookup_keys(rows, 0, 1)
-    start, end = _write_hidden_rows(sheet, 13, ["Scope", "View", "Rank", "Recruit", "Journee", "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes", "Lookup key"], rows)
+    start, end = _write_hidden_rows(sheet, 13, ["Scope", "View", "Rank", terms.participant, terms.session, "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes", "Lookup key"], rows)
     for index, value in enumerate(scopes, 2): sheet.cell(index, 26, value)
     for index, value in enumerate(views, 2): sheet.cell(index, 27, value)
     sheet.cell(1, 26, "Scope options"); sheet.cell(1, 27, "View options")
     sheet.column_dimensions["Z"].hidden = True; sheet.column_dimensions["AA"].hidden = True
     _validation(sheet, "B3", "Z", len(scopes)); _validation(sheet, "E3", "AA", len(views))
-    headers = ["Rank", "Recruit", "Journee", "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes"]
+    headers = ["Rank", terms.participant, terms.session, "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes"]
     for column, header in enumerate(headers, 1):
         cell = sheet.cell(5, column, header); cell.fill = PatternFill("solid", fgColor=NAVY); cell.font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     maximum_rows = max(Counter((row[0], row[1]) for row in rows).values(), default=1)
@@ -800,11 +831,39 @@ def _profile_label(recruit: Recruit, totals: Counter[str], seen: defaultdict[str
 
 
 def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Journey], by_id: dict[str, dict], combined: dict) -> None:
+    terms = active_assessment_definition().terminology
+    all_completed = _all_completed_label()
     sheet = _new_sheet(workbook, "Recruit Profiles", landscape=True)
+    general_factors = active_assessment_definition().generalFactors
+    summary_headers = [
+        "Selection", "Profile key", terms.session, "Date", terms.participant, "Phone", "DOB",
+        "Attendance", "Arrival", "Attendance comment", "Overall", "Rank", "Color", "Missing",
+        *[factor.name for factor in general_factors],
+        "General average", "General comment", "Notes",
+    ]
+    dimension_headers = ["Selection", "Dimension", "Score", "Rank", "Status", "Coverage"]
+    activity_headers = ["Selection", "Activity", "Score", "Rank", "Submissions", "Status"]
+    evaluator_data_headers = ["Profile key", terms.stage, terms.assessor, "Category", "Score", "Status", "Comment", "Lookup key"]
+    criterion_data_headers = ["Profile key", terms.stage, "Dimension", "Criterion", "Explanation", terms.assessor, "Grade", "Raw result", "Status", "Lookup key"]
+    audit_data_headers = ["Profile key", "Date", "Username", "Action", "Reason", "Before", "After", "Lookup key"]
+    summary_column = 27
+    dimension_column = max(49, summary_column + len(summary_headers) + 2)
+    activity_column = dimension_column + len(dimension_headers) + 1
+    evaluator_column = activity_column + len(activity_headers) + 1
+    criterion_column = evaluator_column + len(evaluator_data_headers)
+    audit_column = criterion_column + len(criterion_data_headers)
+    scope_options_column = audit_column + len(audit_data_headers)
+    recruit_options_column = scope_options_column + 1
+    photo_key_column = recruit_options_column + 1
+    photo_value_column = photo_key_column + 1
+
+    def hidden_column(block_start: int, offset: int) -> str:
+        return get_column_letter(block_start + offset)
+
     sheet.freeze_panes = "A8"
-    _title(sheet, "Recruit profile", "Complete view-only recruit record", 12)
-    _style_selector(sheet, "A3", "B3", "Journee view")
-    _style_selector(sheet, "D3", "E3", "Recruit")
+    _title(sheet, f"{terms.participant} profile", f"Complete view-only {terms.participant.lower()} record", 12)
+    _style_selector(sheet, "A3", "B3", f"{terms.session} view")
+    _style_selector(sheet, "D3", "E3", terms.participant)
     name_totals: Counter[str] = Counter(
         recruit.name.strip().casefold()
         for journey in journeys
@@ -816,7 +875,7 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     evaluator_rows: list[list] = []; criterion_rows: list[list] = []; audit_rows: list[list] = []
     selector_labels: list[str] = []
     profile_photos: list[tuple[str, bytes]] = []
-    scope_names = [ALL_COMPLETED, *[journey.name for journey in journeys]]
+    scope_names = [all_completed, *[journey.name for journey in journeys]]
     for journey in journeys:
         data = by_id[journey.id]
         for recruit in data["recruits"]:
@@ -826,11 +885,28 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
             selector_labels.append(label)
             base_result = data["result_by_recruit"].get(recruit.id) or _fallback_result(recruit)
             scoped = [(journey.name, base_result)]
-            scoped.append((ALL_COMPLETED, combined_by_key.get(profile_key, base_result)))
+            scoped.append((all_completed, combined_by_key.get(profile_key, base_result)))
             assessment = data["assessments"].get(recruit.id)
+            factor_values = configured_general_assessment_values(
+                assessment, (factor.storageKey for factor in general_factors)
+            )
             for scope, result in scoped:
                 selection_key = f"{scope}|{label}"
-                summary_rows.append([selection_key, profile_key, journey.name, journey.event_date, recruit.name, recruit.phone_number or "", recruit.date_of_birth, "Present" if recruit.present else "Absent", _local_time(recruit.arrival_time) if recruit.arrival_time else "", recruit.attendance_comment or "", result["overallScore"], result["overallRank"] or "", result["color"].title(), ", ".join(result.get("missingComponents", [])) or "Complete", float(assessment.punctuality) if assessment and assessment.punctuality is not None else "", float(assessment.respect) if assessment and assessment.respect is not None else "", float(assessment.seriousness) if assessment and assessment.seriousness is not None else "", float(result.get("generalAverage", 0)), assessment.comment if assessment else "", assessment.notes if assessment else ""])
+                summary_rows.append([
+                    selection_key, profile_key, journey.name, journey.event_date, recruit.name,
+                    recruit.phone_number or "", recruit.date_of_birth,
+                    "Present" if recruit.present else "Absent",
+                    _local_time(recruit.arrival_time) if recruit.arrival_time else "",
+                    recruit.attendance_comment or "", result["overallScore"], result["overallRank"] or "",
+                    result["color"].title(), ", ".join(result.get("missingComponents", [])) or "Complete",
+                    *[
+                        float(factor_values[factor.storageKey])
+                        if factor_values[factor.storageKey] is not None else ""
+                        for factor in general_factors
+                    ],
+                    float(result.get("generalAverage", 0)), assessment.comment if assessment else "",
+                    assessment.notes if assessment else "",
+                ])
                 for code in DIMENSION_ORDER:
                     value = result["dimensions"][code]
                     dimension_rows.append([selection_key, DIMENSION_NAMES[code], _dimension_grade(value["score"], code), value["rank"] or "", "Complete" if value["complete"] else "Incomplete", f"{round(value.get('availableWeight', 0) * 100)}%"])
@@ -858,42 +934,71 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
             for event in db.scalars(select(AuditEvent).where(AuditEvent.journey_id == journey.id, AuditEvent.entity_id == recruit.id).order_by(AuditEvent.created_at.desc())):
                 audit_rows.append([profile_key, _local_time(event.created_at), event.actor_name, _label(event.action), event.reason or "", event.before_json or "", event.after_json or ""])
     selector_labels = sorted(set(selector_labels), key=str.casefold)
-    default_label = next((label for label in selector_labels if any(row[0] == f"{ALL_COMPLETED}|{label}" for row in summary_rows)), selector_labels[0] if selector_labels else "")
-    sheet["B3"] = ALL_COMPLETED if any(j.status == "completed" for j in journeys) else (journeys[0].name if journeys else "")
+    default_label = next((label for label in selector_labels if any(row[0] == f"{all_completed}|{label}" for row in summary_rows)), selector_labels[0] if selector_labels else "")
+    sheet["B3"] = all_completed if any(j.status == "completed" for j in journeys) else (journeys[0].name if journeys else "")
     sheet["E3"] = default_label
-    _write_hidden_rows(sheet, 27, ["Selection", "Profile key", "Journee", "Date", "Recruit", "Phone", "DOB", "Attendance", "Arrival", "Attendance comment", "Overall", "Rank", "Color", "Missing", "Punctuality", "Respect", "Seriousness", "General average", "General comment", "Notes"], summary_rows)
-    _write_hidden_rows(sheet, 49, ["Selection", "Dimension", "Score", "Rank", "Status", "Coverage"], dimension_rows)
-    _write_hidden_rows(sheet, 56, ["Selection", "Activity", "Score", "Rank", "Submissions", "Status"], activity_rows)
+    _write_hidden_rows(sheet, summary_column, summary_headers, summary_rows)
+    _write_hidden_rows(sheet, dimension_column, dimension_headers, dimension_rows)
+    _write_hidden_rows(sheet, activity_column, activity_headers, activity_rows)
     evaluator_rows = _with_lookup_keys(evaluator_rows, 0)
     criterion_rows = _with_lookup_keys(criterion_rows, 0)
     audit_rows = _with_lookup_keys(audit_rows, 0)
-    _write_hidden_rows(sheet, 63, ["Profile key", "Activity", "Evaluator", "Role", "Score", "Status", "Comment", "Lookup key"], evaluator_rows)
-    _write_hidden_rows(sheet, 71, ["Profile key", "Activity", "Dimension", "Criterion", "Explanation", "Evaluator", "Grade", "Sport result", "Status", "Lookup key"], criterion_rows)
-    _write_hidden_rows(sheet, 81, ["Profile key", "Date", "Username", "Action", "Reason", "Before", "After", "Lookup key"], audit_rows)
-    for index, value in enumerate(scope_names, 2): sheet.cell(index, 89, value)
-    for index, value in enumerate(selector_labels, 2): sheet.cell(index, 90, value)
-    sheet.column_dimensions["CK"].hidden = True; sheet.column_dimensions["CL"].hidden = True
-    _validation(sheet, "B3", "CK", len(scope_names)); _validation(sheet, "E3", "CL", len(selector_labels))
+    _write_hidden_rows(sheet, evaluator_column, evaluator_data_headers, evaluator_rows)
+    _write_hidden_rows(sheet, criterion_column, criterion_data_headers, criterion_rows)
+    _write_hidden_rows(sheet, audit_column, audit_data_headers, audit_rows)
+    for index, value in enumerate(scope_names, 2): sheet.cell(index, scope_options_column, value)
+    for index, value in enumerate(selector_labels, 2): sheet.cell(index, recruit_options_column, value)
+    scope_options_letter = get_column_letter(scope_options_column)
+    recruit_options_letter = get_column_letter(recruit_options_column)
+    sheet.column_dimensions[scope_options_letter].hidden = True
+    sheet.column_dimensions[recruit_options_letter].hidden = True
+    _validation(sheet, "B3", scope_options_letter, len(scope_names))
+    _validation(sheet, "E3", recruit_options_letter, len(selector_labels))
     last_summary = max(2, len(summary_rows) + 1); last_dimension = max(2, len(dimension_rows) + 1); last_activity = max(2, len(activity_rows) + 1)
     selection = '$B$3&"|"&$E$3'
-    sheet["H3"] = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"$AB$2:$AB${last_summary}", blank="")
+    summary_selection_letter = hidden_column(summary_column, 0)
+    sheet["H3"] = _scalar_lookup_formula(
+        selection,
+        f"${summary_selection_letter}$2:${summary_selection_letter}${last_summary}",
+        f"${hidden_column(summary_column, 1)}$2:${hidden_column(summary_column, 1)}${last_summary}",
+        blank="",
+    )
     sheet["H3"].number_format = ";;;"
-    fields = [("A5", "Recruit", "AE"), ("D5", "Journee", "AC"), ("G5", "Date", "AD"), ("A6", "Phone", "AF"), ("D6", "Date of birth", "AG"), ("G6", "Arrival", "AI"), ("A7", "Attendance", "AH")]
+    fields = [
+        ("A5", terms.participant, hidden_column(summary_column, 4)),
+        ("D5", terms.session, hidden_column(summary_column, 2)),
+        ("G5", "Date", hidden_column(summary_column, 3)),
+        ("A6", "Phone", hidden_column(summary_column, 5)),
+        ("D6", "Date of birth", hidden_column(summary_column, 6)),
+        ("G6", "Arrival", hidden_column(summary_column, 8)),
+        ("A7", "Attendance", hidden_column(summary_column, 7)),
+    ]
     for cell, label, source in fields:
         sheet[cell] = f'{label}: '; sheet[cell].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
         value_cell = sheet.cell(sheet[cell].row, sheet[cell].column + 1)
-        value_cell.value = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"${source}$2:${source}${last_summary}")
+        value_cell.value = _scalar_lookup_formula(
+            selection,
+            f"${summary_selection_letter}$2:${summary_selection_letter}${last_summary}",
+            f"${source}$2:${source}${last_summary}",
+        )
         value_cell.font = Font(name="Aptos", size=11, bold=True, color=NAVY)
     sheet["E6"].number_format = "dd mmm yyyy"
     sheet["H5"].number_format = "dd mmm yyyy"
     sheet["D7"] = "Overall:"
     sheet["D7"].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
-    sheet["E7"] = f'=IFERROR(TEXT(_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AK$2:$AK${last_summary}),"0.00")&" /{_official_maximum():g} · rank "&_xlfn.XLOOKUP({selection},$AA$2:$AA${last_summary},$AL$2:$AL${last_summary}),"—")'
+    overall_letter = hidden_column(summary_column, 10)
+    rank_letter = hidden_column(summary_column, 11)
+    sheet["E7"] = f'=IFERROR(TEXT(_xlfn.XLOOKUP({selection},${summary_selection_letter}$2:${summary_selection_letter}${last_summary},${overall_letter}$2:${overall_letter}${last_summary}),"0.00")&" /{_official_maximum():g} · rank "&_xlfn.XLOOKUP({selection},${summary_selection_letter}$2:${summary_selection_letter}${last_summary},${rank_letter}$2:${rank_letter}${last_summary}),"—")'
     sheet["E7"].font = Font(name="Aptos", size=11, bold=True, color=NAVY)
     sheet["G7"] = "Color grade:"
     sheet["G7"].font = Font(name="Aptos", size=9, bold=True, color=GRAY)
     sheet.merge_cells("H7:I7")
-    sheet["H7"] = _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"$AM$2:$AM${last_summary}")
+    color_letter = hidden_column(summary_column, 12)
+    sheet["H7"] = _scalar_lookup_formula(
+        selection,
+        f"${summary_selection_letter}$2:${summary_selection_letter}${last_summary}",
+        f"${color_letter}$2:${color_letter}${last_summary}",
+    )
     sheet["H7"].font = Font(name="Aptos", size=10, bold=True, color=WHITE)
     sheet["H7"].alignment = Alignment(horizontal="center", vertical="center")
     sheet.row_dimensions[7].height = 27
@@ -901,102 +1006,138 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     if profile_photos:
         photo_start = 2
         for photo_row, (profile_key, _) in enumerate(profile_photos, photo_start):
-            sheet.cell(photo_row, 91, profile_key)
-            photo_cell = sheet.cell(photo_row, 92, "#VALUE!")
+            sheet.cell(photo_row, photo_key_column, profile_key)
+            photo_cell = sheet.cell(photo_row, photo_value_column, "#VALUE!")
             photo_cell.data_type = "e"
-        sheet.column_dimensions["CM"].hidden = True
-        sheet.column_dimensions["CN"].hidden = True
+        photo_key_letter = get_column_letter(photo_key_column)
+        photo_value_letter = get_column_letter(photo_value_column)
+        sheet.column_dimensions[photo_key_letter].hidden = True
+        sheet.column_dimensions[photo_value_letter].hidden = True
         photo_end = photo_start + len(profile_photos) - 1
         sheet.merge_cells("J3:L7")
-        sheet["J3"] = f'=_xlfn.XLOOKUP($H$3,$CM$2:$CM${photo_end},$CN$2:$CN${photo_end})'
+        sheet["J3"] = f'=_xlfn.XLOOKUP($H$3,${photo_key_letter}$2:${photo_key_letter}${photo_end},${photo_value_letter}$2:${photo_value_letter}${photo_end})'
         sheet["J3"].alignment = Alignment(horizontal="center", vertical="center")
         sheet["J3"].fill = PatternFill("solid", fgColor=GRAY_LIGHT)
         default_profile_key = next((item[1] for item in summary_rows if item[0] == f"{sheet['B3'].value}|{default_label}"), profile_photos[0][0])
         initial_photo_index = next((index for index, item in enumerate(profile_photos) if item[0] == default_profile_key), 0)
         workbook._journee_profile_images = {
             "sheet_name": sheet.title,
-            "image_cells": [(f"CN{row}", photo_bytes) for row, (_, photo_bytes) in enumerate(profile_photos, photo_start)],
+            "image_cells": [(f"{photo_value_letter}{row}", photo_bytes) for row, (_, photo_bytes) in enumerate(profile_photos, photo_start)],
             "formula_cell": "J3",
             "initial_image_index": initial_photo_index,
         }
     row = _section(sheet, 8, "Dimension performance", 12)
-    for col, header in enumerate(["Dimension", "Score /5", "Rank", "Status", "Coverage"], 1):
+    for col, header in enumerate(["Dimension", f"Score /{_dimension_maximum():g}", "Rank", "Status", "Coverage"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     for offset, code in enumerate(DIMENSION_ORDER, 1):
         target = row + offset; sheet.cell(target, 1, DIMENSION_NAMES[code])
-        for col, source_col in enumerate(["AY", "AZ", "BA", "BB"], 2):
+        for col, source_offset in enumerate(range(2, 6), 2):
+            source_col = hidden_column(dimension_column, source_offset)
+            dimension_selection_col = hidden_column(dimension_column, 0)
+            dimension_name_col = hidden_column(dimension_column, 1)
             sheet.cell(target, col, _scalar_lookup_formula(
                 f'{selection}&"|"&$A{target}',
-                f'$AW$2:$AW${last_dimension}&"|"&$AX$2:$AX${last_dimension}',
+                f'${dimension_selection_col}$2:${dimension_selection_col}${last_dimension}&"|"&${dimension_name_col}$2:${dimension_name_col}${last_dimension}',
                 f'${source_col}$2:${source_col}${last_dimension}',
             ))
     _style_formula_rows(sheet, row + 1, len(DIMENSION_ORDER), 5)
     _add_text_color_rules(sheet, f"D{row + 1}:D{row + len(DIMENSION_ORDER)}", f"D{row + 1}")
-    _add_radar(sheet, row + 1, row + len(DIMENSION_ORDER), 1, 2, "G8", "Dimension performance /5", 5)
+    _add_radar(sheet, row + 1, row + len(DIMENSION_ORDER), 1, 2, "G8", f"Dimension performance /{_dimension_maximum():g}", _dimension_maximum())
     activity_section = 26
     row = _section(sheet, activity_section, "Activity performance", 12)
-    for col, header in enumerate(["Activity", "Score /5", "Rank", "Submissions", "Status"], 1):
+    for col, header in enumerate([terms.stage, "Score /5", "Rank", "Submissions", "Status"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     for offset, code in enumerate(ACTIVITY_ORDER, 1):
         target = row + offset; sheet.cell(target, 1, RUBRICS[code].name)
-        for col, source_col in enumerate(["BF", "BG", "BH", "BI"], 2):
+        for col, source_offset in enumerate(range(2, 6), 2):
+            source_col = hidden_column(activity_column, source_offset)
+            activity_selection_col = hidden_column(activity_column, 0)
+            activity_name_col = hidden_column(activity_column, 1)
             sheet.cell(target, col, _scalar_lookup_formula(
                 f'{selection}&"|"&$A{target}',
-                f'$BD$2:$BD${last_activity}&"|"&$BE$2:$BE${last_activity}',
+                f'${activity_selection_col}$2:${activity_selection_col}${last_activity}&"|"&${activity_name_col}$2:${activity_name_col}${last_activity}',
                 f'${source_col}$2:${source_col}${last_activity}',
             ))
     _style_formula_rows(sheet, row + 1, len(ACTIVITY_ORDER), 5)
     _add_text_color_rules(sheet, f"E{row + 1}:E{row + len(ACTIVITY_ORDER)}", f"E{row + 1}")
     _add_radar(sheet, row + 1, row + len(ACTIVITY_ORDER), 1, 2, "G26", "Activity performance", 5)
     row = _section(sheet, 44, "General assessment and completion", 12)
-    labels = [("Punctuality /1", "AO"), ("Respect to us /1", "AP"), ("Seriousness /1", "AQ"), ("General average /1", "AR"), ("Missing components", "AN"), ("General comment", "AS"), ("Notes", "AT")]
+    labels = [
+        *[
+            (f"{factor.name} /{float(factor.maximum):g}", hidden_column(summary_column, 14 + index))
+            for index, factor in enumerate(general_factors)
+        ],
+        ("General average /1", hidden_column(summary_column, 14 + len(general_factors))),
+        ("Missing components", hidden_column(summary_column, 13)),
+        ("General comment", hidden_column(summary_column, 15 + len(general_factors))),
+        ("Notes", hidden_column(summary_column, 16 + len(general_factors))),
+    ]
     for index, (label, source) in enumerate(labels):
         target = row + index; sheet.cell(target, 1, label); sheet.cell(target, 1).font = Font(name="Aptos", size=9, bold=True, color=GRAY)
         sheet.merge_cells(start_row=target, start_column=2, end_row=target, end_column=12)
-        sheet.cell(target, 2, _scalar_lookup_formula(selection, f"$AA$2:$AA${last_summary}", f"${source}$2:${source}${last_summary}"))
+        sheet.cell(target, 2, _scalar_lookup_formula(
+            selection,
+            f"${summary_selection_letter}$2:${summary_selection_letter}${last_summary}",
+            f"${source}$2:${source}${last_summary}",
+        ))
         sheet.cell(target, 2).alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
         sheet.cell(target, 2).fill = PatternFill("solid", fgColor="FBFCFE")
         sheet.cell(target, 2).border = Border(bottom=THIN_LINE)
-        sheet.row_dimensions[target].height = 24 if index < 5 else 38
-    row = _section(sheet, 55, "Evaluator breakdown", 12)
-    evaluator_headers = ["Activity", "Evaluator", "Role", "Score /5", "Status", "Comment"]
+        sheet.row_dimensions[target].height = 38 if label in {"General comment", "Notes"} else 24
+    evaluator_maximum = max(Counter(item[0] for item in evaluator_rows).values(), default=1)
+    evaluator_section = max(55, row + len(labels) + 2)
+    row = _section(sheet, evaluator_section, f"{terms.assessor} breakdown", 12)
+    evaluator_headers = [terms.stage, terms.assessor, "Category", "Score /5", "Status", "Comment"]
     for col, header in enumerate(evaluator_headers, 1): sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     evaluator_end = max(2, len(evaluator_rows) + 1)
     evaluator_visible_start = row + 1
-    evaluator_maximum = max(Counter(item[0] for item in evaluator_rows).values(), default=1)
     for visible_row in range(evaluator_visible_start, evaluator_visible_start + evaluator_maximum):
-        for column, source_column in enumerate(("BL", "BM", "BN", "BO", "BP", "BQ"), 1):
+        for column, source_offset in enumerate(range(1, 7), 1):
+            source_column = hidden_column(evaluator_column, source_offset)
             sheet.cell(visible_row, column, _lookup_value_formula(
                 key_expression=f'$H$3&"|"&ROWS($A${evaluator_visible_start}:$A{visible_row})',
-                lookup_column="BR", result_column=source_column, start=2, end=evaluator_end,
+                lookup_column=hidden_column(evaluator_column, 7),
+                result_column=source_column,
+                start=2,
+                end=evaluator_end,
             ))
     _style_formula_rows(sheet, evaluator_visible_start, evaluator_maximum, len(evaluator_headers))
     _add_text_color_rules(sheet, f"E{evaluator_visible_start}:E{evaluator_visible_start + evaluator_maximum - 1}", f"E{evaluator_visible_start}")
-    row = _section(sheet, 79, "Criterion-level grading", 12)
-    criterion_headers = ["Activity", "Dimension", "Criterion", "Explanation", "Evaluator", "Grade /5", "Sport result", "Status"]
+    criterion_section = max(79, evaluator_visible_start + evaluator_maximum + 2)
+    row = _section(sheet, criterion_section, "Criterion-level grading", 12)
+    criterion_headers = [terms.stage, "Dimension", "Criterion", "Explanation", terms.assessor, "Grade /5", "Raw result", "Status"]
     for col, header in enumerate(criterion_headers, 1): sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     criterion_end = max(2, len(criterion_rows) + 1)
     criterion_visible_start = row + 1
     criterion_maximum = min(116, max(Counter(item[0] for item in criterion_rows).values(), default=1))
     for visible_row in range(criterion_visible_start, criterion_visible_start + criterion_maximum):
-        for column, source_column in enumerate(("BT", "BU", "BV", "BW", "BX", "BY", "BZ", "CA"), 1):
+        for column, source_offset in enumerate(range(1, 9), 1):
+            source_column = hidden_column(criterion_column, source_offset)
             sheet.cell(visible_row, column, _lookup_value_formula(
                 key_expression=f'$H$3&"|"&ROWS($A${criterion_visible_start}:$A{visible_row})',
-                lookup_column="CB", result_column=source_column, start=2, end=criterion_end,
+                lookup_column=hidden_column(criterion_column, 9),
+                result_column=source_column,
+                start=2,
+                end=criterion_end,
             ))
     _style_formula_rows(sheet, criterion_visible_start, criterion_maximum, len(criterion_headers))
     _add_text_color_rules(sheet, f"H{criterion_visible_start}:H{criterion_visible_start + criterion_maximum - 1}", f"H{criterion_visible_start}")
-    row = _section(sheet, 200, "Profile audit history", 12)
+    audit_section = max(200, criterion_visible_start + criterion_maximum + 2)
+    row = _section(sheet, audit_section, "Profile audit history", 12)
     audit_headers = ["Date and time", "Username", "Action", "Reason", "Before", "After"]
     for col, header in enumerate(audit_headers, 1): sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY); sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     audit_end = max(2, len(audit_rows) + 1)
     audit_visible_start = row + 1
     audit_maximum = max(Counter(item[0] for item in audit_rows).values(), default=1)
     for visible_row in range(audit_visible_start, audit_visible_start + audit_maximum):
-        for column, source_column in enumerate(("CD", "CE", "CF", "CG", "CH", "CI"), 1):
+        for column, source_offset in enumerate(range(1, 7), 1):
+            source_column = hidden_column(audit_column, source_offset)
             sheet.cell(visible_row, column, _lookup_value_formula(
                 key_expression=f'$H$3&"|"&ROWS($A${audit_visible_start}:$A{visible_row})',
-                lookup_column="CJ", result_column=source_column, start=2, end=audit_end,
+                lookup_column=hidden_column(audit_column, 7),
+                result_column=source_column,
+                start=2,
+                end=audit_end,
             ))
     _style_formula_rows(sheet, audit_visible_start, audit_maximum, len(audit_headers))
     for col, width in enumerate([24, 17, 12, 34, 24, 16, 19, 16, 16, 16, 16, 16], 1): sheet.column_dimensions[get_column_letter(col)].width = width

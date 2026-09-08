@@ -54,11 +54,23 @@ async def lifespan(_app: FastAPI):
                     AssessmentSystemVersion.system_id == system.id,
                     AssessmentSystemVersion.version == system.published_version,
                 ))
-                runtime_token = activate_assessment_definition(
+                definition = (
                     AssessmentSystemDefinition.model_validate(loads(record.definition_json, {}))
-                ) if record else None
-                owner_exists = db.scalar(select(UserAccount.id).where(UserAccount.is_owner.is_(True)))
-                if owner_exists or not settings.is_production:
+                    if record else None
+                )
+                runtime_token = activate_assessment_definition(definition) if definition else None
+                owner = db.scalar(select(UserAccount).where(UserAccount.is_owner.is_(True)))
+                if owner:
+                    # Every workspace keeps its own owner identity.  Never inject
+                    # the legacy LRC owner into a generic workspace at startup.
+                    ensure_platform_owner(db, owner)
+                elif (
+                    not settings.is_production
+                    and definition
+                    and definition.branding.organizationName.casefold() == "lebanese red cross"
+                ):
+                    # Retain the convenient JP Chaaya bootstrap only for a fresh
+                    # local copy of the explicit LRC compatibility workspace.
                     owner = ensure_owner_account(db)
                     db.flush()
                     ensure_platform_owner(db, owner)
@@ -226,9 +238,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0017_room_evaluator_locks":
+            if revision != "0018_dynamic_general_factors":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0017_room_evaluator_locks'."
+                    f"Database migration is {revision!r}, expected '0018_dynamic_general_factors'."
                 )
         database_startup_error = None
         return {"status": "ready"}
@@ -254,19 +266,24 @@ def configure_assessment_system():
     return FileResponse(STATIC_DIR / "configurator.html")
 
 
+def _evaluator_portal_enabled() -> bool:
+    return any(
+        profile.enabled and "evaluate" in profile.capabilities
+        for profile in active_assessment_definition().accessProfiles
+    )
+
+
 @app.get("/j/{token}", include_in_schema=False)
 def evaluator_app(token: str):
     del token
-    profile = next((item for item in active_assessment_definition().accessProfiles if item.key == "assessor"), None)
-    if profile and not profile.enabled:
+    if not _evaluator_portal_enabled():
         raise HTTPException(status_code=404, detail="The assessor portal is disabled.")
     return FileResponse(STATIC_DIR / "evaluator.html")
 
 
 @app.get("/evaluate", include_in_schema=False)
 def current_evaluator_app():
-    profile = next((item for item in active_assessment_definition().accessProfiles if item.key == "assessor"), None)
-    if profile and not profile.enabled:
+    if not _evaluator_portal_enabled():
         raise HTTPException(status_code=404, detail="The assessor portal is disabled.")
     return FileResponse(STATIC_DIR / "evaluator.html")
 
@@ -320,6 +337,8 @@ def workspace_configurator(workspace_slug: str):
 
 @app.get("/{workspace_slug}/evaluate", include_in_schema=False)
 def workspace_evaluator(workspace_slug: str):
+    if not _evaluator_portal_enabled():
+        raise HTTPException(status_code=404, detail="The assessor portal is disabled.")
     return _workspace_file(workspace_slug, "evaluator.html")
 
 

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import date
 import re
 
 from app.db import SessionLocal
 from app.auth import hash_password
+from app.assessment_config import blank_assessment_definition
 from app.models import Evaluator, EvaluatorDirectory, Journey, UserAccount
 
 
@@ -12,6 +14,24 @@ def _login(client, username="JP Chaaya", password="test-password"):
     response = client.post("/api/auth/login", json={"username": username, "password": password})
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def _publish_access_profiles(client, profiles):
+    owner = _login(client)
+    payload = client.get("/api/configurator").json()
+    definition = deepcopy(payload["draft"])
+    definition["accessProfiles"] = profiles
+    response = client.post(
+        "/api/configurator/publish",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+        json={
+            "definition": definition,
+            "base_version": payload["system"]["version"],
+            "change_summary": "Account permission preset test",
+        },
+    )
+    assert response.status_code == 200, response.text
+    return owner, response.json()
 
 
 def test_named_permissions_protect_admin_results_and_attendance(client):
@@ -77,6 +97,11 @@ def test_named_permissions_protect_admin_results_and_attendance(client):
     assert saved.status_code == 200, saved.text
     updated_profile = client.get(profile_url).json()
     assert updated_profile["assessment"] == {
+        "values": {
+            "punctuality": 0.7,
+            "respect": 0.8,
+            "seriousness": 0.9,
+        },
         "punctuality": 0.7,
         "respect": 0.8,
         "seriousness": 0.9,
@@ -105,6 +130,20 @@ def test_marita_is_not_available_in_the_global_account_directory(client):
     assert "marita" not in names
 
 
+def test_account_generation_does_not_blacklist_an_active_directory_name(client):
+    with SessionLocal() as db:
+        db.add(EvaluatorDirectory(name="Marita", default_role="dossard", active=True))
+        db.commit()
+
+    owner = _login(client)
+    generated = client.post(
+        "/api/auth/accounts/generate-missing",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+    )
+    assert generated.status_code == 200, generated.text
+    assert any(item["username"] == "Marita" for item in generated.json()["created"])
+
+
 def test_owner_is_always_a_dossard_in_permissions(client):
     owner = _login(client)
     accounts = client.get("/api/auth/accounts").json()
@@ -118,6 +157,36 @@ def test_owner_is_always_a_dossard_in_permissions(client):
     )
     assert changed.status_code == 200, changed.text
     assert changed.json()["evaluatorRole"] == "dossard"
+
+
+def test_generic_workspace_owner_keeps_its_configured_assessor_category(client):
+    owner = _login(client)
+    configuration = client.get("/api/configurator").json()
+    definition = blank_assessment_definition().model_dump(mode="json")
+    definition["name"] = "Generic selection workspace"
+    published = client.post(
+        "/api/configurator/publish",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+        json={
+            "definition": definition,
+            "base_version": configuration["system"]["version"],
+            "change_summary": "Switch to a generic workspace",
+        },
+    )
+    assert published.status_code == 200, published.text
+
+    account = next(
+        item for item in client.get("/api/auth/accounts").json()
+        if item["username"] == "JP Chaaya"
+    )
+    changed = client.patch(
+        f"/api/auth/accounts/{account['id']}",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+        json={"evaluator_role": "assessor", "base_version": account["version"]},
+    )
+
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["evaluatorRole"] == "assessor"
 
 
 def test_owner_can_edit_and_safely_delete_account(client):
@@ -242,3 +311,168 @@ def test_generator_replaces_an_existing_unrecoverable_password(client):
     credential = next(item for item in generated["created"] if item["username"] == "Legacy Evaluator")
     assert re.fullmatch(r"legacyevaluator\d{3}", credential["password"])
     assert _login(client, "Legacy Evaluator", credential["password"])["evaluatorRole"] == "dossard"
+
+
+def test_custom_permission_preset_creates_account_and_stays_independent(client):
+    configuration = client.get("/api/configurator/public").json()
+    owner_profile = next(item for item in configuration["accessProfiles"] if item["key"] == "owner")
+    owner, published = _publish_access_profiles(client, [
+        owner_profile,
+        {
+            "key": "panel_lead",
+            "name": "Panel lead",
+            "enabled": True,
+            "capabilities": ["evaluate", "results"],
+        },
+        {
+            "key": "operations",
+            "name": "Operations",
+            "enabled": True,
+            "capabilities": ["admin"],
+        },
+    ])
+    headers = {"X-CSRF-Token": owner["csrfToken"]}
+    created = client.post("/api/auth/accounts", headers=headers, json={
+        "username": "Custom Reviewer",
+        "password": "temporary-password",
+        "evaluator_role": "dossard",
+        "access_profile": "panel_lead",
+    })
+    assert created.status_code == 200, created.text
+    assert created.json()["canEvaluate"] is True
+    assert created.json()["canResults"] is True
+    assert created.json()["canAdmin"] is False
+
+    account = created.json()
+    changed = client.patch(f"/api/auth/accounts/{account['id']}", headers=headers, json={
+        "can_admin": True,
+        "can_results": False,
+        "can_evaluate": False,
+        "base_version": account["version"],
+    })
+    assert changed.status_code == 200, changed.text
+
+    payload = client.get("/api/configurator").json()
+    definition = deepcopy(payload["draft"])
+    definition["accessProfiles"][1]["capabilities"] = ["evaluate"]
+    republished = client.post("/api/configurator/publish", headers=headers, json={
+        "definition": definition,
+        "base_version": payload["system"]["version"],
+        "change_summary": "Change preset without rewriting existing accounts",
+    })
+    assert republished.status_code == 200, republished.text
+    saved = next(item for item in client.get("/api/auth/accounts").json()
+                 if item["id"] == account["id"])
+    assert saved["canAdmin"] is True
+    assert saved["canResults"] is False
+    assert saved["canEvaluate"] is False
+
+    slug = published["system"]["slug"]
+    assert client.get("/evaluate").status_code == 200
+    assert client.get(f"/{slug}/evaluate").status_code == 200
+
+
+def test_legacy_assessor_default_uses_first_enabled_evaluator_preset(client):
+    configuration = client.get("/api/configurator/public").json()
+    owner_profile = next(item for item in configuration["accessProfiles"] if item["key"] == "owner")
+    owner, _published = _publish_access_profiles(client, [
+        owner_profile,
+        {
+            "key": "reporting",
+            "name": "Reporting",
+            "enabled": True,
+            "capabilities": ["results"],
+        },
+        {
+            "key": "reviewer",
+            "name": "Reviewer",
+            "enabled": True,
+            "capabilities": ["evaluate", "results"],
+        },
+        {
+            "key": "interviewer",
+            "name": "Interviewer",
+            "enabled": True,
+            "capabilities": ["evaluate", "admin"],
+        },
+    ])
+    created = client.post(
+        "/api/auth/accounts",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+        # Omitting access_profile exercises the old client's "assessor" default.
+        json={
+            "username": "Legacy Client Account",
+            "password": "temporary-password",
+            "evaluator_role": "dossard",
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["canEvaluate"] is True
+    assert created.json()["canResults"] is True
+    assert created.json()["canAdmin"] is False
+
+    with SessionLocal() as db:
+        db.add(EvaluatorDirectory(name="Generated Custom Reviewer", default_role="dossard"))
+        db.commit()
+    generated = client.post(
+        "/api/auth/accounts/generate-missing",
+        headers={"X-CSRF-Token": owner["csrfToken"]},
+    )
+    assert generated.status_code == 200, generated.text
+    generated_account = next(
+        item for item in client.get("/api/auth/accounts").json()
+        if item["username"] == "Generated Custom Reviewer"
+    )
+    assert generated_account["canEvaluate"] is True
+    assert generated_account["canResults"] is True
+    assert generated_account["canAdmin"] is False
+
+
+def test_account_creation_handles_unknown_or_empty_permission_presets(client):
+    configuration = client.get("/api/configurator/public").json()
+    owner_profile = next(item for item in configuration["accessProfiles"] if item["key"] == "owner")
+    owner, _published = _publish_access_profiles(client, [
+        owner_profile,
+        {
+            "key": "observer",
+            "name": "Observer",
+            "enabled": True,
+            "capabilities": ["results"],
+        },
+    ])
+    headers = {"X-CSRF-Token": owner["csrfToken"]}
+    fallback = client.post("/api/auth/accounts", headers=headers, json={
+        "username": "Fallback Observer",
+        "password": "temporary-password",
+        "evaluator_role": "dossard",
+    })
+    assert fallback.status_code == 200, fallback.text
+    assert fallback.json()["canResults"] is True
+    assert fallback.json()["canEvaluate"] is False
+
+    unknown = client.post("/api/auth/accounts", headers=headers, json={
+        "username": "Typo Profile",
+        "password": "temporary-password",
+        "evaluator_role": "dossard",
+        "access_profile": "does_not_exist",
+    })
+    assert unknown.status_code == 422
+    assert "enabled non-owner access profile" in unknown.json()["detail"]
+    assert all(item["username"] != "Typo Profile" for item in client.get("/api/auth/accounts").json())
+
+    payload = client.get("/api/configurator").json()
+    definition = deepcopy(payload["draft"])
+    definition["accessProfiles"] = [owner_profile]
+    republished = client.post("/api/configurator/publish", headers=headers, json={
+        "definition": definition,
+        "base_version": payload["system"]["version"],
+        "change_summary": "No account creation presets",
+    })
+    assert republished.status_code == 200, republished.text
+    blocked = client.post("/api/auth/accounts", headers=headers, json={
+        "username": "Blocked Account",
+        "password": "temporary-password",
+        "evaluator_role": "dossard",
+    })
+    assert blocked.status_code == 422
+    assert "No account permission preset is available" in blocked.json()["detail"]

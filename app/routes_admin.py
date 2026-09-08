@@ -78,7 +78,14 @@ from .assessment_runtime import (
     assessor_category_keys,
     default_assessor_category,
 )
-from .report_exports import build_report_workbook, save_management_report
+from .general_assessment import (
+    LEGACY_GENERAL_FACTOR_KEYS,
+    configured_general_assessment_values,
+    general_assessment_values_payload,
+    set_general_assessment_values,
+    stored_general_assessment_values,
+)
+from .report_exports import build_report_workbook, format_criterion_target, save_management_report
 from .schemas import (
     ActivityAvailabilityRequest,
     ActivityOperationRequest,
@@ -614,7 +621,17 @@ def _append_sheet(workbook: Workbook, name: str, headers: list[str], rows: list[
         sheet.column_dimensions[letter].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 55)
 
 
+def _dimension_display_maximum(code: str) -> float:
+    dimension = next(
+        (item for item in active_assessment_definition().dimensions if item.key == code),
+        None,
+    )
+    return float(dimension.displayMaximum if dimension else 5)
+
+
 def _full_export(db: Session, journey: Journey) -> Workbook:
+    definition = active_assessment_definition()
+    terms = definition.terminology
     workbook = Workbook()
     workbook.remove(workbook.active)
     recruits = list(db.scalars(select(Recruit).where(Recruit.journey_id == journey.id).order_by(Recruit.name)))
@@ -623,23 +640,23 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
     evaluator_by_id = {item.id: item for item in evaluators}
     _append_sheet(
         workbook,
-        "Journee",
+        "Session",
         ["Name", "Date", "Status", "Rooms", "Current activity", "Exported UTC"],
         [[journey.name, journey.event_date.isoformat(), journey.status, journey.room_count, journey.current_activity or "", utcnow().isoformat()]],
     )
     _append_sheet(
         workbook,
-        "Rubric 2026",
-        ["Activity", "Dimension", "Criterion", "Weight", "Explanation", "Input type", "Target", "Unit"],
+        "Scoring Guide",
+        [terms.stage, "Dimension", "Criterion", "Weight within dimension (%)", "Explanation", "Input type", "Full-score target", "Unit"],
         [
             [
                 rubric.name,
                 criterion.dimension,
                 criterion.name,
-                float(criterion.weight),
+                float(criterion.weight) * 100,
                 criterion.explanation,
                 criterion.input_type,
-                float(criterion.target) if criterion.target is not None else "",
+                format_criterion_target(criterion),
                 criterion.unit,
             ]
             for rubric in RUBRICS.values()
@@ -648,14 +665,14 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
     )
     _append_sheet(
         workbook,
-        "Recruits",
-        ["Recruit UUID", "Name", "Phone Number", "Date of Birth", "Active", "Present", "Arrival UTC", "Attendance Comment", "Has photo"],
+        "Participants",
+        [f"{terms.participant} UUID", "Name", "Phone Number", "Date of Birth", "Active", "Present", "Arrival UTC", "Attendance Comment", "Has photo"],
         [[item.id, item.name, item.phone_number or "", item.date_of_birth.isoformat() if item.date_of_birth else "", item.active, item.present, item.arrival_time.isoformat() if item.arrival_time else "", item.attendance_comment or "", has_photo(item)] for item in recruits],
     )
     _append_sheet(
         workbook,
-        "Evaluators",
-        ["Evaluator UUID", "Name", "Role", "Active", "Present"],
+        "Assessors",
+        [f"{terms.assessor} UUID", "Name", "Category", "Active", "Present"],
         [[item.id, item.name, item.role, item.active, item.present] for item in evaluators],
     )
     room_plan = latest_room_plan(db, journey.id, "published")
@@ -683,21 +700,21 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
     _append_sheet(
         workbook,
         "Assignments",
-        ["Activity", "Round version", "Round status", "Evaluator", "Evaluator role", "Recruit", "Room", "Slot", "Repeated", "Reason", "Assignment UUID"],
-        [[round_by_id[item.round_id].activity_code, round_by_id[item.round_id].version, round_by_id[item.round_id].status, evaluator_by_id.get(item.evaluator_id).name if evaluator_by_id.get(item.evaluator_id) else "", evaluator_by_id.get(item.evaluator_id).role if evaluator_by_id.get(item.evaluator_id) else "", recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", item.room_number, item.slot, item.repeated_pair, item.repeat_reason or "", item.id] for item in assignments],
+        [terms.stage, "Round version", "Round status", terms.assessor, "Assessor category", terms.participant, terms.group, "Repeated", "Reason", "Assignment UUID"],
+        [[round_by_id[item.round_id].activity_code, round_by_id[item.round_id].version, round_by_id[item.round_id].status, evaluator_by_id.get(item.evaluator_id).name if evaluator_by_id.get(item.evaluator_id) else "", evaluator_by_id.get(item.evaluator_id).role if evaluator_by_id.get(item.evaluator_id) else "", recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", item.room_number, item.repeated_pair, item.repeat_reason or "", item.id] for item in assignments],
     )
     submissions = list(db.scalars(select(EvaluationSubmission).where(EvaluationSubmission.journey_id == journey.id)))
     _append_sheet(
         workbook,
         "Evaluations",
-        ["Activity", "Evaluator", "Recruit", "Status", "Score /5", "Responses JSON", "Raw JSON", "Comments", "Version", "Submitted UTC", "Submission UUID"],
+        [terms.stage, terms.assessor, terms.participant, "Status", "Score /5", "Responses JSON", "Raw JSON", "Comments", "Version", "Submitted UTC", "Submission UUID"],
         [[item.activity_code, evaluator_by_id.get(item.evaluator_id).name if evaluator_by_id.get(item.evaluator_id) else "", recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", item.status, float(item.score), item.responses_json, item.raw_payload_json, item.comments, item.version, item.submitted_at.isoformat() if item.submitted_at else "", item.id] for item in submissions],
     )
     admin_evaluations = list(db.scalars(select(AdminEvaluation).where(AdminEvaluation.journey_id == journey.id)))
     _append_sheet(
         workbook,
         "Admin Evaluations",
-        ["Activity", "Recruit", "Official score /5", "Responses JSON", "Raw JSON", "Comments", "Updated by", "Version", "Updated UTC"],
+        [terms.stage, terms.participant, "Official score /5", "Responses JSON", "Raw JSON", "Comments", "Updated by", "Version", "Updated UTC"],
         [[item.activity_code, recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", float(item.score), item.responses_json, item.raw_payload_json, item.comments, item.updated_by, item.version, item.updated_at.isoformat()] for item in admin_evaluations],
     )
     results = result_snapshot(db, journey)
@@ -706,11 +723,11 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
         "Results",
         [
             "Rank",
-            "Recruit",
-            "Overall /20",
+            terms.participant,
+            f"Overall /{float(definition.scoring.officialMaximum):g}",
             "Color",
             "Missing",
-            *[DIMENSION_NAMES[code] + " /5" for code in DIMENSION_ORDER],
+            *[DIMENSION_NAMES[code] + f" /{_dimension_display_maximum(code):g}" for code in DIMENSION_ORDER],
             "General /1",
             *[RUBRICS[code].name + " /5" for code in ACTIVITY_ORDER],
         ],
@@ -721,7 +738,7 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
                 row["overallScore"],
                 row["color"],
                 row["missingCount"],
-                *[row["dimensions"][code]["score"] * 5 for code in DIMENSION_ORDER],
+                *[row["dimensions"][code]["score"] * _dimension_display_maximum(code) for code in DIMENSION_ORDER],
                 row["generalAverage"],
                 *[row["activities"][code]["score"] for code in ACTIVITY_ORDER],
             ]
@@ -729,11 +746,32 @@ def _full_export(db: Session, journey: Journey) -> Workbook:
         ],
     )
     assessments = list(db.scalars(select(GeneralAssessment).where(GeneralAssessment.recruit_id.in_(list(recruit_by_id))))) if recruits else []
+    general_factors = active_assessment_definition().generalFactors
     _append_sheet(
         workbook,
         "General assessments",
-        ["Recruit", "Punctuality /1", "Respect /1", "Seriousness /1", "Comment", "Notes", "Version"],
-        [[recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "", float(item.punctuality) if item.punctuality is not None else "", float(item.respect) if item.respect is not None else "", float(item.seriousness) if item.seriousness is not None else "", item.comment, item.notes, item.version] for item in assessments],
+        [
+            terms.participant,
+            *[f"{factor.name} /{float(factor.maximum):g}" for factor in general_factors],
+            "Comment",
+            "Notes",
+            "Version",
+        ],
+        [
+            [
+                recruit_by_id.get(item.recruit_id).name if recruit_by_id.get(item.recruit_id) else "",
+                *[
+                    float(value) if value is not None else ""
+                    for value in configured_general_assessment_values(
+                        item, (factor.storageKey for factor in general_factors)
+                    ).values()
+                ],
+                item.comment,
+                item.notes,
+                item.version,
+            ]
+            for item in assessments
+        ],
     )
     events = list(db.scalars(select(AuditEvent).where(AuditEvent.journey_id == journey.id).order_by(AuditEvent.created_at)))
     _append_sheet(
@@ -798,15 +836,16 @@ def export_results_csv(
     del context
     journey = get_journey_or_404(db, journey_id)
     results = result_snapshot(db, journey)
+    definition = active_assessment_definition()
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow([
         "Rank",
-        "Recruit",
-        "Overall /20",
+        definition.terminology.participant,
+        f"Overall /{float(definition.scoring.officialMaximum):g}",
         "Color",
         "Missing",
-        *[DIMENSION_NAMES[code] + " /5" for code in DIMENSION_ORDER],
+        *[DIMENSION_NAMES[code] + f" /{_dimension_display_maximum(code):g}" for code in DIMENSION_ORDER],
         "General /1",
         *[RUBRICS[code].name + " /5" for code in ACTIVITY_ORDER],
     ])
@@ -817,14 +856,18 @@ def export_results_csv(
             row["overallScore"],
             row["color"],
             row["missingCount"],
-            *[row["dimensions"][code]["score"] * 5 for code in DIMENSION_ORDER],
+            *[row["dimensions"][code]["score"] * _dimension_display_maximum(code) for code in DIMENSION_ORDER],
             row["generalAverage"],
             *[row["activities"][code]["score"] for code in ACTIVITY_ORDER],
         ])
     return Response(
         content=output.getvalue().encode("utf-8-sig"),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="journee-results.csv"'},
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "session"}-results.csv"'
+            )
+        },
     )
 
 
@@ -2090,6 +2133,8 @@ def _save_unrestricted_assignment_preview(
     )))
     warnings: list[str] = []
     people: list[tuple] = []
+    configured_activity = activity_definition(round_record.activity_code)
+    configured_maximum = configured_activity.assignment.maximumAssessors if configured_activity else 2
     for item in payload.items:
         evaluator = get_evaluator_or_404(db, journey.id, item.evaluator_id)
         recruit = get_recruit_or_404(db, journey.id, item.recruit_id)
@@ -2115,8 +2160,11 @@ def _save_unrestricted_assignment_preview(
         names = list(db.scalars(select(Recruit.name).where(Recruit.id.in_(uncovered))))
         warnings.append("Uncovered present recruits: " + ", ".join(sorted(names)))
     for recruit_id, count in recruit_counts.items():
-        if count > 2:
-            warnings.append(f"{get_recruit_or_404(db, journey.id, recruit_id).name} has {count} evaluators (manual override).")
+        if count > configured_maximum:
+            warnings.append(
+                f"{get_recruit_or_404(db, journey.id, recruit_id).name} has {count} evaluators; "
+                f"the automatic limit for this activity is {configured_maximum} (manual override)."
+            )
     for evaluator_id, count in evaluator_counts.items():
         if count > 1:
             warnings.append(f"{get_evaluator_or_404(db, journey.id, evaluator_id).name} has {count} recruits (manual workload).")
@@ -2181,79 +2229,6 @@ def edit_assignment_preview(
         source = RUBRICS[configured_activity.assignment.reuseAssignmentsFrom].name
         raise HTTPException(status_code=409, detail=f"{configured_activity.name} reuses {source} assignments and cannot be edited independently.")
     return _save_unrestricted_assignment_preview(db, journey, round_record, payload, context.actor_name)
-    pair_keys: set[tuple[str, str]] = set()
-    recruit_counts: dict[str, int] = Counter()
-    evaluator_counts: dict[str, int] = Counter()
-    maximum = configured_activity.assignment.maximumAssessors if configured_activity else 2
-    past_pairs, _secondary_counts = past_pair_data(db, journey.id, round_record.activity_code)
-    for item in payload.items:
-        evaluator = get_evaluator_or_404(db, journey.id, item.evaluator_id)
-        recruit = get_recruit_or_404(db, journey.id, item.recruit_id)
-        if not evaluator.present or not recruit.present or not evaluator.active or not recruit.active:
-            raise HTTPException(status_code=422, detail="Assignments may contain only confirmed-present active people.")
-        pair = (item.evaluator_id, item.recruit_id)
-        if pair in pair_keys:
-            raise HTTPException(status_code=422, detail="Duplicate evaluator–recruit pair.")
-        pair_keys.add(pair)
-        recruit_counts[item.recruit_id] += 1
-        evaluator_counts[item.evaluator_id] += 1
-        if recruit_counts[item.recruit_id] > maximum:
-            raise HTTPException(status_code=422, detail=f"A participant cannot have more than {maximum} assessors.")
-        if pair in past_pairs and not (item.override_reason or "").strip():
-            raise HTTPException(status_code=422, detail="A repeated evaluator-recruit pair requires an override reason.")
-    present_recruits = set(
-        db.scalars(
-            select(Recruit.id).where(
-                Recruit.journey_id == journey.id,
-                Recruit.active.is_(True),
-                Recruit.present.is_(True),
-            )
-        )
-    )
-    if set(recruit_counts) != present_recruits or any(recruit_counts[item] < 1 for item in present_recruits):
-        raise HTTPException(status_code=422, detail="Every confirmed-present recruit must retain a primary assignment.")
-    for recruit_id in present_recruits:
-        slots = [item.slot for item in payload.items if item.recruit_id == recruit_id]
-        if slots.count(1) != 1 or slots.count(2) > (1 if maximum > 1 else 0):
-            raise HTTPException(status_code=422, detail="Each recruit needs exactly one primary slot and at most one secondary slot.")
-    present_evaluator_count = db.scalar(
-        select(func.count()).select_from(Evaluator).where(
-            Evaluator.journey_id == journey.id,
-            Evaluator.active.is_(True),
-            Evaluator.present.is_(True),
-        )
-    ) or 0
-    if round_record.activity_code not in ROOM_ACTIVITIES:
-        if present_evaluator_count >= len(present_recruits) and any(value > 1 for value in evaluator_counts.values()):
-            raise HTTPException(status_code=422, detail="With no evaluator shortage, an evaluator may have only one recruit.")
-        if 0 < present_evaluator_count < len(present_recruits):
-            capacity = (len(present_recruits) + present_evaluator_count - 1) // present_evaluator_count
-            if any(value > capacity for value in evaluator_counts.values()):
-                raise HTTPException(status_code=422, detail="A manual edit exceeds the balanced shortage capacity.")
-    if round_record.activity_code in ROOM_ACTIVITIES:
-        room_plan = latest_room_plan(db, journey.id, "published")
-        if not room_plan:
-            raise HTTPException(status_code=409, detail="Published room plan not found.")
-        recruit_rooms = {item.recruit_id: item.room_number for item in db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == room_plan.id))}
-        evaluator_rooms = {item.evaluator_id: item.room_number for item in db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == room_plan.id))}
-        room_recruit_counts = Counter(recruit_rooms.values())
-        room_evaluator_counts = Counter(evaluator_rooms.values())
-        for item in payload.items:
-            if recruit_rooms.get(item.recruit_id) != evaluator_rooms.get(item.evaluator_id):
-                raise HTTPException(status_code=422, detail="Room activities can pair only people in the same room.")
-        for evaluator_id, load in evaluator_counts.items():
-            room = evaluator_rooms[evaluator_id]
-            capacity = max(1, (room_recruit_counts[room] + max(room_evaluator_counts[room], 1) - 1) // max(room_evaluator_counts[room], 1))
-            if load > capacity:
-                raise HTTPException(status_code=422, detail="A manual edit exceeds the balanced evaluator capacity for its room.")
-    db.execute(delete(Assignment).where(Assignment.round_id == round_record.id))
-    for item in payload.items:
-        room_number = recruit_rooms[item.recruit_id] if round_record.activity_code in ROOM_ACTIVITIES else None
-        repeated = (item.evaluator_id, item.recruit_id) in past_pairs
-        db.add(Assignment(round_id=round_record.id, evaluator_id=item.evaluator_id, recruit_id=item.recruit_id, room_number=room_number, slot=item.slot, repeated_pair=repeated, repeat_reason=item.override_reason if repeated else None))
-    audit(db, journey_id=journey.id, actor_type="admin", actor_name=context.actor_name, action="assignments.manually_edited", entity_type="assignment_round", entity_id=round_record.id)
-    _commit(db)
-    return assignment_round_payload(db, round_record)
 
 
 @router.post("/journeys/{journey_id}/assignments/{round_id}/publish")
@@ -2864,8 +2839,18 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
                     item for item in activity_definition(activity_code).criteria
                     if item.key == criterion.key
                 )
-                criterion_minimum = Decimal(configured_criterion.minimum)
-                criterion_maximum = Decimal(configured_criterion.maximum)
+                configured_activity = activity_definition(activity_code)
+                # Target activities store a converted /5 value in responses and
+                # the original count/duration in raw.  Breakdown math must use
+                # the converted scale, matching the official dimension score.
+                criterion_minimum = (
+                    Decimal("0") if configured_activity.scoring == "target_average"
+                    else Decimal(configured_criterion.minimum)
+                )
+                criterion_maximum = (
+                    Decimal("5") if configured_activity.scoring == "target_average"
+                    else Decimal(configured_criterion.maximum)
+                )
                 for evaluation in details.get(activity_code, []):
                     submission = evaluation.get("submission")
                     final = submission and submission.get("status") in {"submitted", "locked"}
@@ -2997,6 +2982,9 @@ def recruit_profile(
             "complete": False,
         }
     assessment = db.get(GeneralAssessment, recruit.id)
+    general_factor_keys = [factor.storageKey for factor in active_assessment_definition().generalFactors]
+    assessment_values = general_assessment_values_payload(assessment, general_factor_keys)
+    legacy_assessment_values = stored_general_assessment_values(assessment)
     evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
     states = list(db.scalars(select(ActivityState).where(ActivityState.journey_id == journey.id)))
     details: dict[str, list[dict]] = {code: [] for code in ACTIVITY_ORDER}
@@ -3065,9 +3053,10 @@ def recruit_profile(
         "dimensionAverages": results["dimensionAverages"],
         "activityAverages": results["activityAverages"],
         "assessment": {
-            "punctuality": float(assessment.punctuality) if assessment and assessment.punctuality is not None else None,
-            "respect": float(assessment.respect) if assessment and assessment.respect is not None else None,
-            "seriousness": float(assessment.seriousness) if assessment and assessment.seriousness is not None else None,
+            "values": assessment_values,
+            "punctuality": float(legacy_assessment_values["punctuality"]) if legacy_assessment_values.get("punctuality") is not None else None,
+            "respect": float(legacy_assessment_values["respect"]) if legacy_assessment_values.get("respect") is not None else None,
+            "seriousness": float(legacy_assessment_values["seriousness"]) if legacy_assessment_values.get("seriousness") is not None else None,
             "comment": assessment.comment if assessment else "",
             "notes": assessment.notes if assessment else "",
             "version": assessment.version if assessment else 0,
@@ -3123,25 +3112,47 @@ def save_general_assessment(
     assessment = db.get(GeneralAssessment, recruit.id)
     if assessment and payload.base_version is not None and payload.base_version != assessment.version:
         raise HTTPException(status_code=409, detail="This profile was changed by another user. Reload before saving.")
+    factors = active_assessment_definition().generalFactors
+    enabled_factors = {item.storageKey for item in factors}
+    values = stored_general_assessment_values(assessment)
+    before_factor_values = configured_general_assessment_values(
+        assessment, (factor.storageKey for factor in factors)
+    )
     before = {
-        "punctuality": assessment.punctuality if assessment else None,
-        "respect": assessment.respect if assessment else None,
-        "seriousness": assessment.seriousness if assessment else None,
+        "values": before_factor_values,
+        "factors": [
+            {"key": factor.storageKey, "name": factor.name, "value": before_factor_values[factor.storageKey]}
+            for factor in factors
+        ],
+        **{key: values.get(key) for key in LEGACY_GENERAL_FACTOR_KEYS},
         "comment": assessment.comment if assessment else "",
         "notes": assessment.notes if assessment else "",
     }
-    values: dict[str, Decimal | None] = {}
-    enabled_factors = {item.storageKey for item in active_assessment_definition().generalFactors}
-    for key, value in (
-        ("punctuality", payload.punctuality),
-        ("respect", payload.respect),
-        ("seriousness", payload.seriousness),
-    ):
-        try:
-            values[key] = (
-                None if key not in enabled_factors or value is None
-                else validate_general_factor(key, value)
+
+    if payload.values is None:
+        requested_values = {
+            "punctuality": payload.punctuality,
+            "respect": payload.respect,
+            "seriousness": payload.seriousness,
+        }
+        for key in LEGACY_GENERAL_FACTOR_KEYS:
+            if key not in enabled_factors:
+                values[key] = None
+    else:
+        unknown = sorted(set(payload.values) - enabled_factors)
+        if unknown:
+            raise HTTPException(
+                status_code=422,
+                detail="Unknown or disabled general assessment factor: " + ", ".join(unknown),
             )
+        requested_values = dict(payload.values)
+        for key in LEGACY_GENERAL_FACTOR_KEYS:
+            if key in payload.model_fields_set and key in enabled_factors and key not in requested_values:
+                requested_values[key] = getattr(payload, key)
+
+    for key, value in requested_values.items():
+        try:
+            values[key] = None if key not in enabled_factors or value is None else validate_general_factor(key, value)
         except ScoringError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not assessment:
@@ -3149,11 +3160,22 @@ def save_general_assessment(
         db.add(assessment)
     else:
         assessment.version += 1
-    assessment.punctuality = values["punctuality"]
-    assessment.respect = values["respect"]
-    assessment.seriousness = values["seriousness"]
+    set_general_assessment_values(assessment, values)
     assessment.comment = payload.comment.strip()
     assessment.notes = payload.notes.strip()
+    after_factor_values = configured_general_assessment_values(
+        assessment, (factor.storageKey for factor in factors)
+    )
+    after = {
+        "values": after_factor_values,
+        "factors": [
+            {"key": factor.storageKey, "name": factor.name, "value": after_factor_values[factor.storageKey]}
+            for factor in factors
+        ],
+        **{key: values.get(key) for key in LEGACY_GENERAL_FACTOR_KEYS},
+        "comment": assessment.comment,
+        "notes": assessment.notes,
+    }
     audit(
         db,
         journey_id=journey.id,
@@ -3163,10 +3185,16 @@ def save_general_assessment(
         entity_type="recruit",
         entity_id=recruit.id,
         before=before,
-        after={**values, "comment": assessment.comment, "notes": assessment.notes},
+        after=after,
     )
     _commit(db)
-    return {"ok": True, "version": assessment.version}
+    return {
+        "ok": True,
+        "version": assessment.version,
+        "values": general_assessment_values_payload(
+            assessment, (factor.storageKey for factor in factors)
+        ),
+    }
 
 
 @router.post("/journeys/{journey_id}/submissions/{submission_id}/correct")

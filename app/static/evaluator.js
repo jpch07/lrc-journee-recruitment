@@ -1,5 +1,5 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers } from "/static/common.js?v=20260810.1";
-import { initializeSystemUI } from "/static/system-ui.js?v=20260820.3";
+import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
 
 // The LRC preset still renders the proven type="number" min="0" max="5" rating control.
 
@@ -10,6 +10,7 @@ const fixedLink = location.pathname.replace(/\/+$/, "").endsWith("/evaluate");
 const token = location.pathname.split("/").filter(Boolean).pop();
 const publicBase = fixedLink ? "/api/public/current" : `/api/public/journeys/${encodeURIComponent(token)}`;
 const state = {
+  system: null,
   csrf: "",
   landing: null,
   home: null,
@@ -22,6 +23,10 @@ const state = {
   poll: null,
   lastUpdateSignature: "",
 };
+
+function categoryName(role) {
+  return state.system?.assessorCategories?.find((item) => item.key === role)?.name || role;
+}
 
 function showPhotoViewer(url, name) {
   $("#photoViewerImage").src = url;
@@ -122,7 +127,7 @@ function renderHome() {
   const { journey, evaluator, activities } = state.home;
   const currentName = activities.find((item) => item.code === journey.currentActivity)?.name || "Waiting for admin";
   host.innerHTML = `<section class="eval-welcome"><p class="eyebrow">${journey.currentActivity ? "Activity open" : "Journee workspace"}</p><h1>${h(currentName)}</h1><p style="margin-bottom:0">Assignments update automatically. Refresh if the admin has just published a change.</p></section>
-    <div class="eval-identity"><div><strong>${h(evaluator.name)}</strong><small class="muted">${h(statusLabel(evaluator.role))} evaluator</small></div><span class="role-badge ${evaluator.role}">${h(evaluator.role)}</span><span>${evaluator.roomNumber ? `Room ${evaluator.roomNumber}` : "No room"}</span></div>
+    <div class="eval-identity"><div><strong>${h(evaluator.name)}</strong><small class="muted">${h(categoryName(evaluator.role))}</small></div><span class="role-badge ${evaluator.role}">${h(categoryName(evaluator.role))}</span><span>${evaluator.roomNumber ? `Room ${evaluator.roomNumber}` : "No room"}</span></div>
     <div class="refresh-row"><h2 style="margin:0">Your activities</h2><button class="button ghost small" id="refreshTasks">↻ Refresh</button></div>
     <div class="eval-activity-list">${activities.map(activityCard).join("")}</div>`;
   $("#refreshTasks").onclick = async () => { await loadHome(); toast("Assignments refreshed."); };
@@ -317,4 +322,6 @@ $("#evalLogout").onclick = async () => {
   await showLanding();
 };
 
-initializeSystemUI().catch(() => {}).finally(initialize);
+initializeSystemUI().then((configuration) => {
+  state.system = configuration;
+}).catch(() => {}).finally(initialize);

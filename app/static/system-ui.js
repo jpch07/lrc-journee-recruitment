@@ -33,9 +33,10 @@ function replacementPairs(configuration) {
     ["Respect to us", factors.find(item => item.storageKey === "respect")?.name],
     ["Seriousness", factors.find(item => item.storageKey === "seriousness")?.name],
   ];
-  for (const category of configuration.assessorCategories || []) {
-    pairs.push([category.key, category.name]);
-  }
+  // Assessor-category keys are data identifiers, not interface vocabulary.
+  // Replacing them across every text node can corrupt ordinary copy when an
+  // owner chooses a key such as "lead" or "internal". Category labels are
+  // therefore rendered explicitly by each workspace screen.
   for (const band of configuration.performanceBands || []) pairs.push([band.key, band.name]);
   return pairs.filter(([, replacement]) => replacement);
 }

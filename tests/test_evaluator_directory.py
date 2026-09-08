@@ -20,10 +20,10 @@ def _login(client) -> str:
 
 
 def test_authoritative_evaluator_workbook_snapshot_is_clean():
-    assert len(BASE_EVALUATORS) == 82
-    assert len({name.casefold() for name, _ in BASE_EVALUATORS}) == 82
+    assert len(BASE_EVALUATORS) == 81
+    assert len({name.casefold() for name, _ in BASE_EVALUATORS}) == 81
     assert sum(role == "overall" for _, role in BASE_EVALUATORS) == 67
-    assert sum(role == "dossard" for _, role in BASE_EVALUATORS) == 15
+    assert sum(role == "dossard" for _, role in BASE_EVALUATORS) == 14
     assert {role for _, role in BASE_EVALUATORS} == {"overall", "dossard"}
 
 
@@ -38,7 +38,7 @@ def test_new_journey_contains_every_active_directory_evaluator_as_absent():
             db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))
         )
 
-    assert len(evaluators) == 82
+    assert len(evaluators) == 81
     assert not any(item.present for item in evaluators)
     assert {(item.name, item.role) for item in evaluators} == set(BASE_EVALUATORS)
 

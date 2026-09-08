@@ -27,7 +27,6 @@ BASE_EVALUATORS: tuple[tuple[str, str], ...] = (
     ("Coma", "overall"),
     ("Andy", "dossard"),
     ("Maria Khoury", "dossard"),
-    ("Marita", "dossard"),
     ("Harbieh", "overall"),
     ("Fuse", "overall"),
     ("Bronzo", "overall"),
