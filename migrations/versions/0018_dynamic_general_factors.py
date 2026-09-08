@@ -27,10 +27,24 @@ def _json_number(value: object) -> float | None:
     return float(Decimal(str(value)))
 
 
+def _has_values_column(bind) -> bool:
+    if bind.dialect.name == "cockroachdb":
+        # Cockroach's dialect inspector can wait for an earlier schema-change
+        # lease to be garbage-collected. information_schema is immediate and
+        # also makes a partially completed deployment safely resumable.
+        return bool(bind.execute(sa.text(
+            "select count(*) from information_schema.columns "
+            "where table_schema = 'journee_recruitment' "
+            "and table_name = 'general_assessments' and column_name = 'values_json'"
+        )).scalar())
+    return "values_json" in {
+        item["name"] for item in sa.inspect(bind).get_columns("general_assessments")
+    }
+
+
 def upgrade() -> None:
     bind = op.get_bind()
-    columns = {item["name"] for item in sa.inspect(bind).get_columns("general_assessments")}
-    if "values_json" not in columns:
+    if not _has_values_column(bind):
         op.add_column(
             "general_assessments",
             sa.Column("values_json", sa.Text(), nullable=False, server_default=sa.text("'{}'")),
@@ -66,6 +80,5 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    columns = {item["name"] for item in sa.inspect(op.get_bind()).get_columns("general_assessments")}
-    if "values_json" in columns:
+    if _has_values_column(op.get_bind()):
         op.drop_column("general_assessments", "values_json")
