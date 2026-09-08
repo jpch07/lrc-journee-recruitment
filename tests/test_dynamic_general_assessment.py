@@ -225,3 +225,30 @@ def test_dynamic_factor_migration_backfills_legacy_columns(tmp_path):
         "seriousness": 0.9,
     }
     assert revision == "0018_dynamic_general_factors"
+
+
+def test_dynamic_factor_migration_resumes_after_column_was_already_added(tmp_path):
+    """Match a Cockroach retry after DDL completed but revision stamping did not."""
+    database_path = tmp_path / "partial-general-assessment.db"
+    engine = create_engine(f"sqlite:///{database_path.as_posix()}")
+    config = Config("alembic.ini")
+    with engine.begin() as connection:
+        config.attributes["connection"] = connection
+        command.upgrade(config, "0017_room_evaluator_locks")
+        connection.execute(text(
+            "INSERT INTO general_assessments "
+            "(recruit_id, punctuality, respect, seriousness, values_json, comment, notes, version, updated_at) "
+            "VALUES ('partial-recruit', 0.6, 0.7, 0.8, '{}', 'partial', '', 1, CURRENT_TIMESTAMP)"
+        ))
+        command.upgrade(config, "head")
+        row = connection.execute(text(
+            "SELECT values_json FROM general_assessments WHERE recruit_id = 'partial-recruit'"
+        )).scalar_one()
+        revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
+
+    assert json.loads(row) == {
+        "punctuality": 0.6,
+        "respect": 0.7,
+        "seriousness": 0.8,
+    }
+    assert revision == "0018_dynamic_general_factors"

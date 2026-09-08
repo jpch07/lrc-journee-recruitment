@@ -36,9 +36,20 @@ def upgrade() -> None:
             sa.Column("values_json", sa.Text(), nullable=False, server_default=sa.text("'{}'")),
         )
 
-    metadata = sa.MetaData()
-    assessments = sa.Table("general_assessments", metadata, autoload_with=bind)
-    for row in bind.execute(sa.select(assessments)).mappings():
+    # Do not reflect this table immediately after adding the column. CockroachDB
+    # publishes schema changes asynchronously, and dialect reflection can wait
+    # on the schema-change lease even though the new column is already usable.
+    # Explicit SQL keeps this migration quick and safe on CockroachDB, PostgreSQL,
+    # and SQLite, including a retry after a partially completed DDL operation.
+    rows = bind.execute(sa.text(
+        "select recruit_id, values_json, punctuality, respect, seriousness "
+        "from general_assessments"
+    )).mappings().all()
+    update_row = sa.text(
+        "update general_assessments set values_json = :values_json "
+        "where recruit_id = :recruit_id"
+    )
+    for row in rows:
         try:
             existing = json.loads(row.get("values_json") or "{}")
         except (TypeError, json.JSONDecodeError):
@@ -48,11 +59,10 @@ def upgrade() -> None:
         for key in LEGACY_KEYS:
             if key not in existing:
                 existing[key] = _json_number(row.get(key))
-        bind.execute(
-            assessments.update()
-            .where(assessments.c.recruit_id == row["recruit_id"])
-            .values(values_json=json.dumps(existing, ensure_ascii=False, separators=(",", ":")))
-        )
+        bind.execute(update_row, {
+            "recruit_id": row["recruit_id"],
+            "values_json": json.dumps(existing, ensure_ascii=False, separators=(",", ":")),
+        })
 
 
 def downgrade() -> None:
