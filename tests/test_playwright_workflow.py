@@ -168,9 +168,9 @@ def test_admin_create_and_mobile_layout(tmp_path):
             assert viewer_page.locator("#viewerGeneralAssessmentForm input:not([disabled])").count() == 3
             assert viewer_page.locator("#viewerGeneralAssessmentForm textarea:not([disabled])").count() == 2
             assert viewer_page.locator("#viewerHost input:not([disabled]), #viewerHost textarea:not([disabled])").count() == 5
-            viewer_page.fill('#viewerGeneralAssessmentForm input[name="punctuality"]', "0.8")
-            viewer_page.fill('#viewerGeneralAssessmentForm input[name="respect"]', "0.9")
-            viewer_page.fill('#viewerGeneralAssessmentForm input[name="seriousness"]', "1")
+            viewer_page.fill('#viewerGeneralAssessmentForm input[name="factor:punctuality"]', "0.8")
+            viewer_page.fill('#viewerGeneralAssessmentForm input[name="factor:respect"]', "0.9")
+            viewer_page.fill('#viewerGeneralAssessmentForm input[name="factor:seriousness"]', "1")
             viewer_page.fill('#viewerGeneralAssessmentForm textarea[name="comment"]', "Management comment")
             viewer_page.fill('#viewerGeneralAssessmentForm textarea[name="notes"]', "Management note")
             viewer_page.locator('#viewerGeneralAssessmentForm textarea[name="notes"]').blur()
