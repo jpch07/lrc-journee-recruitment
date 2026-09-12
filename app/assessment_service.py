@@ -8,6 +8,7 @@ from .assessment_config import (
     AssessmentSystemDefinition,
     blank_assessment_definition,
     lrc_assessment_definition,
+    load_stored_definition,
 )
 from .assessment_runtime import activate_assessment_definition
 from .models import (
@@ -91,11 +92,11 @@ def published_record(db: Session, system: AssessmentSystem) -> AssessmentSystemV
 
 
 def published_definition(db: Session, system: AssessmentSystem) -> AssessmentSystemDefinition:
-    return AssessmentSystemDefinition.model_validate(loads(published_record(db, system).definition_json, {}))
+    return load_stored_definition(loads(published_record(db, system).definition_json, {}))
 
 
 def draft_definition(system: AssessmentSystem) -> AssessmentSystemDefinition:
-    return AssessmentSystemDefinition.model_validate(loads(system.draft_json, {}))
+    return load_stored_definition(loads(system.draft_json, {}))
 
 
 def preset_definition(key: str) -> AssessmentSystemDefinition:

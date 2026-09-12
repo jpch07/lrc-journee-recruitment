@@ -5,7 +5,7 @@ from copy import deepcopy
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationInfo, model_validator
 
 from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 
@@ -226,7 +226,7 @@ class AccessProfile(BaseModel):
 
 
 class AssessmentSystemDefinition(BaseModel):
-    schemaVersion: int = 1
+    schemaVersion: int = 2
     name: str
     description: str = ""
     terminology: Terminology = Field(default_factory=Terminology)
@@ -242,7 +242,11 @@ class AssessmentSystemDefinition(BaseModel):
     accessProfiles: list[AccessProfile] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_definition(self):
+    def validate_definition(self, info: ValidationInfo):
+        # Earlier published definitions allowed dimension weights across several
+        # activities to exceed 100%. Read those exact weights for compatibility;
+        # every new draft/publish request still uses the strict validation below.
+        legacy_weights = self.schemaVersion < 2 and (info.context or {}).get("stored_definition", False)
         activities = [item for item in self.activities if item.enabled]
         activity_keys = [item.key for item in activities]
         if not activities or len(activity_keys) != len(set(activity_keys)):
@@ -297,7 +301,7 @@ class AssessmentSystemDefinition(BaseModel):
                 ),
                 Decimal("0"),
             )
-            if total != Decimal("1"):
+            if total != Decimal("1") and not legacy_weights:
                 raise ValueError(
                     f"Criterion weights for dimension '{dimension.name}' total "
                     f"{total * 100}%; expected 100%."
@@ -309,7 +313,7 @@ class AssessmentSystemDefinition(BaseModel):
             if not activity_level_criteria:
                 continue
             total = sum((criterion.weight for criterion in activity_level_criteria), Decimal("0"))
-            if total != Decimal("1"):
+            if total != Decimal("1") and not legacy_weights:
                 source_dimension = next(
                     (
                         dimension.name
@@ -368,6 +372,14 @@ class AssessmentSystemDefinition(BaseModel):
         if not owner_profile.enabled or set(owner_profile.capabilities) != {"evaluate", "admin", "results", "attendance"}:
             raise ValueError("The owner profile must stay enabled with complete access.")
         return self
+
+
+def load_stored_definition(value: dict) -> AssessmentSystemDefinition:
+    """Read saved versions without changing historical configuration or scores."""
+    return AssessmentSystemDefinition.model_validate(
+        {"schemaVersion": 1, **value} if isinstance(value, dict) else value,
+        context={"stored_definition": True},
+    )
 
 
 def _lrc_definition_from_current_rubric() -> AssessmentSystemDefinition:

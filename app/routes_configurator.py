@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -44,6 +44,15 @@ class DefinitionRequest(BaseModel):
 
 class PublishRequest(DefinitionRequest):
     change_summary: str = Field(default="", max_length=1000)
+
+
+def _validate_definition(value: dict) -> AssessmentSystemDefinition:
+    try:
+        definition = AssessmentSystemDefinition.model_validate(value)
+    except ValidationError as exc:
+        messages = [item["msg"].removeprefix("Value error, ") for item in exc.errors(include_input=False)]
+        raise HTTPException(status_code=422, detail="; ".join(messages)) from exc
+    return definition.model_copy(update={"schemaVersion": 2})
 
 
 def _google_csv_url(url: str, sheet_name: str) -> str:
@@ -143,7 +152,7 @@ def validate_configuration(
     context: UserContext = Depends(require_owner), db: Session = Depends(get_db),
 ):
     del context
-    definition = AssessmentSystemDefinition.model_validate(payload.definition)
+    definition = _validate_definition(payload.definition)
     system = ensure_assessment_system(db)
     try:
         ensure_unique_system_name(db, system, definition.name)
@@ -160,7 +169,7 @@ def update_draft(
     db: Session = Depends(get_db),
 ):
     require_csrf(request, context.csrf_token)
-    definition = AssessmentSystemDefinition.model_validate(payload.definition)
+    definition = _validate_definition(payload.definition)
     system = ensure_assessment_system(db)
     try:
         save_draft(db, system, definition, base_version=payload.base_version, actor_name=context.username)
@@ -210,7 +219,7 @@ def publish_configuration(
     db: Session = Depends(get_db),
 ):
     require_csrf(request, context.csrf_token)
-    definition = AssessmentSystemDefinition.model_validate(payload.definition)
+    definition = _validate_definition(payload.definition)
     system = ensure_assessment_system(db)
     impact = historical_impact(db, system, definition)
     if impact["blocked"]:
@@ -244,7 +253,7 @@ def sync_assessor_directory(
 ):
     """Import the configured assessor Sheet into the proven master directory."""
     require_csrf(request, context.csrf_token)
-    definition = AssessmentSystemDefinition.model_validate(payload.definition)
+    definition = _validate_definition(payload.definition)
     configured = definition.assessors
     if not configured.linkedDirectoryEnabled or not configured.directorySheetUrl.strip():
         raise HTTPException(status_code=422, detail="Enable the linked assessor directory and enter its Google Sheet URL first.")

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import re
+import logging
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from pydantic import ValidationError
 from fastapi.staticfiles import StaticFiles
 
 from .config import STATIC_DIR, settings
@@ -20,7 +22,7 @@ from .routes_platform import router as platform_router
 from .rubric import validate_rubrics
 from .assessment_service import ensure_assessment_system
 from .assessment_runtime import active_assessment_definition, activate_assessment_definition, reset_assessment_definition
-from .assessment_config import AssessmentSystemDefinition
+from .assessment_config import load_stored_definition
 from .models import AssessmentSystem, AssessmentSystemVersion, Journey, RecruitAttendanceAccess, UserAccount, UserSession
 from .tenant import reset_system, select_system
 from .utils import loads
@@ -28,6 +30,7 @@ from sqlalchemy import select
 
 
 database_startup_error: str | None = None
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -54,10 +57,11 @@ async def lifespan(_app: FastAPI):
                     AssessmentSystemVersion.system_id == system.id,
                     AssessmentSystemVersion.version == system.published_version,
                 ))
-                definition = (
-                    AssessmentSystemDefinition.model_validate(loads(record.definition_json, {}))
-                    if record else None
-                )
+                try:
+                    definition = load_stored_definition(loads(record.definition_json, {})) if record else None
+                except ValidationError:
+                    logger.error("Invalid saved configuration for workspace %s at startup", system.id)
+                    definition = None
                 runtime_token = activate_assessment_definition(definition) if definition else None
                 owner = db.scalar(select(UserAccount).where(UserAccount.is_owner.is_(True)))
                 if owner:
@@ -185,14 +189,42 @@ def _runtime_for_system(system_id: str):
                 AssessmentSystemVersion.version == system.published_version,
             ).execution_options(bypass_recruitment_scope=True)
         )
-        return AssessmentSystemDefinition.model_validate(loads(record.definition_json, {})) if record else None
+        return load_stored_definition(loads(record.definition_json, {}) if record else {})
+
+
+def _workspace_configuration_error(path: str):
+    """Keep a malformed workspace isolated and always offer a working way out."""
+    if path.startswith("/api/"):
+        response = JSONResponse(status_code=409, content={
+            "detail": "This workspace's configuration needs attention. Return to All workspaces to open another workspace.",
+            "code": "workspace_configuration_invalid",
+        })
+    else:
+        response = HTMLResponse(status_code=409, content="""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Workspace needs attention</title><style>
+body{font:16px/1.6 system-ui,sans-serif;margin:0;background:#f5f6fa;color:#1b2435}
+main{max-width:540px;margin:12vh auto;padding:32px;background:white;border-radius:16px}
+a{display:inline-block;padding:12px 20px;background:#5046e5;color:white;border-radius:8px;text-decoration:none}
+</style></head><body><main><h1>Workspace needs attention</h1>
+<p>This workspace has a configuration that cannot be loaded. Your other workspaces are still available.</p>
+<a href="/">All workspaces</a></main></body></html>""")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.middleware("http")
 async def prevent_stale_frontend_assets(request: Request, call_next):
     """Keep deployments from mixing cached HTML/JS files from different releases."""
-    if request.url.path == "/health/live":
-        return await call_next(request)
+    path = request.url.path
+    # Shared assets, platform navigation, and health do not depend on the last
+    # workspace chosen in this browser. Never load its configuration here.
+    if path == "/" or path.startswith(("/static/", "/api/platform/", "/health/")):
+        response = await call_next(request)
+        response.headers["Cache-Control"] = (
+            "no-cache, max-age=0, must-revalidate" if path.startswith("/static/") else "no-store"
+        )
+        return response
     if database_startup_error and request.url.path != "/health/ready":
         return JSONResponse(
             status_code=503,
@@ -203,7 +235,11 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
     system_token = select_system(system_id)
     runtime_token = None
     try:
-        definition = _runtime_for_system(system_id) if system_id else None
+        try:
+            definition = _runtime_for_system(system_id) if system_id else None
+        except ValidationError:
+            logger.error("Invalid saved configuration for workspace %s on %s", system_id, path)
+            return _workspace_configuration_error(path)
         if definition:
             runtime_token = activate_assessment_definition(definition)
         response = await call_next(request)
