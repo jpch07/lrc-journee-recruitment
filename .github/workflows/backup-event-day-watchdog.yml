@@ -1,0 +1,202 @@
+name: Backup event-day protection
+run-name: "Backup Journee protection ${{ inputs.activation_id || 'baseline' }} · ${{ inputs.duration_hours || 'scheduled' }}"
+
+on:
+  schedule:
+    # Baseline wake-up. Event-day protection uses continuous workflow_dispatch jobs.
+    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
+  workflow_dispatch:
+    inputs:
+      duration_hours:
+        description: Protection duration
+        required: true
+        default: "6"
+        type: choice
+        options: ["6", "12"]
+      activation_id:
+        description: Control ID (leave as manual when starting from GitHub)
+        required: true
+        default: "manual"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  APP_URL: ${{ vars.RENDER_BACKUP_APP_URL }}
+  # All are optional. Unset/incomplete secrets mean NO email is sent.
+  EVALDAY_SMTP_HOST: ${{ secrets.EVALDAY_SMTP_HOST }}
+  EVALDAY_SMTP_PORT: ${{ secrets.EVALDAY_SMTP_PORT }}
+  EVALDAY_SMTP_USERNAME: ${{ secrets.EVALDAY_SMTP_USERNAME }}
+  EVALDAY_SMTP_PASSWORD: ${{ secrets.EVALDAY_SMTP_PASSWORD }}
+  EVALDAY_ALERT_FROM: ${{ secrets.EVALDAY_ALERT_FROM }}
+  EVALDAY_ALERT_TO: ${{ secrets.EVALDAY_ALERT_TO }}
+
+jobs:
+  scheduled_keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-baseline-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: backup-monitor-baseline-v1-
+      - name: Keep the application warm
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --cycles 1 --retry-count 3 --retry-delay-seconds 5 --timeout-seconds 20
+          --state-file .monitor-state/health.json
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-baseline-v1-${{ github.run_id }}-${{ github.run_attempt }}
+
+  primary_1:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+          restore-keys: backup-monitor-primary-v1-
+      - name: Primary monitor · segment 1
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+          --state-file .monitor-state/health.json
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+
+  secondary_1:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 1
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60 --initial-delay-seconds 30
+          --retry-count 6 --retry-delay-seconds 10 --no-email
+
+  primary_2:
+    needs: primary_1
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+          restore-keys: backup-monitor-primary-v1-
+      - name: Primary monitor · segment 2
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+          --state-file .monitor-state/health.json
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+
+  secondary_2:
+    needs: secondary_1
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 2
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10 --no-email
+
+  primary_3:
+    needs: primary_2
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.duration_hours == '12' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+          restore-keys: backup-monitor-primary-v1-
+      - name: Primary monitor · segment 3
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+          --state-file .monitor-state/health.json
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+
+  secondary_3:
+    needs: secondary_2
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.duration_hours == '12' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 3
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10 --no-email
+
+  primary_4:
+    needs: primary_3
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.duration_hours == '12' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache/restore@v4
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+          restore-keys: backup-monitor-primary-v1-
+      - name: Primary monitor · segment 4
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10
+          --state-file .monitor-state/health.json
+      - uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .monitor-state/health.json
+          key: backup-monitor-primary-v1-${{ github.run_id }}-${{ github.job }}-${{ github.run_attempt }}
+
+  secondary_4:
+    needs: secondary_3
+    if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.duration_hours == '12' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 190
+    steps:
+      - uses: actions/checkout@v4
+      - name: Secondary monitor · segment 4
+        run: >-
+          python scripts/event_day_guard.py "${APP_URL}"
+          --duration-minutes 180 --interval-seconds 60
+          --retry-count 6 --retry-delay-seconds 10 --no-email
