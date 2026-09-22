@@ -257,14 +257,14 @@ def profile_photo(journey_id: str, recruit_id: str, request: Request, context: U
     recruit = db.get(Recruit, recruit_id)
     if not recruit or recruit.journey_id != journey_id or not has_photo(recruit):
         raise HTTPException(status_code=404, detail="Photo not found.")
-    data = read_recruit_photo(recruit)
-    if not data:
-        raise HTTPException(status_code=404, detail="Photo not found.")
     headers = {"Cache-Control": "private, max-age=86400"}
     if recruit.photo_sha256:
         headers["ETag"] = f'"{recruit.photo_sha256}"'
         if request.headers.get("if-none-match") == headers["ETag"]:
             return Response(status_code=304, headers=headers)
+    data = read_recruit_photo(recruit)
+    if not data:
+        raise HTTPException(status_code=404, detail="Photo not found.")
     return Response(data, media_type=recruit.photo_type or "image/webp", headers=headers)
 
 

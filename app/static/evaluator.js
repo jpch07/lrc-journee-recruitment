@@ -21,6 +21,7 @@ const state = {
   draftSaving: false,
   pendingDraft: false,
   poll: null,
+  pollInFlight: false,
   lastUpdateSignature: "",
 };
 
@@ -293,7 +294,8 @@ function startPolling() {
   clearInterval(state.poll);
   state.lastUpdateSignature = state.home ? JSON.stringify({ version: state.home.journey.version, activities: state.home.activities.map((item) => [item.code, item.version]) }) : "";
   state.poll = setInterval(async () => {
-    if (document.hidden) return;
+    if (document.hidden || state.pollInFlight) return;
+    state.pollInFlight = true;
     try {
       const update = await api("/api/evaluator/updates");
       const signature = JSON.stringify({ version: update.journeyVersion, activities: Object.entries(update.activityVersions) });
@@ -308,6 +310,7 @@ function startPolling() {
         state.lastUpdateSignature = signature;
       }
     } catch { /* visible Refresh and local drafts provide recovery */ }
+    finally { state.pollInFlight = false; }
   }, 5000);
 }
 

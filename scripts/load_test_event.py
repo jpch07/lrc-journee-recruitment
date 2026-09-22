@@ -35,6 +35,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from urllib.parse import urlsplit
 
@@ -75,6 +76,113 @@ def percentile(values: list[float], percent: int) -> float:
         return 0.0
     ordered = sorted(values)
     return round(ordered[max(0, math.ceil(len(ordered) * percent / 100) - 1)], 2)
+
+
+def linux_memory_from_status(status: str) -> dict | None:
+    """Parse resident memory, never confuse virtual address space with RSS."""
+    values = {name: int(value) * 1024 for name, value in re.findall(
+        r"^(VmRSS|VmHWM):\s*(\d+)\s+kB\s*$", status, flags=re.MULTILINE)}
+    if "VmRSS" not in values:
+        return None
+    return {"rss_bytes": values["VmRSS"], "os_peak_rss_bytes": values.get("VmHWM"),
+            "method": "linux_proc_status"}
+
+
+def process_memory_bytes(pid: int) -> dict | None:
+    """Read only the owned app child's resident memory using standard OS APIs."""
+    if sys.platform.startswith("linux"):
+        try:
+            return linux_memory_from_status(Path(f"/proc/{pid}/status").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        class ProcessMemoryCounters(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        psapi = ctypes.WinDLL("psapi", use_last_error=True)
+        kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel.OpenProcess.restype = wintypes.HANDLE
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle.restype = wintypes.BOOL
+        psapi.GetProcessMemoryInfo.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessMemoryCounters), wintypes.DWORD]
+        psapi.GetProcessMemoryInfo.restype = wintypes.BOOL
+        # Query-limited-information + VM-read; no writes, suspend or termination.
+        handle = kernel.OpenProcess(0x1000 | 0x0010, False, pid)
+        if not handle:
+            return None
+        try:
+            counters = ProcessMemoryCounters()
+            counters.cb = ctypes.sizeof(counters)
+            if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+                return None
+            return {"rss_bytes": int(counters.WorkingSetSize),
+                    "os_peak_rss_bytes": int(counters.PeakWorkingSetSize),
+                    "method": "windows_process_memory_counters"}
+        finally:
+            kernel.CloseHandle(handle)
+    return None
+
+
+class AppMemoryMonitor:
+    """Sample the app PID only; unavailable measurements stay null, never zero."""
+    def __init__(self, pid: int, interval_seconds: float = 1.0, probe=None):
+        self.pid = pid
+        self.interval_seconds = interval_seconds
+        self.probe = probe or process_memory_bytes
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._thread = None
+        self._samples = 0
+        self._sampled_peak = None
+        self._os_peak = None
+        self._methods = set()
+
+    def sample(self):
+        try:
+            measurement = self.probe(self.pid)
+        except Exception:
+            measurement = None
+        if not measurement:
+            return
+        with self._lock:
+            self._samples += 1
+            self._methods.add(measurement["method"])
+            self._sampled_peak = max(self._sampled_peak or 0, measurement["rss_bytes"])
+            if measurement.get("os_peak_rss_bytes") is not None:
+                self._os_peak = max(self._os_peak or 0, measurement["os_peak_rss_bytes"])
+
+    def start(self):
+        self.sample()
+        self._thread = threading.Thread(target=self._run, name="evalday-test-app-memory", daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        while not self._stop.wait(self.interval_seconds):
+            self.sample()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=5)
+        self.sample()
+
+    def summary(self) -> dict:
+        with self._lock:
+            peak = max(self._sampled_peak or 0, self._os_peak or 0) if self._samples else None
+            return {"available": bool(self._samples), "successful_samples": self._samples,
+                "sample_interval_seconds": self.interval_seconds, "methods": sorted(self._methods),
+                "sampled_peak_rss_bytes": self._sampled_peak, "os_peak_rss_bytes": self._os_peak,
+                "peak_rss_bytes": peak, "peak_rss_mib": round(peak / 1024**2, 2) if peak is not None else None,
+                "measured_process": "owned_application_child_only", "memory_limit_enforced": False,
+                "unavailable_reason": None if self._samples else "unsupported_platform_process_exited_or_permission_denied"}
 
 
 def safe_exception_classes(error: BaseException) -> list[dict]:
@@ -534,6 +642,8 @@ def main() -> int:
         str(diagnostics)], cwd=ROOT, env=worker_env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    memory = AppMemoryMonitor(process.pid)
+    memory.start()
     started = time.monotonic()
     started_utc = datetime.now(timezone.utc).isoformat()
     try:
@@ -553,6 +663,7 @@ def main() -> int:
         load = EventLoad(base, fixture, password, args, diagnostics)
         asyncio.run(run_bounded_workload(load, args.seconds + args.grace_seconds))
         verification = verify_database(fixture)
+        memory.stop()
         metrics = load.metrics.summary()
         report = {
             "started_utc": started_utc,
@@ -567,10 +678,17 @@ def main() -> int:
             "database_bytes_before_workload": fixture.get("database_bytes_before_workload"),
             "routes": metrics, "errors": load.metrics.errors,
             "server_errors": server_failure_summary(diagnostics),
+            "application_memory": memory.summary(),
             "passed": verification["passed"] and not load.metrics.errors,
+            "pass_scope": "HTTP correctness, recorded task counts/scores, idempotency, and export contents only",
+            "latency_thresholds_enforced": False,
+            "constant_arrival_rate_enforced": False,
             "scope_limits": ["Does not measure Render CPU/RAM, internet clients, or regional server-to-DB latency.",
                 "Synthetic tiny photos use the legacy DB photo endpoint, not production R2.",
                 "All five stages intentionally open together; does not validate assignment-generation rules.",
+                "App RSS is measured on the test host, not a Render container or its enforced memory/CPU limit.",
+                "Closed-loop polling self-throttles under latency; it does not prove a constant six polls/second.",
+                "Fresh synthetic data does not measure historical-database growth, restart/failover or browser recovery.",
                 "Short runs cannot establish 12-hour endurance or guarantee availability."],
         }
         args.report.parent.mkdir(parents=True, exist_ok=True)
@@ -578,6 +696,7 @@ def main() -> int:
         print(json.dumps(report, indent=2))
         return 0 if report["passed"] else 1
     finally:
+        memory.stop()
         process.terminate()
         try:
             process.wait(timeout=10)

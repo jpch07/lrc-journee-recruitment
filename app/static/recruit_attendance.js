@@ -17,6 +17,7 @@ const state = {
   query: "",
   saves: new Map(),
   pollTimer: null,
+  pollInFlight: false,
 };
 
 function mutation(method, body) {
@@ -230,8 +231,11 @@ async function runRecruitSave(recruitId) {
 
 function startAttendancePolling() {
   clearInterval(state.pollTimer);
-  state.pollTimer = setInterval(() => {
-    if (!document.hidden && state.session) loadRoster({ background: true });
+  state.pollTimer = setInterval(async () => {
+    if (document.hidden || !state.session || state.pollInFlight) return;
+    state.pollInFlight = true;
+    try { await loadRoster({ background: true }); }
+    finally { state.pollInFlight = false; }
   }, 5000);
 }
 

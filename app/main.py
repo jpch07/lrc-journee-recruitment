@@ -270,8 +270,29 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
         reset_assessment_definition(runtime_token)
         reset_system(system_token)
     path = request.url.path
+    # Authenticated photo routes deliberately opt into private browser caching.
+    # Preserve that policy only after a successful image/conditional response;
+    # authentication failures, missing photos, and all other API data stay uncached.
+    private_photo_response = (
+        request.method == "GET"
+        and re.fullmatch(
+            r"/api/(?:(?:admin|view)/journeys/[^/]+/recruits/[^/]+|"
+            r"recruit-attendance/recruits/[^/]+|evaluator/tasks/[^/]+)/photo",
+            path,
+        ) is not None
+        and "private" in {
+            directive.strip().lower()
+            for directive in response.headers.get("Cache-Control", "").split(",")
+        }
+        and (
+            (response.status_code == 200 and response.headers.get("Content-Type", "").startswith("image/"))
+            or (response.status_code == 304 and bool(response.headers.get("ETag")))
+        )
+    )
     if path.startswith("/static/"):
         response.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    elif private_photo_response:
+        pass
     elif path == "/" or path == "/admin" or path.startswith("/admin/") or path == "/configure" or path == "/view" or path == "/evaluate" or path.startswith("/j/") or path.startswith("/recruit-attendance/") or re.match(r"^/[^/]+(?:/|$)", path):
         response.headers["Cache-Control"] = "no-store"
     return response

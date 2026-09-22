@@ -334,14 +334,14 @@ def assigned_recruit_photo(
     recruit = db.get(Recruit, assignment.recruit_id)
     if not recruit or not has_photo(recruit):
         raise HTTPException(status_code=404, detail="No photo available.")
-    data = read_recruit_photo(recruit)
-    if not data:
-        raise HTTPException(status_code=404, detail="No photo available.")
     headers = {"Cache-Control": "private, max-age=86400"}
     if recruit.photo_sha256:
         headers["ETag"] = f'"{recruit.photo_sha256}"'
         if request.headers.get("if-none-match") == headers["ETag"]:
             return Response(status_code=304, headers=headers)
+    data = read_recruit_photo(recruit)
+    if not data:
+        raise HTTPException(status_code=404, detail="No photo available.")
     return Response(
         content=data,
         media_type=recruit.photo_type or "image/webp",

@@ -23,6 +23,7 @@ const state = {
   profileId: null,
   dirty: false,
   pollTimer: null,
+  pollInFlight: false,
   lastProtectionPoll: 0,
   recruitAttendanceSaves: new Map(),
   loginAccounts: [],
@@ -290,16 +291,19 @@ async function openJourney(id, section = "dashboard") {
   $("#journeyCrumb").textContent = state.journey.name;
   await renderSection();
   state.pollTimer = setInterval(async () => {
-    if (document.hidden || state.dirty || !state.journey) return;
-    if (["dashboard", "monitoring"].includes(state.section)) {
-      try { await renderSection(true); } catch { /* a visible refresh remains available */ }
-    }
-    if (state.section === "attendance" && state.attendanceTab === "recruits") {
-      try { await syncAdminRecruitAttendance(); } catch { /* keep the confirmed data already shown */ }
-    }
-    if (state.section === "settings" && Date.now() - state.lastProtectionPoll > 15000) {
-      try { await refreshProtectionPanel(); } catch { /* keep the last visible status */ }
-    }
+    if (document.hidden || state.dirty || !state.journey || state.pollInFlight) return;
+    state.pollInFlight = true;
+    try {
+      if (["dashboard", "monitoring"].includes(state.section)) {
+        try { await renderSection(true); } catch { /* a visible refresh remains available */ }
+      }
+      if (state.section === "attendance" && state.attendanceTab === "recruits") {
+        try { await syncAdminRecruitAttendance(); } catch { /* keep the confirmed data already shown */ }
+      }
+      if (state.section === "settings" && Date.now() - state.lastProtectionPoll > 15000) {
+        try { await refreshProtectionPanel(); } catch { /* keep the last visible status */ }
+      }
+    } finally { state.pollInFlight = false; }
   }, 5000);
 }
 

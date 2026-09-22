@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import sys
 import pytest
 
 from scripts.load_test_event import (
-    Metrics, install_safe_server_handler, percentile, record_server_failure,
+    AppMemoryMonitor, Metrics, install_safe_server_handler, linux_memory_from_status,
+    percentile, process_memory_bytes, record_server_failure,
     run_bounded_workload, safe_exception_classes, server_failure_summary,
     serve_isolated_test_app, validate_test_database,
 )
@@ -125,3 +128,43 @@ def test_private_worker_cannot_be_started_without_harness_sentinel(monkeypatch, 
     monkeypatch.delenv("EVALDAY_LOADTEST_WORKER", raising=False)
     with pytest.raises(ValueError, match="Private worker"):
         serve_isolated_test_app(9000, tmp_path / "errors.jsonl")
+
+
+def test_linux_memory_parser_uses_resident_not_virtual_bytes():
+    assert linux_memory_from_status("VmSize:\t900000 kB\nVmRSS:\t2048 kB\nVmHWM:\t4096 kB\n") == {
+        "rss_bytes": 2097152, "os_peak_rss_bytes": 4194304, "method": "linux_proc_status"
+    }
+    assert linux_memory_from_status("VmSize:\t900000 kB\n") is None
+
+
+def test_memory_monitor_reports_os_high_water_mark_and_sampling_separately():
+    readings = iter([
+        {"rss_bytes": 1048576, "os_peak_rss_bytes": 2097152, "method": "test_probe"},
+        {"rss_bytes": 524288, "os_peak_rss_bytes": 3145728, "method": "test_probe"},
+    ])
+    monitor = AppMemoryMonitor(123, probe=lambda _pid: next(readings))
+    monitor.sample()
+    monitor.sample()
+    result = monitor.summary()
+    assert result["available"] and result["successful_samples"] == 2
+    assert result["sampled_peak_rss_bytes"] == 1048576
+    assert result["os_peak_rss_bytes"] == 3145728
+    assert result["peak_rss_mib"] == 3
+    assert result["memory_limit_enforced"] is False
+
+
+def test_unavailable_memory_is_null_not_a_zero_memory_claim():
+    monitor = AppMemoryMonitor(123, probe=lambda _pid: None)
+    monitor.sample()
+    result = monitor.summary()
+    assert not result["available"]
+    assert result["peak_rss_bytes"] is None
+    assert result["peak_rss_mib"] is None
+    assert result["unavailable_reason"]
+
+
+@pytest.mark.skipif(not sys.platform.startswith(("linux", "win32")), reason="OS memory probe unsupported")
+def test_memory_probe_reads_current_test_process_without_dependencies():
+    result = process_memory_bytes(os.getpid())
+    assert result and result["rss_bytes"] > 0
+    assert result["os_peak_rss_bytes"] >= result["rss_bytes"]

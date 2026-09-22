@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
+from pathlib import Path
+import smtplib
+import ssl
 import sys
+import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from email.message import EmailMessage
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -18,10 +25,125 @@ class ProbeResult:
     detail: str
 
 
+@dataclass(frozen=True)
+class EmailSettings:
+    host: str
+    port: int
+    username: str = field(repr=False)
+    password: str = field(repr=False)
+    sender: str
+    recipient: str
+
+
+def email_settings() -> EmailSettings | None:
+    names = ("EVALDAY_SMTP_HOST", "EVALDAY_SMTP_USERNAME", "EVALDAY_SMTP_PASSWORD", "EVALDAY_ALERT_FROM", "EVALDAY_ALERT_TO")
+    values = [os.environ.get(name, "").strip() for name in names]
+    if not all(values):
+        return None
+    try:
+        port = int(os.environ.get("EVALDAY_SMTP_PORT") or "587")
+        if not 1 <= port <= 65535 or any("\n" in value or "\r" in value for value in values):
+            return None
+    except ValueError:
+        return None
+    return EmailSettings(values[0], port, values[1], values[2], values[3], values[4])
+
+
+def send_email_alert(configuration: EmailSettings, app_url: str, state: str) -> bool:
+    """Only explicit SMTP credentials enable sending; never downgrade TLS."""
+    try:
+        message = EmailMessage()
+        label = "RECOVERED" if state == "healthy" else "OUTAGE"
+        message["Subject"] = f"Evalday {label}: {urlsplit(app_url).hostname}"
+        message["From"] = configuration.sender
+        message["To"] = configuration.recipient
+        message.set_content(
+            f"{app_url}\n\n"
+            + ("Both application health checks are working again." if state == "healthy" else
+               "Application health checks failed after all configured retries. Check the host and database dashboards.")
+            + f"\nChecked at {datetime.now(timezone.utc).isoformat()}\n"
+            + "This is an automated health alert, not a guarantee of availability."
+        )
+        context = ssl.create_default_context()
+        if configuration.port == 465:
+            connection = smtplib.SMTP_SSL(configuration.host, configuration.port, timeout=10, context=context)
+        else:
+            connection = smtplib.SMTP(configuration.host, configuration.port, timeout=10)
+        with connection as client:
+            if configuration.port != 465:
+                client.ehlo()
+                client.starttls(context=context)
+                client.ehlo()
+            client.login(configuration.username, configuration.password)
+            client.send_message(message)
+        print(f"Email alert accepted by SMTP server: {label}.", flush=True)
+        return True
+    except Exception as exc:
+        # SMTP exceptions may contain server responses or credentials. Log the
+        # class only; mail delivery must never stop application monitoring.
+        print(f"Email alert failed ({type(exc).__name__}); monitoring continues.", flush=True)
+        return False
+
+
+class EmailAlertMonitor:
+    def __init__(self, app_url: str, *, state_file: str | None = None, disabled: bool = False):
+        self.app_url = app_url.rstrip("/")
+        self.app_key = hashlib.sha256(self.app_url.encode()).hexdigest()
+        self.path = Path(state_file) if state_file else None
+        self.configuration = None if disabled else email_settings()
+        self.state = {"app": self.app_key, "status": None, "pending": None, "last_attempt": 0.0}
+        if self.path:
+            try:
+                saved = json.loads(self.path.read_text(encoding="utf-8"))
+                if (saved.get("app") == self.app_key
+                        and saved.get("status") in ("healthy", "outage", None)
+                        and saved.get("pending") in ("healthy", "outage", None)
+                        and isinstance(saved.get("last_attempt"), (int, float))):
+                    self.state = saved
+            except (OSError, ValueError, AttributeError):
+                pass
+        print("Email alerts: configured (delivery still requires verification)." if self.configuration else
+              "Email alerts: disabled or not configured; no email will be sent.", flush=True)
+
+    def observe(self, healthy: bool) -> None:
+        state = "healthy" if healthy else "outage"
+        previous = self.state["status"]
+        if state != previous:
+            self.state["status"] = state
+            # A first healthy reading is not a recovery and needs no email.
+            self.state["pending"] = state if previous is not None or not healthy else None
+            self.state["last_attempt"] = 0.0
+        now = time.time()
+        if (self.configuration and self.state["pending"] is not None
+                and now - self.state["last_attempt"] >= 300):
+            self.state["last_attempt"] = now
+            if send_email_alert(self.configuration, self.app_url, self.state["pending"]):
+                self.state["pending"] = None
+        if self.path:
+            temporary = None
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=self.path.parent, delete=False) as stream:
+                    temporary = stream.name
+                    json.dump(self.state, stream)
+                os.replace(temporary, self.path)
+            except OSError as exc:
+                print(f"Monitor state could not be saved ({type(exc).__name__}); monitoring continues.", flush=True)
+            finally:
+                if temporary and os.path.exists(temporary):
+                    try:
+                        os.unlink(temporary)
+                    except OSError:
+                        pass
+
+
 def health_urls(app_url: str) -> tuple[str, str]:
     base = app_url.strip().rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise ValueError("APP_URL must start with http:// or https://")
+    parsed = urlsplit(base)
+    if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
+        raise ValueError("APP_URL must be a public application URL without credentials, query or fragment")
     return f"{base}/health/live", f"{base}/health/ready"
 
 
@@ -95,8 +217,11 @@ def run_guard(
     retry_count: int,
     retry_delay_seconds: int,
     timeout_seconds: int,
+    state_file: str | None = None,
+    no_email: bool = False,
 ) -> int:
     health_urls(app_url)
+    alerts = EmailAlertMonitor(app_url, state_file=state_file, disabled=no_email)
     if initial_delay_seconds:
         print(f"Backup monitor offset: waiting {initial_delay_seconds} seconds.", flush=True)
         time.sleep(initial_delay_seconds)
@@ -107,12 +232,14 @@ def run_guard(
     while True:
         cycle_started = time.monotonic()
         completed += 1
-        if not check_cycle(
+        cycle_healthy = check_cycle(
             app_url,
             retry_count=retry_count,
             retry_delay_seconds=retry_delay_seconds,
             timeout_seconds=timeout_seconds,
-        ):
+        )
+        alerts.observe(cycle_healthy)
+        if not cycle_healthy:
             failed += 1
             print(f"Health cycle {completed} failed after all retries; monitoring continues.", flush=True)
 
@@ -141,6 +268,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--retry-count", type=int, default=5)
     parser.add_argument("--retry-delay-seconds", type=int, default=10)
     parser.add_argument("--timeout-seconds", type=int, default=30)
+    parser.add_argument("--state-file", help="Optional non-secret health/notification state for deduplication across runs")
+    parser.add_argument("--no-email", action="store_true", help="Disable email for a redundant monitor lane")
     args = parser.parse_args(argv)
     for name in ("duration_minutes", "cycles", "interval_seconds", "retry_count", "timeout_seconds"):
         value = getattr(args, name)
@@ -163,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
             retry_count=args.retry_count,
             retry_delay_seconds=args.retry_delay_seconds,
             timeout_seconds=args.timeout_seconds,
+            state_file=args.state_file,
+            no_email=args.no_email,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)

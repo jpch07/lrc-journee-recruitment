@@ -35,6 +35,16 @@ not included in the archive. In particular retain the session secret, admin hash
 sheet configuration, and R2 credentials. R2 photo objects must be backed up and
 checksum-verified separately: relational object metadata is not a photo backup.
 
+`scripts/backup_r2_photos.py` downloads the configured private R2 bucket without
+changing any remote object. It checks each object's stored SHA-256 when available,
+uses conditional ETag reads, rechecks the bucket inventory, and independently
+verifies the completed local archive. Object keys never become filesystem paths.
+It refuses to overwrite an existing archive and stops if the configured size
+budget is exceeded. A partial archive without `manifest.json` is not a backup.
+Set the four `LRC_R2_*` variables securely and choose a private, non-synced output
+directory; the archive is not encrypted. This does not recover any photos that
+remain inline in an inaccessible database.
+
 ## Read-only inventory and full export
 
 Provide the source connection string through `EVALDAY_SOURCE_DATABASE_URL`, never
@@ -133,3 +143,13 @@ keep all photos out of normal row queries, cap connection pools below the servic
 limit, and alert on failed authenticated readiness, low capacity and missing
 backups. A second independently prepared site is a fallback, not live replication:
 new evaluations recorded only on one site do not appear on the other automatically.
+
+`scripts/check_storage_usage.py --json` reports physical current-database storage
+for PostgreSQL, including indexes and TOAST. Only Aiven hosts receive a default
+1,000,000,000-byte (1 GB) budget; other PostgreSQL hosts require an explicit
+`--database-allowance-bytes` or `EVALDAY_DATABASE_ALLOWANCE_BYTES`. Reduce this budget
+to reserve room for other databases, WAL and service overhead, which the current-
+database measurement cannot capture. Cockroach output is explicitly an approximate
+logical-row estimate, not a physical quota measurement. Query failures return
+nonzero and unknown usage, never a false zero/OK. The tool does not send email or
+measure request-unit quotas; external monitoring and provider alerts remain required.
