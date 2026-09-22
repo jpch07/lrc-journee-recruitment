@@ -75,7 +75,10 @@ def send_email_alert(configuration: EmailSettings, app_url: str, state: str) -> 
                 client.starttls(context=context)
                 client.ehlo()
             client.login(configuration.username, configuration.password)
-            client.send_message(message)
+            refused = client.send_message(message)
+            if refused:
+                print("Email alert failed (recipient rejection); monitoring continues.", flush=True)
+                return False
         print(f"Email alert accepted by SMTP server: {label}.", flush=True)
         return True
     except Exception as exc:

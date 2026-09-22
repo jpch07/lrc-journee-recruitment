@@ -49,3 +49,10 @@ approved and free within its allowance. Use a non-production test endpoint and
 observe one deliberate outage and its recovery. Verify both emails and confirm
 that several repeated unhealthy checks produce only one delivered outage alert.
 Until this end-to-end test succeeds, describe email monitoring as **unverified**.
+
+The manually dispatched `test-monitor-email.yml` workflow sends two test messages
+using the hostname `outage-recovery-test.invalid`. It exercises the actual
+notification state machine (outage, repeated outage, recovery, repeated recovery)
+without touching the production website or its monitor state. Any SMTP failure or
+recipient refusal fails the test. A successful workflow proves SMTP acceptance,
+not inbox delivery; the recipient must still check the inbox/spam folder.

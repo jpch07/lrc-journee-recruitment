@@ -178,6 +178,23 @@ def test_email_failure_is_secret_safe_and_does_not_raise(monkeypatch, capsys):
     assert "monitoring continues" in output
 
 
+def test_partial_recipient_rejection_is_not_reported_as_success(monkeypatch, capsys):
+    class Client:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def ehlo(self): pass
+        def starttls(self, **kwargs): pass
+        def login(self, *args): pass
+        def send_message(self, message):
+            return {"private@example.test": (550, b"private rejection details")}
+    monkeypatch.setattr(event_day_guard.smtplib, "SMTP", Client)
+    assert event_day_guard.send_email_alert(configuration(), "https://example.test", "outage") is False
+    output = capsys.readouterr().out
+    assert "accepted" not in output
+    assert "private" not in output
+
+
 def test_email_only_on_outage_and_recovery_and_state_survives_next_run(monkeypatch, tmp_path):
     delivered = []
     monkeypatch.setattr(event_day_guard, "email_settings", configuration)

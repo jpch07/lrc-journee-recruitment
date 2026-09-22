@@ -1,0 +1,51 @@
+name: Verify monitoring email
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: monitoring-email-delivery-test
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Send two clearly labelled test transitions
+        env:
+          EVALDAY_SMTP_HOST: ${{ secrets.EVALDAY_SMTP_HOST }}
+          EVALDAY_SMTP_PORT: ${{ secrets.EVALDAY_SMTP_PORT }}
+          EVALDAY_SMTP_USERNAME: ${{ secrets.EVALDAY_SMTP_USERNAME }}
+          EVALDAY_SMTP_PASSWORD: ${{ secrets.EVALDAY_SMTP_PASSWORD }}
+          EVALDAY_ALERT_FROM: ${{ secrets.EVALDAY_ALERT_FROM }}
+          EVALDAY_ALERT_TO: ${{ secrets.EVALDAY_ALERT_TO }}
+        run: |
+          python - <<'PY'
+          from scripts import event_day_guard as guard
+          if guard.email_settings() is None:
+              raise SystemExit("Email configuration incomplete")
+          delivered = []
+          original = guard.send_email_alert
+          def send(configuration, app_url, state):
+              accepted = original(configuration, app_url, state)
+              if accepted:
+                  delivered.append(state)
+              return accepted
+          guard.send_email_alert = send
+          monitor = guard.EmailAlertMonitor("https://outage-recovery-test.invalid")
+          monitor.observe(True)
+          monitor.observe(False)
+          monitor.observe(False)
+          if monitor.state["pending"] is not None:
+              raise SystemExit("Outage test was not accepted by SMTP")
+          monitor.observe(True)
+          monitor.observe(True)
+          assert delivered == ["outage", "healthy"], "Expected exactly two accepted test messages"
+          print("SMTP accepted outage and recovery tests; repeated states produced no extra mail.")
+          print("Inbox delivery has not been verified; inspect the recipient inbox/spam.")
+          PY
