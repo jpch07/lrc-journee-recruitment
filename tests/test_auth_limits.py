@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 import threading
 import time
+from types import SimpleNamespace
 
 from argon2.exceptions import VerifyMismatchError
 from fastapi import HTTPException, Request
@@ -154,3 +156,66 @@ def test_named_login_keeps_other_failed_username_limited(client):
     assert client.post("/api/auth/login", json={"username": "JP Chaaya", "password": "test-password"}).status_code == 200
     response = client.post("/api/auth/login", json={"username": "Not A Real User", "password": "wrong"})
     assert response.status_code == 429
+
+
+def test_login_burst_performs_only_one_expired_session_cleanup_batch(monkeypatch):
+    monkeypatch.setattr(auth, "_session_cleanup_last_attempt", None)
+    calls = []
+    lock = threading.Lock()
+
+    class Database:
+        def execute(self, statement):
+            with lock:
+                calls.append(statement)
+            time.sleep(0.001)
+
+    with ThreadPoolExecutor(max_workers=33) as pool:
+        list(pool.map(lambda _: auth.clear_expired_sessions(Database()), range(33)))
+    assert len(calls) == 6
+
+
+def test_expired_session_cleanup_retries_after_interval_even_after_failed_attempt(monkeypatch):
+    now = [1000.0]
+    monkeypatch.setattr(auth.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(auth, "_session_cleanup_last_attempt", None)
+    calls = []
+
+    class Database:
+        def execute(self, statement):
+            calls.append(statement)
+            if len(calls) == 1:
+                raise RuntimeError("Transaction rolled back")
+
+    with pytest.raises(RuntimeError):
+        auth.clear_expired_sessions(Database())
+    auth.clear_expired_sessions(Database())
+    assert len(calls) == 1
+    now[0] += 61
+    auth.clear_expired_sessions(Database())
+    assert len(calls) == 7
+
+
+@pytest.mark.parametrize(("cookie", "require"), [
+    (auth.USER_COOKIE, auth.require_user),
+    (auth.PLATFORM_COOKIE, auth.require_platform),
+    (auth.ADMIN_COOKIE, auth.require_admin),
+    (auth.EVALUATOR_COOKIE, auth.require_evaluator),
+    (auth.RECRUIT_ATTENDANCE_COOKIE, auth.require_recruit_attendance),
+])
+def test_expired_sessions_are_rejected_even_when_physical_cleanup_is_throttled(monkeypatch, cookie, require):
+    monkeypatch.setattr(auth, "settings", replace(auth.settings, environment="development"))
+    monkeypatch.setattr(auth, "_session_cleanup_last_attempt", time.monotonic())
+    expired = SimpleNamespace(expires_at=datetime.now(timezone.utc) - timedelta(seconds=1))
+
+    class Database:
+        def execute(self, _):
+            raise AssertionError("Housekeeping should be throttled")
+
+        def get(self, *_):
+            return expired
+
+    auth.clear_expired_sessions(Database())
+    req = Request({"type": "http", "headers": [(b"cookie", f"{cookie}=expired-token".encode())]})
+    with pytest.raises(HTTPException) as caught:
+        require(req, Database())
+    assert caught.value.status_code == 401

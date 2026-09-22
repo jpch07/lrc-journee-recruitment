@@ -66,6 +66,16 @@ def test_database_connection_settings_can_be_overridden(monkeypatch) -> None:
     assert settings.database_connect_timeout_seconds == 3
 
 
+def test_default_pool_wait_handles_venue_login_burst_without_more_connections(monkeypatch) -> None:
+    monkeypatch.delenv("LRC_DATABASE_POOL_SIZE", raising=False)
+    monkeypatch.delenv("LRC_DATABASE_MAX_OVERFLOW", raising=False)
+    monkeypatch.delenv("LRC_DATABASE_POOL_TIMEOUT_SECONDS", raising=False)
+    settings = load_settings()
+    assert settings.database_pool_size == 5
+    assert settings.database_max_overflow == 0
+    assert settings.database_pool_timeout_seconds == 30
+
+
 @pytest.mark.parametrize(("name", "value"), [
     ("LRC_DATABASE_POOL_SIZE", "0"),
     ("LRC_DATABASE_MAX_OVERFLOW", "-1"),

@@ -34,7 +34,7 @@ class Settings:
     r2_bucket: str = ""
     database_pool_size: int = 5
     database_max_overflow: int = 0
-    database_pool_timeout_seconds: int = 10
+    database_pool_timeout_seconds: int = 30
     database_connect_timeout_seconds: int = 5
     database_pool_recycle_seconds: int = 300
 
@@ -117,7 +117,7 @@ def load_settings() -> Settings:
         r2_bucket=os.getenv("LRC_R2_BUCKET", "").strip(),
         database_pool_size=_bounded_int_env("LRC_DATABASE_POOL_SIZE", 5, 1, 100),
         database_max_overflow=_bounded_int_env("LRC_DATABASE_MAX_OVERFLOW", 0, 0, 100),
-        database_pool_timeout_seconds=_bounded_int_env("LRC_DATABASE_POOL_TIMEOUT_SECONDS", 10, 1, 120),
+        database_pool_timeout_seconds=_bounded_int_env("LRC_DATABASE_POOL_TIMEOUT_SECONDS", 30, 1, 120),
         database_connect_timeout_seconds=_bounded_int_env("LRC_DATABASE_CONNECT_TIMEOUT_SECONDS", 5, 1, 60),
         database_pool_recycle_seconds=_bounded_int_env("LRC_DATABASE_POOL_RECYCLE_SECONDS", 300, 30, 86400),
     )

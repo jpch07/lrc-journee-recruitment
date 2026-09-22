@@ -26,6 +26,8 @@ def clean_database():
     with auth._login_attempt_lock:
         auth._login_attempts.clear()
         auth._login_ip_attempts.clear()
+    with auth._session_cleanup_lock:
+        auth._session_cleanup_last_attempt = None
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield

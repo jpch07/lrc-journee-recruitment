@@ -32,7 +32,7 @@ def test_postgres_pool_does_not_use_unsupported_startup_options() -> None:
     assert "options" not in options["connect_args"]
     assert options["pool_size"] == 5
     assert options["max_overflow"] == 0
-    assert options["pool_timeout"] == 10
+    assert options["pool_timeout"] == 30
     assert options["pool_recycle"] == 300
     assert options["pool_use_lifo"] is True
 

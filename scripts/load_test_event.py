@@ -29,10 +29,12 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.parse import urlsplit
 
@@ -73,6 +75,87 @@ def percentile(values: list[float], percent: int) -> float:
         return 0.0
     ordered = sorted(values)
     return round(ordered[max(0, math.ceil(len(ordered) * percent / 100) - 1)], 2)
+
+
+def safe_exception_classes(error: BaseException) -> list[dict]:
+    """Classify failures without ever formatting an exception or its SQL/args."""
+    pending = [error]
+    seen = set()
+    classes = {}
+    while pending and len(seen) < 30:
+        item = pending.pop()
+        if not isinstance(item, BaseException) or id(item) in seen:
+            continue
+        seen.add(id(item))
+        kind = f"{type(item).__module__}.{type(item).__name__}"
+        if not re.fullmatch(r"[A-Za-z0-9_.]{1,180}", kind):
+            kind = "unclassified_exception"
+        state = getattr(item, "sqlstate", None)
+        state = state if isinstance(state, str) and re.fullmatch(r"[A-Z0-9]{5}", state) else None
+        entry = {"type": kind}
+        if state:
+            entry["sqlstate"] = state
+        classes[(kind, state or "")] = entry
+        # SQLAlchemy's driver exception, explicit causes and exception groups.
+        # Never inspect args, statement, params, request, locals or repr/str.
+        pending.extend([getattr(item, "orig", None), item.__cause__, item.__context__])
+        if isinstance(item, BaseExceptionGroup):
+            pending.extend(item.exceptions)
+    return [classes[key] for key in sorted(classes)]
+
+
+def record_server_failure(path: Path, error: BaseException):
+    event = {"classes": safe_exception_classes(error)}
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps(event, separators=(",", ":")) + "\n")
+
+
+def server_failure_summary(path: Path) -> dict:
+    result = {"events": 0, "classes": []}
+    if not path.exists():
+        return result
+    counts = defaultdict(int)
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # Ignore an incomplete last line during a concurrent write.
+        result["events"] += 1
+        for entry in event.get("classes", []):
+            counts[(entry["type"], entry.get("sqlstate", ""))] += 1
+    result["classes"] = [
+        {"type": kind, **({"sqlstate": state} if state else {}), "count": count}
+        for (kind, state), count in sorted(counts.items())
+    ]
+    return result
+
+
+def install_safe_server_handler(app, diagnostics: Path):
+    from fastapi.responses import JSONResponse
+
+    async def safe_server_error(_request, error):
+        record_server_failure(diagnostics, error)
+        return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
+
+    app.add_exception_handler(Exception, safe_server_error)
+
+
+def serve_isolated_test_app(port: int, diagnostics: Path) -> int:
+    """Private subprocess mode; unhandled failures expose only safe class metadata."""
+    target = os.getenv("LRC_DATABASE_URL", "")
+    database_name = (Path(target[len("sqlite:///"):]).stem if target.startswith("sqlite:///")
+                     else urlsplit(target).path.removeprefix("/"))
+    if (os.getenv("EVALDAY_LOADTEST_WORKER") != "isolated-test-only"
+            or not database_name.startswith(PREFIX)
+            or os.getenv("LRC_JOURNEE_ENV") != "development"):
+        raise ValueError("Private worker requires the dedicated test harness environment")
+    sys.path.insert(0, str(ROOT))
+    import uvicorn
+    from app.main import app
+
+    install_safe_server_handler(app, diagnostics)
+    uvicorn.run(app, host="127.0.0.1", port=port, access_log=False, log_level="critical")
+    return 0
 
 
 class Metrics:
@@ -219,12 +302,13 @@ def seed_database(recruit_count: int, evaluator_count: int, password: str) -> di
 
 
 class EventLoad:
-    def __init__(self, base: str, fixture: dict, password: str, args):
+    def __init__(self, base: str, fixture: dict, password: str, args, diagnostics: Path | None = None):
         self.base, self.fixture, self.password, self.args = base, fixture, password, args
         self.metrics = Metrics()
         self.clients = []
         self.deadline = 0.0
         self.login_slots = asyncio.Semaphore(args.login_burst)
+        self.diagnostics = diagnostics
 
     async def progress(self):
         while True:
@@ -238,6 +322,7 @@ class EventLoad:
                 "status_counts": dict(statuses),
                 "failed_requests": sum(count for status, count in statuses.items()
                                        if status == "0" or int(status) >= 400),
+                "server_errors": server_failure_summary(self.diagnostics) if self.diagnostics else {},
                 "steady_seconds_remaining": max(0, round(self.deadline - time.monotonic()))}), flush=True)
 
     async def request(self, client, method, path, label, *, expected=(200,), **kwargs):
@@ -441,9 +526,12 @@ def main() -> int:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     base = f"http://127.0.0.1:{port}"
+    diagnostics_directory = tempfile.TemporaryDirectory(prefix="evalday_loadtest_diagnostics_")
+    diagnostics = Path(diagnostics_directory.name) / "server-errors.jsonl"
+    worker_env = {**os.environ, "EVALDAY_LOADTEST_WORKER": "isolated-test-only"}
     # No raw application logs: traceback locals or connection exceptions can contain credentials.
-    process = subprocess.Popen([sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1",
-        "--port", str(port), "--no-access-log", "--log-level", "critical"], cwd=ROOT,
+    process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve-only", str(port),
+        str(diagnostics)], cwd=ROOT, env=worker_env,
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     started = time.monotonic()
@@ -462,7 +550,7 @@ def main() -> int:
             time.sleep(0.5)
         if not ready:
             raise RuntimeError("Isolated application startup exceeded readiness timeout")
-        load = EventLoad(base, fixture, password, args)
+        load = EventLoad(base, fixture, password, args, diagnostics)
         asyncio.run(run_bounded_workload(load, args.seconds + args.grace_seconds))
         verification = verify_database(fixture)
         metrics = load.metrics.summary()
@@ -478,6 +566,7 @@ def main() -> int:
             "http_host": "isolated_loopback_process", "verification": verification,
             "database_bytes_before_workload": fixture.get("database_bytes_before_workload"),
             "routes": metrics, "errors": load.metrics.errors,
+            "server_errors": server_failure_summary(diagnostics),
             "passed": verification["passed"] and not load.metrics.errors,
             "scope_limits": ["Does not measure Render CPU/RAM, internet clients, or regional server-to-DB latency.",
                 "Synthetic tiny photos use the legacy DB photo endpoint, not production R2.",
@@ -495,10 +584,13 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait(timeout=5)
+        diagnostics_directory.cleanup()
 
 
 if __name__ == "__main__":
     try:
+        if len(sys.argv) == 4 and sys.argv[1] == "--serve-only":
+            raise SystemExit(serve_isolated_test_app(int(sys.argv[2]), Path(sys.argv[3])))
         raise SystemExit(main())
     except (ValueError, RuntimeError) as error:
         print(f"Load test stopped: {error}", file=sys.stderr)

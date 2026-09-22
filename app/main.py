@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from functools import lru_cache
 import re
 import logging
 
@@ -124,19 +125,14 @@ def _request_system_id(request: Request) -> str | None:
                 return workspace_id
         user_token = request.cookies.get(USER_COOKIE, "")
         if user_token:
-            account_id = db.scalar(
-                select(UserSession.account_id)
+            system_id = db.scalar(
+                select(UserAccount.system_id)
+                .join(UserSession, UserSession.account_id == UserAccount.id)
                 .where(UserSession.token_hash == _token_hash(user_token))
                 .execution_options(bypass_recruitment_scope=True)
             )
-            if account_id:
-                system_id = db.scalar(
-                    select(UserAccount.system_id)
-                    .where(UserAccount.id == account_id)
-                    .execution_options(bypass_recruitment_scope=True)
-                )
-                if system_id:
-                    return system_id
+            if system_id:
+                return system_id
         slug = request.cookies.get(SYSTEM_COOKIE, "") or request.query_params.get("recruitment", "")
         if slug:
             system_id = db.scalar(
@@ -176,21 +172,30 @@ def _request_system_id(request: Request) -> str | None:
     return None
 
 
+@lru_cache(maxsize=32)
+def _parsed_runtime_definition(system_id: str, version: int, definition_json: str | None):
+    # Cache only validated configuration parsing, not database state, identity or
+    # permission checks. Including the exact JSON also handles an in-place repair
+    # of an old configuration version. Callers always receive a deep copy.
+    return load_stored_definition(loads(definition_json, {}) if definition_json else {})
+
+
 def _runtime_for_system(system_id: str):
     with SessionLocal() as db:
-        system = db.scalar(
-            select(AssessmentSystem).where(AssessmentSystem.id == system_id)
+        record = db.execute(
+            select(AssessmentSystem.published_version, AssessmentSystemVersion.definition_json)
+            .outerjoin(AssessmentSystemVersion, (
+                (AssessmentSystemVersion.system_id == AssessmentSystem.id)
+                & (AssessmentSystemVersion.version == AssessmentSystem.published_version)
+            ))
+            .where(AssessmentSystem.id == system_id)
             .execution_options(bypass_recruitment_scope=True)
-        )
-        if not system:
-            return None
-        record = db.scalar(
-            select(AssessmentSystemVersion).where(
-                AssessmentSystemVersion.system_id == system.id,
-                AssessmentSystemVersion.version == system.published_version,
-            ).execution_options(bypass_recruitment_scope=True)
-        )
-        return load_stored_definition(loads(record.definition_json, {}) if record else {})
+        ).first()
+    if record is None:
+        return None
+    # The current published version is checked on every request: publishing or
+    # fixing a configuration is visible immediately, without a time-based TTL.
+    return _parsed_runtime_definition(system_id, record.published_version, record.definition_json).model_copy(deep=True)
 
 
 def _slug_for_system(system_id: str) -> str | None:

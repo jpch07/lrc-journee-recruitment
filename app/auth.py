@@ -50,6 +50,9 @@ LOGIN_WINDOW_SECONDS = 300
 LOGIN_ACCOUNT_ATTEMPTS = 10
 LOGIN_IP_ATTEMPTS = 100
 LOGIN_MAX_BUCKETS = 10000
+_session_cleanup_lock = threading.Lock()
+_session_cleanup_last_attempt: float | None = None
+SESSION_CLEANUP_INTERVAL_SECONDS = 60
 
 
 def _token_hash(token: str) -> str:
@@ -527,6 +530,18 @@ def logout_recruit_attendance(
 
 
 def clear_expired_sessions(db: Session) -> None:
+    global _session_cleanup_last_attempt
+    monotonic_now = time.monotonic()
+    with _session_cleanup_lock:
+        if (_session_cleanup_last_attempt is not None
+                and monotonic_now - _session_cleanup_last_attempt < SESSION_CLEANUP_INTERVAL_SECONDS):
+            return
+        # This is opportunistic housekeeping, not an authorization check. Every
+        # require_* function rejects expired sessions independently. Reserving
+        # the attempt before SQL prevents thirty simultaneous logins from each
+        # running the same six DELETEs; a rollback delays cleanup by at most one
+        # interval until the next login, without extending anyone's access.
+        _session_cleanup_last_attempt = monotonic_now
     now = datetime.now(timezone.utc)
     db.execute(delete(AdminSession).where(AdminSession.expires_at < now))
     db.execute(delete(EvaluatorSession).where(EvaluatorSession.expires_at < now))
