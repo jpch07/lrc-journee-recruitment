@@ -54,3 +54,26 @@ def test_cockroach_cloud_url_uses_required_sqlalchemy_dialect(monkeypatch) -> No
         "postgresql://user:password@sample.cockroachlabs.cloud:26257/defaultdb?sslmode=verify-full",
     )
     assert load_settings().database_url.startswith("cockroachdb+psycopg://")
+
+
+def test_database_connection_settings_can_be_overridden(monkeypatch) -> None:
+    monkeypatch.setenv("LRC_DATABASE_POOL_SIZE", "4")
+    monkeypatch.setenv("LRC_DATABASE_MAX_OVERFLOW", "0")
+    monkeypatch.setenv("LRC_DATABASE_CONNECT_TIMEOUT_SECONDS", "3")
+    settings = load_settings()
+    assert settings.database_pool_size == 4
+    assert settings.database_max_overflow == 0
+    assert settings.database_connect_timeout_seconds == 3
+
+
+@pytest.mark.parametrize(("name", "value"), [
+    ("LRC_DATABASE_POOL_SIZE", "0"),
+    ("LRC_DATABASE_MAX_OVERFLOW", "-1"),
+    ("LRC_DATABASE_POOL_TIMEOUT_SECONDS", "0"),
+    ("LRC_DATABASE_CONNECT_TIMEOUT_SECONDS", "invalid"),
+    ("LRC_DATABASE_POOL_RECYCLE_SECONDS", "-1"),
+])
+def test_database_connection_settings_reject_unbounded_values(monkeypatch, name, value) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValueError, match=name):
+        load_settings()

@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -25,11 +26,25 @@ def health_urls(app_url: str) -> tuple[str, str]:
 
 
 def probe(url: str, *, timeout_seconds: int = 30) -> ProbeResult:
-    request = Request(url, headers={"User-Agent": "LRC-Event-Day-Guard/1.0"})
+    request = Request(url, headers={"User-Agent": "Evalday-Event-Day-Guard/2.0", "Accept": "application/json"})
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
-            body = response.read(512).decode("utf-8", errors="replace")
-            return ProbeResult(200 <= response.status < 300, response.status, body)
+            # Render's startup page can return HTTP 200. A successful HTTP
+            # response alone must never be reported as a working application.
+            if not 200 <= response.status < 300:
+                return ProbeResult(False, response.status, "Unexpected HTTP status")
+            raw = response.read(8193)
+            if len(raw) > 8192:
+                return ProbeResult(False, response.status, "Unexpected oversized health response")
+            try:
+                payload = json.loads(raw)
+            except (ValueError, UnicodeDecodeError):
+                return ProbeResult(False, response.status, "Expected health JSON; received a startup page or invalid response")
+            endpoint = urlsplit(url).path.rstrip("/").rsplit("/", 1)[-1]
+            expected_status = {"live": "ok", "ready": "ready"}.get(endpoint)
+            if not expected_status or not isinstance(payload, dict) or payload.get("status") != expected_status:
+                return ProbeResult(False, response.status, "Health JSON did not confirm the expected application state")
+            return ProbeResult(True, response.status, json.dumps({"status": expected_status}))
     except HTTPError as exc:
         return ProbeResult(False, exc.code, str(exc.reason))
     except (URLError, TimeoutError, OSError) as exc:

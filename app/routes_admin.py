@@ -268,10 +268,10 @@ def _cancel_protection_monitor(protection: EventDayProtection) -> None:
 
 @router.post("/login")
 def admin_login(payload: AdminLoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    enforce_login_rate_limit(request)
+    enforce_login_rate_limit(request, username="legacy-admin", workspace="legacy-admin")
     if not verify_admin_password(payload.password):
         raise HTTPException(status_code=403, detail="Invalid admin password.")
-    clear_login_attempts(request)
+    clear_login_attempts(request, username="legacy-admin", workspace="legacy-admin")
     clear_expired_sessions(db)
     session = create_admin_session(db, response, payload.display_name)
     _commit(db)

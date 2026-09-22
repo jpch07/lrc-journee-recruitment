@@ -27,6 +27,19 @@ def build_engine_options(database_url: str) -> dict:
     options: dict = {"pool_pre_ping": True}
     if database_url.startswith("sqlite"):
         options["connect_args"] = {"check_same_thread": False}
+    else:
+        # This is a per-process limit. Five connections with no overflow leave
+        # room for both old/new app instances during a deployment and database
+        # administration on a 20-connection service. Callers wait briefly rather
+        # than opening SQLAlchemy's default extra ten connections under load.
+        options.update(
+            pool_size=settings.database_pool_size,
+            max_overflow=settings.database_max_overflow,
+            pool_timeout=settings.database_pool_timeout_seconds,
+            pool_recycle=settings.database_pool_recycle_seconds,
+            pool_use_lifo=True,
+            connect_args={"connect_timeout": settings.database_connect_timeout_seconds},
+        )
     return options
 
 

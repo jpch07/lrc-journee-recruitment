@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import secrets
+import threading
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -37,7 +39,17 @@ USER_COOKIE = "lrc_journee_user"
 SYSTEM_COOKIE = "assessment_recruitment"
 PLATFORM_COOKIE = "assessment_platform"
 _password_hasher = PasswordHasher()
-_login_attempts: dict[str, list[float]] = {}
+# Default Argon2 parameters use approximately 64 MiB per operation. Keep those
+# parameters intact, but never run thirty of them concurrently on a small host.
+_password_workers = threading.BoundedSemaphore(2)
+_login_attempts: dict[tuple[str, str, str], list[float]] = {}
+_login_ip_attempts: dict[str, list[float]] = {}
+_login_attempt_lock = threading.Lock()
+_login_last_pruned = 0.0
+LOGIN_WINDOW_SECONDS = 300
+LOGIN_ACCOUNT_ATTEMPTS = 10
+LOGIN_IP_ATTEMPTS = 100
+LOGIN_MAX_BUCKETS = 10000
 
 
 def _token_hash(token: str) -> str:
@@ -50,20 +62,19 @@ def _aware(value: datetime) -> datetime:
 
 def verify_admin_password(password: str) -> bool:
     if settings.admin_password_hash:
-        try:
-            return _password_hasher.verify(settings.admin_password_hash, password)
-        except (VerifyMismatchError, InvalidHashError):
-            return False
+        return verify_password(settings.admin_password_hash, password)
     return secrets.compare_digest(password, settings.admin_password)
 
 
 def hash_password(password: str) -> str:
-    return _password_hasher.hash(password)
+    with _password_workers:
+        return _password_hasher.hash(password)
 
 
 def verify_password(password_hash: str, password: str) -> bool:
     try:
-        return _password_hasher.verify(password_hash, password)
+        with _password_workers:
+            return _password_hasher.verify(password_hash, password)
     except (VerifyMismatchError, InvalidHashError):
         return False
 
@@ -122,19 +133,55 @@ def ensure_platform_owner(db: Session, account: UserAccount) -> PlatformAccount:
     return platform
 
 
-def enforce_login_rate_limit(request: Request) -> None:
-    key = request.client.host if request.client else "unknown"
+def _login_keys(request: Request, username: str, workspace: str) -> tuple[str, tuple[str, str, str]]:
+    # Use the ASGI client address, not untrusted forwarded headers. Workspace is
+    # a resolved server-side ID/scope, never an arbitrary client-provided label.
+    address = request.client.host if request.client else "unknown"
+    normalized = " ".join(unicodedata.normalize("NFKC", username).casefold().split())
+    return address, (address, workspace, normalized)
+
+
+def _prune_login_attempts(now: float) -> None:
+    global _login_last_pruned
+    if now - _login_last_pruned < 60 and len(_login_attempts) + len(_login_ip_attempts) < LOGIN_MAX_BUCKETS:
+        return
+    cutoff = now - LOGIN_WINDOW_SECONDS
+    for buckets in (_login_attempts, _login_ip_attempts):
+        for key, attempts in list(buckets.items()):
+            retained = [stamp for stamp in attempts if stamp > cutoff]
+            if retained:
+                buckets[key] = retained
+            else:
+                del buckets[key]
+    _login_last_pruned = now
+
+
+def enforce_login_rate_limit(request: Request, *, username: str, workspace: str) -> None:
+    address, key = _login_keys(request, username, workspace)
     now = time.monotonic()
-    attempts = [stamp for stamp in _login_attempts.get(key, []) if now - stamp < 300]
-    if len(attempts) >= 10:
-        raise HTTPException(status_code=429, detail="Too many login attempts. Try again later.")
-    attempts.append(now)
-    _login_attempts[key] = attempts
+    with _login_attempt_lock:
+        _prune_login_attempts(now)
+        cutoff = now - LOGIN_WINDOW_SECONDS
+        attempts = [stamp for stamp in _login_attempts.get(key, []) if stamp > cutoff]
+        ip_attempts = [stamp for stamp in _login_ip_attempts.get(address, []) if stamp > cutoff]
+        needed = int(key not in _login_attempts) + int(address not in _login_ip_attempts)
+        if (len(attempts) >= LOGIN_ACCOUNT_ATTEMPTS
+                or len(ip_attempts) >= LOGIN_IP_ATTEMPTS
+                or len(_login_attempts) + len(_login_ip_attempts) + needed > LOGIN_MAX_BUCKETS):
+            raise HTTPException(
+                status_code=429, detail="Too many login attempts. Try again later.",
+                headers={"Retry-After": str(LOGIN_WINDOW_SECONDS)},
+            )
+        _login_attempts[key] = attempts + [now]
+        _login_ip_attempts[address] = ip_attempts + [now]
 
 
-def clear_login_attempts(request: Request) -> None:
-    key = request.client.host if request.client else "unknown"
-    _login_attempts.pop(key, None)
+def clear_login_attempts(request: Request, *, username: str, workspace: str) -> None:
+    _, key = _login_keys(request, username, workspace)
+    with _login_attempt_lock:
+        # A successful login never clears another person's failed attempts or
+        # the aggregate IP budget. Many assessors can share the venue's Wi-Fi.
+        _login_attempts.pop(key, None)
 
 
 def _set_cookie(response: Response, name: str, token: str) -> None:

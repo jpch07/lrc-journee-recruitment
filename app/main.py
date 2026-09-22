@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import ValidationError
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from .config import STATIC_DIR, settings
 from .auth import SYSTEM_COOKIE, USER_COOKIE, _token_hash, ensure_owner_account, ensure_platform_owner, set_system_cookie
@@ -192,6 +193,16 @@ def _runtime_for_system(system_id: str):
         return load_stored_definition(loads(record.definition_json, {}) if record else {})
 
 
+def _slug_for_system(system_id: str) -> str | None:
+    # Keep each synchronous session entirely inside one worker. Returning only
+    # a scalar prevents a connection or ORM session crossing thread boundaries.
+    with SessionLocal() as db:
+        return db.scalar(
+            select(AssessmentSystem.slug).where(AssessmentSystem.id == system_id)
+            .execution_options(bypass_recruitment_scope=True)
+        )
+
+
 def _workspace_configuration_error(path: str):
     """Keep a malformed workspace isolated and always offer a working way out."""
     if path.startswith("/api/"):
@@ -231,12 +242,15 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
             content={"detail": "The data service is temporarily unavailable.", "ready": False},
             headers={"Retry-After": "15"},
         )
-    system_id = _request_system_id(request)
+    # Synchronous queries (including pool checkout and connection retries) must
+    # not block the ASGI event loop. Starlette uses AnyIO's bounded shared worker
+    # pool and copies contextvars, preserving the per-request tenant context.
+    system_id = await run_in_threadpool(_request_system_id, request)
     system_token = select_system(system_id)
     runtime_token = None
     try:
         try:
-            definition = _runtime_for_system(system_id) if system_id else None
+            definition = await run_in_threadpool(_runtime_for_system, system_id) if system_id else None
         except ValidationError:
             logger.error("Invalid saved configuration for workspace %s on %s", system_id, path)
             return _workspace_configuration_error(path)
@@ -244,11 +258,7 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
             runtime_token = activate_assessment_definition(definition)
         response = await call_next(request)
         if system_id and not request.cookies.get(SYSTEM_COOKIE):
-            with SessionLocal() as cookie_db:
-                slug = cookie_db.scalar(
-                    select(AssessmentSystem.slug).where(AssessmentSystem.id == system_id)
-                    .execution_options(bypass_recruitment_scope=True)
-                )
+            slug = await run_in_threadpool(_slug_for_system, system_id)
             if slug:
                 set_system_cookie(response, slug)
     finally:

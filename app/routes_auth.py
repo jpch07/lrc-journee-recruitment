@@ -227,7 +227,6 @@ def usernames(recruitment: str | None = None, db: Session = Depends(get_db)):
 
 @router.post("/login")
 def login(payload: AccountLoginRequest, request: Request, response: Response, db: Session = Depends(get_db)):
-    enforce_login_rate_limit(request)
     username = " ".join(payload.username.split())
     system = _system_by_slug(db, payload.recruitment) if payload.recruitment else None
     selected_id = system.id if system else current_system_id()
@@ -244,10 +243,12 @@ def login(payload: AccountLoginRequest, request: Request, response: Response, db
             .execution_options(bypass_recruitment_scope=True)
         ))
         account = matches[0] if len(matches) == 1 else None
+    rate_scope = f"workspace:{account.system_id if account else selected_id or 'unselected'}"
+    enforce_login_rate_limit(request, username=username, workspace=rate_scope)
     if not account or not account.active or not verify_password(account.password_hash, payload.password):
         raise HTTPException(status_code=403, detail="Invalid username or password.")
     select_system(account.system_id)
-    clear_login_attempts(request)
+    clear_login_attempts(request, username=username, workspace=rate_scope)
     clear_expired_sessions(db)
     session = create_user_session(db, response, account)
     system = db.get(AssessmentSystem, account.system_id) if current_system_id() == account.system_id else db.scalar(

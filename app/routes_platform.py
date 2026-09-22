@@ -120,7 +120,7 @@ def register(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    enforce_login_rate_limit(request)
+    enforce_login_rate_limit(request, username=payload.username, workspace="platform")
     duplicate = db.scalar(
         select(PlatformAccount.id)
         .where(func.lower(PlatformAccount.username) == payload.username.casefold())
@@ -133,7 +133,7 @@ def register(
     db.flush()
     clear_expired_sessions(db)
     session = create_platform_session(db, response, account)
-    clear_login_attempts(request)
+    clear_login_attempts(request, username=payload.username, workspace="platform")
     db.commit()
     return _platform_payload(account, session.csrf_token)
 
@@ -145,7 +145,7 @@ def login(
     response: Response,
     db: Session = Depends(get_db),
 ):
-    enforce_login_rate_limit(request)
+    enforce_login_rate_limit(request, username=payload.username, workspace="platform")
     account = db.scalar(
         select(PlatformAccount)
         .where(func.lower(PlatformAccount.username) == payload.username.casefold())
@@ -155,7 +155,7 @@ def login(
         raise HTTPException(status_code=403, detail="Invalid username or password.")
     clear_expired_sessions(db)
     session = create_platform_session(db, response, account)
-    clear_login_attempts(request)
+    clear_login_attempts(request, username=payload.username, workspace="platform")
     db.commit()
     return _platform_payload(account, session.csrf_token)
 

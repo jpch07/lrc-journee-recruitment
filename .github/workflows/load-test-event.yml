@@ -1,0 +1,70 @@
+name: Isolated event load test
+
+on:
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: Workload window (30-900 seconds; not a 12-hour endurance test)
+        type: number
+        default: 600
+        required: true
+      login_burst:
+        description: Concurrent named logins from the same network
+        type: choice
+        options:
+          - "30"
+          - "3"
+        default: "30"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: isolated-event-load-test
+  cancel-in-progress: false
+
+jobs:
+  load-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install runtime dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test dedicated empty database only
+        env:
+          # Use a dedicated SQL user restricted to the named test database.
+          # URI must name evalday_loadtest_*; the script refuses production names.
+          EVALDAY_LOADTEST_DATABASE_URL: ${{ secrets.EVALDAY_LOADTEST_DATABASE_URL }}
+          TEST_SECONDS: ${{ inputs.seconds }}
+          LOGIN_BURST: ${{ inputs.login_burst }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, subprocess, sys
+          seconds = int(os.environ["TEST_SECONDS"])
+          burst = int(os.environ["LOGIN_BURST"])
+          if not 30 <= seconds <= 900 or burst not in (3, 30):
+              raise SystemExit("Invalid bounded test settings")
+          if not os.environ.get("EVALDAY_LOADTEST_DATABASE_URL"):
+              raise SystemExit("Dedicated test database secret is not configured")
+          subprocess.run([
+              sys.executable, "scripts/load_test_event.py",
+              "--seconds", str(seconds), "--login-burst", str(burst),
+              "--timeout", "45", "--grace-seconds", "300",
+              "--recruits", "20", "--evaluators", "30",
+              "--report", "outputs/loadtest-hosted-2030.json",
+          ], check=True)
+          PY
+      - name: Upload synthetic metrics only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: isolated-event-loadtest-${{ github.run_id }}
+          path: outputs/loadtest-hosted-2030.json
+          if-no-files-found: warn
+          retention-days: 14

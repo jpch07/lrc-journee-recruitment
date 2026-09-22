@@ -22,6 +22,10 @@ from app.main import app
 
 @pytest.fixture(autouse=True)
 def clean_database():
+    from app import auth
+    with auth._login_attempt_lock:
+        auth._login_attempts.clear()
+        auth._login_ip_attempts.clear()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     yield
