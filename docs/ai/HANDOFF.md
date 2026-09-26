@@ -1,14 +1,14 @@
 # Handoff to the next coding session / Codex
-Status: PLANNED ONLY; adapted for Gemini CLI in VS Code. This template does not indicate any implementation or test has occurred.
+Status: TASK A, C1 AND C2 IMPLEMENTED LOCALLY. Verified tests recorded below. NOT DEPLOYED.
 
 ## Current checkpoint
 - Working folder: intended separate lrc-management-gemini folder; verify locally
 - Branch: intended management-gemini-fixes; verify locally
 - Baseline commit:
 - Last reviewed commit:
-- Selected task: onboarding only, then local test setup, then A
-- Completed tasks: Task A, C1 performance optimization
-- Next smallest step: C2 — Batch profile evaluation/history loadin
+- Selected task: C2 - Profile evaluation/history batching; implemented and tested locally
+- Completed tasks: Task A, C1 performance optimization; C2 profile evaluation/history batching
+- Next smallest step: C3 - Review redundant General-assessment autosaves (not implemented)
 
 ## Accepted product rules
 - Numeric propagation rule (E0 is proposed until accepted):
@@ -86,3 +86,74 @@ Remaining work:
 - Per-evaluation/profile-history queries and redundant General
   assessment saves remain separate follow-up items.
 - C2 has not been implemented.
+
+<!-- C2_VERIFIED_CHECKPOINT_START -->
+## C2 verified checkpoint - Profile evaluation/history batching
+
+Status: IMPLEMENTED LOCALLY; focused and broader regression checks passed.
+Deployment: NOT DEPLOYED by this workflow.
+Previous checkpoint: 924facc (C1).
+
+Evidence source: user-provided terminal output reviewed in ChatGPT. This
+recorder writes that evidence; it does not execute or independently rerun tests.
+The following results describe the code inspected at this checkpoint only.
+
+### Scope
+- Application change: app/routes_admin.py only.
+- Added request-local _profile_evaluation_details() to batch submissions and
+  their complete version histories for the selected recruit's assignments.
+- _submission_payload() accepts keyword-only prefetched versions. None retains
+  its original standalone query; an empty list does not trigger another query.
+- Existing per-activity assignment queries and their returned order remain.
+- Histories remain newest-version-first within each submission.
+- C1, scoring/ranking functions, authorization, admin adjustments, profile
+  audit history, and frontend files are not changed by this patch.
+- No cross-request cache, schema change, migration, or new write path.
+
+### Verified local results
+Environment: Windows, Python 3.11.3, pytest 9.1.1; disposable SQLite test DB.
+
+Focused command:
+`python -m pytest tests/test_viewer_performance_c1.py tests/test_profile_performance_c2.py -s -v`
+
+Exact focused summary: `19 passed in 16.96s`.
+
+Broader command: `python -m pytest -m "not browser"`
+
+Exact broader summary: `296 passed, 1 deselected in 92.03s (0:01:32)`.
+The deselected test was not run by that command. This is not a statement that
+all possible tests, browsers, or production environments were verified.
+
+C2 helper measurement on the two-linked-activity fixture:
+- Original helper: 9 SELECT queries.
+- Batched helper: 4 SELECT queries.
+- Reduction: 5 SELECT queries.
+
+C1 helper measurement remains 39 versus 15 SELECTs (24 fewer) for its separate
+two-completed-Journee fixture. These are separate helper measurements, not a
+combined full-request benchmark or a measured production speedup.
+
+The focused runs included whole-profile comparison for management (individual
+and completed scopes) and admin; complete submission histories; missing and
+draft cases; no-query handling for empty prefetched histories; and visibility
+of new history on the next request. C1 regressions also passed.
+
+### Checkpoint files
+- app/routes_admin.py
+- tests/test_profile_performance_c2.py
+- docs/ai/C2_CHANGE_NOTES.md
+- docs/ai/HANDOFF.md
+
+The patching and documentation helper programs are local tools, not part of
+this checkpoint. Stage only the four files listed above.
+
+### Remaining work and rollback
+- Production response time and PostgreSQL behavior have not been measured.
+- The existing per-activity assignment queries remain intentionally.
+- Next planned task: C3, review redundant General-assessment autosaves and
+  design a bounded fix that preserves edits, conflict handling, and retries.
+- C3 and later ranking/grade/color features are NOT implemented here.
+- No rollback has been performed. After committing, prefer a reviewed revert
+  of the C2 commit over restoring entire files containing subsequent work.
+- No database rollback or data deletion is needed for this read-only change.
+<!-- C2_VERIFIED_CHECKPOINT_END -->

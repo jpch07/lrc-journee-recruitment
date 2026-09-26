@@ -2643,14 +2643,22 @@ def journey_results(
     return result_snapshot(db, get_journey_or_404(db, journey_id))
 
 
-def _submission_payload(db: Session, submission: EvaluationSubmission, evaluator_name: str) -> dict:
-    versions = list(
-        db.scalars(
-            select(SubmissionVersion)
-            .where(SubmissionVersion.submission_id == submission.id)
-            .order_by(SubmissionVersion.version.desc())
+def _submission_payload(
+    db: Session,
+    submission: EvaluationSubmission,
+    evaluator_name: str,
+    *,
+    versions: list[SubmissionVersion] | None = None,
+) -> dict:
+    # None means not prefetched; an empty list means genuinely no history.
+    if versions is None:
+        versions = list(
+            db.scalars(
+                select(SubmissionVersion)
+                .where(SubmissionVersion.submission_id == submission.id)
+                .order_by(SubmissionVersion.version.desc())
+            )
         )
-    )
     return {
         "id": submission.id,
         "evaluatorName": evaluator_name,
@@ -2674,6 +2682,72 @@ def _submission_payload(db: Session, submission: EvaluationSubmission, evaluator
             for item in versions
         ],
     }
+
+
+def _profile_evaluation_details(
+    db: Session,
+    recruit_id: str,
+    states: list[ActivityState],
+    evaluators: dict[str, Evaluator],
+) -> dict[str, list[dict]]:
+    """Batch evaluations/history without changing assignment or version order.
+
+    The caller has already resolved the authorized Journee and recruit.
+    Keep its existing per-state assignment queries and ordering. Batch only
+    the submissions and their complete history for these assignment IDs.
+    All prefetched objects belong to this call; no cross-request cache.
+    """
+    details: dict[str, list[dict]] = {code: [] for code in ACTIVITY_ORDER}
+    state_assignments: list[tuple[ActivityState, list[Assignment]]] = []
+    assignment_ids: list[str] = []
+    for state in states:
+        if not state.assignment_round_id:
+            continue
+        assignments = list(
+            db.scalars(
+                select(Assignment).where(
+                    Assignment.round_id == state.assignment_round_id,
+                    Assignment.recruit_id == recruit_id,
+                )
+            )
+        )
+        state_assignments.append((state, assignments))
+        assignment_ids.extend(item.id for item in assignments)
+
+    submissions = {
+        item.assignment_id: item
+        for item in db.scalars(select(EvaluationSubmission).where(
+            EvaluationSubmission.assignment_id.in_(assignment_ids)
+        ))
+    } if assignment_ids else {}
+    versions_by_submission: dict[str, list[SubmissionVersion]] = {}
+    if submissions:
+        submission_ids = [item.id for item in submissions.values()]
+        for version in db.scalars(
+            select(SubmissionVersion)
+            .where(SubmissionVersion.submission_id.in_(submission_ids))
+            .order_by(SubmissionVersion.version.desc())
+        ):
+            versions_by_submission.setdefault(version.submission_id, []).append(version)
+
+    for state, assignments in state_assignments:
+        for assignment in assignments:
+            submission = submissions.get(assignment.id)
+            evaluator = evaluators.get(assignment.evaluator_id)
+            evaluator_name = evaluator.name if evaluator else "Unknown"
+            details[state.code].append({
+                "assignmentId": assignment.id,
+                "slot": assignment.slot,
+                "roomNumber": assignment.room_number,
+                "evaluatorId": assignment.evaluator_id,
+                "evaluatorName": evaluator_name,
+                "evaluatorRole": evaluator.role if evaluator else "",
+                "submission": _submission_payload(
+                    db, submission, evaluator_name,
+                    versions=versions_by_submission.get(submission.id, []),
+                ) if submission else None,
+            })
+    return details
 
 
 def _admin_evaluation_payload(item: AdminEvaluation | None) -> dict | None:
@@ -2987,36 +3061,7 @@ def recruit_profile(
     legacy_assessment_values = stored_general_assessment_values(assessment)
     evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
     states = list(db.scalars(select(ActivityState).where(ActivityState.journey_id == journey.id)))
-    details: dict[str, list[dict]] = {code: [] for code in ACTIVITY_ORDER}
-    for state in states:
-        if not state.assignment_round_id:
-            continue
-        assignments = list(
-            db.scalars(
-                select(Assignment).where(
-                    Assignment.round_id == state.assignment_round_id,
-                    Assignment.recruit_id == recruit.id,
-                )
-            )
-        )
-        for assignment in assignments:
-            submission = db.scalar(
-                select(EvaluationSubmission).where(EvaluationSubmission.assignment_id == assignment.id)
-            )
-            evaluator = evaluators.get(assignment.evaluator_id)
-            details[state.code].append(
-                {
-                    "assignmentId": assignment.id,
-                    "slot": assignment.slot,
-                    "roomNumber": assignment.room_number,
-                    "evaluatorId": assignment.evaluator_id,
-                    "evaluatorName": evaluator.name if evaluator else "Unknown",
-                    "evaluatorRole": evaluator.role if evaluator else "",
-                    "submission": _submission_payload(db, submission, evaluator.name if evaluator else "Unknown")
-                    if submission
-                    else None,
-                }
-            )
+    details = _profile_evaluation_details(db, recruit.id, states, evaluators)
     admin_evaluations = list(db.scalars(select(AdminEvaluation).where(
         AdminEvaluation.journey_id == journey.id,
         AdminEvaluation.recruit_id == recruit.id,
