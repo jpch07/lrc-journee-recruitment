@@ -181,6 +181,18 @@ def _completed_view(db: Session) -> dict:
     }
 
 
+def _completed_results(db: Session) -> dict:
+    """Build completed-Journee results without unused roster/metadata payloads."""
+    journeys = list(db.scalars(
+        select(Journey).where(Journey.status == "completed").order_by(
+            Journey.event_date.desc(), func.lower(Journey.name)
+        )
+    ))
+    return _aggregate_results([
+        (journey, result_snapshot(db, journey)) for journey in journeys
+    ])
+
+
 @router.get("/journeys")
 def journeys(context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
     del context
@@ -216,12 +228,12 @@ def profile_view(
         journey = get_journey_or_404(db, journey_id)
         if journey.status != "completed":
             raise HTTPException(status_code=404, detail="Recruit is not part of a completed Journee.")
-        aggregate = _completed_view(db)
-        result = next((item for item in aggregate["results"]["rows"] if item["profileKey"] == f"{journey_id}:{recruit_id}"), None)
+        aggregate = _completed_results(db)
+        result = next((item for item in aggregate["rows"] if item["profileKey"] == f"{journey_id}:{recruit_id}"), None)
         if result is not None:
             payload["result"] = result
-        payload["dimensionAverages"] = aggregate["results"]["dimensionAverages"]
-        payload["activityAverages"] = aggregate["results"]["activityAverages"]
+        payload["dimensionAverages"] = aggregate["dimensionAverages"]
+        payload["activityAverages"] = aggregate["activityAverages"]
         for code in DIMENSION_ORDER:
             if result is not None and code in payload.get("dimensionBreakdowns", {}):
                 payload["dimensionBreakdowns"][code]["rank"] = result["dimensions"][code]["rank"]

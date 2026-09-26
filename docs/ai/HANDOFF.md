@@ -7,8 +7,8 @@ Status: PLANNED ONLY; adapted for Gemini CLI in VS Code. This template does not 
 - Baseline commit:
 - Last reviewed commit:
 - Selected task: onboarding only, then local test setup, then A
-- Completed tasks:
-- Next smallest step:
+- Completed tasks: Task A, C1 performance optimization
+- Next smallest step: C2 — Batch profile evaluation/history loadin
 
 ## Accepted product rules
 - Numeric propagation rule (E0 is proposed until accepted):
@@ -46,3 +46,43 @@ Keep full logs outside the brief. Summarize relevant failures with exact test na
 - Access limitations or unresolved conflicts:
 
 Do not paste secrets, personal recruit data, complete chat transcripts or huge logs here.
+## C1 checkpoint — Results-only aggregation for completed profiles
+
+Status: Implemented locally; focused regression tests passed.
+Deployment: NOT DEPLOYED.
+
+Application change:
+- Added `_completed_results(db)` in `app/routes_viewer.py`.
+- Completed-scope profile loading uses this results-only helper
+  instead of building the complete attendance/management dataset.
+- The full `/api/view/completed` endpoint remains unchanged.
+- Existing scoring/ranking functions and completed-Journee
+  eligibility remain unchanged.
+- No database migration, cross-request cache, or frontend change.
+
+Files:
+- app/routes_viewer.py
+- tests/test_viewer_performance_c1.py
+
+Focused verification:
+- Command: python -m pytest tests/test_viewer_performance_c1.py -s -v
+- Environment: Windows, Python 3.11.3, pytest 9.1.1.
+- Actual result: 9 passed in 6.94s.
+
+Measured query counts:
+- Fixture: two completed Journees with linked evaluator submissions.
+- Original `_completed_view`: 39 SELECT queries.
+- New `_completed_results`: 15 SELECT queries.
+- Difference: 24 fewer SELECT queries.
+- These measurements cover helper calls on local SQLite, not
+  full HTTP requests or production response time.
+
+Broader regression verification:
+- Command: python -m pytest -m "not browser"
+- Actual result: ============================================================== 286 passed, 1 deselected in 87.25s (0:01:27) ==============================================================
+
+Remaining work:
+- Production performance has not been measured.
+- Per-evaluation/profile-history queries and redundant General
+  assessment saves remain separate follow-up items.
+- C2 has not been implemented.
