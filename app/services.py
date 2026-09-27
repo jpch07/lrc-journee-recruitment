@@ -406,9 +406,11 @@ def latest_room_plan(db: Session, journey_id: str, status: str, activity_code: s
     )
 
 
-def room_plan_payload(db: Session, plan: RoomPlan) -> dict:
-    recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == plan.journey_id))}
-    evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == plan.journey_id))}
+def room_plan_payload(db: Session, plan: RoomPlan, *, recruits=None, evaluators=None) -> dict:
+    if recruits is None:
+        recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == plan.journey_id))}
+    if evaluators is None:
+        evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == plan.journey_id))}
     recruit_members = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == plan.id)))
     evaluator_members = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == plan.id)))
     operation = db.scalar(select(ActivityOperation).where(
@@ -915,10 +917,12 @@ def create_assignment_preview(
     return round_record
 
 
-def assignment_round_payload(db: Session, round_record: AssignmentRound) -> dict:
+def assignment_round_payload(db: Session, round_record: AssignmentRound, *, recruits=None, evaluators=None) -> dict:
     assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
-    recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == round_record.journey_id))}
-    evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == round_record.journey_id))}
+    if recruits is None:
+        recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == round_record.journey_id))}
+    if evaluators is None:
+        evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == round_record.journey_id))}
     warnings = [
         message
         for message in loads(round_record.warnings_json, [])

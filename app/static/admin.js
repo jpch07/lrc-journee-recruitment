@@ -282,14 +282,15 @@ async function openJourney(id, section = "dashboard") {
   if (!guardDirty()) return;
   clearInterval(state.pollTimer);
   if (!state.journey || state.journey.id !== id) state.profileId = null;
-  state.journey = await api(`/api/admin/journeys/${id}`);
+  const dashboard = section === "dashboard" ? await api(`/api/admin/journeys/${id}/dashboard?include_details=true`) : null;
+  state.journey = dashboard?.journey || await api(`/api/admin/journeys/${id}`);
   document.body.classList.remove("permissions-standalone");
   state.section = section;
   state.dirty = false;
   $("#libraryView").classList.add("hidden");
   $("#workspaceView").classList.remove("hidden");
   $("#journeyCrumb").textContent = state.journey.name;
-  await renderSection();
+  await renderSection(false, dashboard);
   state.pollTimer = setInterval(async () => {
     if (document.hidden || state.dirty || !state.journey || state.pollInFlight) return;
     state.pollInFlight = true;
@@ -331,12 +332,12 @@ $("#workspaceNav").addEventListener("click", async (event) => {
   await renderSection();
 });
 
-async function renderSection(background = false) {
+async function renderSection(background = false, dashboard = null) {
   if (!state.journey && state.section !== "permissions") return;
   $$("#workspaceNav button").forEach((button) => button.classList.toggle("active", button.dataset.section === state.section));
   if (!background) host.innerHTML = `<div class="loading-card">Loading ${h(state.section)}…</div>`;
   try {
-    if (state.section === "dashboard") await renderDashboard();
+    if (state.section === "dashboard") await renderDashboard(dashboard);
     if (state.section === "attendance") await renderAttendance();
     if (state.section === "assignments") await renderAssignments();
     if (state.section === "monitoring") await renderMonitoring();
@@ -353,8 +354,8 @@ function sectionHeading(eyebrow, title, subtitle, actions = "") {
   return `<div class="section-heading"><div><p class="eyebrow">${h(eyebrow)}</p><h1>${h(title)}</h1><p class="muted">${h(subtitle)}</p></div><div class="heading-actions">${actions}</div></div>`;
 }
 
-async function renderDashboard() {
-  const data = await api(`/api/admin/journeys/${state.journey.id}/dashboard`);
+async function renderDashboard(prefetched = null) {
+  const data = prefetched || await api(`/api/admin/journeys/${state.journey.id}/dashboard`);
   const presentRecruits = data.journey.presentRecruitCount;
   const presentEvaluators = data.journey.presentEvaluatorCount;
   const expectedSubmissions = data.activeMonitoring ? data.activeMonitoring.recruits.reduce((sum, item) => sum + item.expected, 0) : 0;
@@ -893,24 +894,30 @@ function uploadSinglePhoto(recruitId) {
   input.click();
 }
 
-async function renderAssignmentsV2() {
+let assignmentLoadSequence = 0;
+const assignmentLoads = new Map();
+async function loadAssignmentWorkspace(journeyId, activity) {
+  const url = `/api/admin/journeys/${journeyId}/activities/${activity}/workspace`;
+  if (!assignmentLoads.has(url)) {
+    const pending = api(url).finally(() => { if (assignmentLoads.get(url) === pending) assignmentLoads.delete(url); });
+    assignmentLoads.set(url, pending);
+  }
+  return assignmentLoads.get(url);
+}
+
+async function renderAssignmentsV2(prefetched = null) {
   const assignmentActivities = (state.system?.activities || state.journey.activities)
     .filter(activity => !activity.assignment?.reuseAssignmentsFrom);
   if (!assignmentActivities.some(item => (item.key || item.code) === state.assignmentActivity)) {
     state.assignmentActivity = assignmentActivities[0]?.key || assignmentActivities[0]?.code;
   }
-  const configured = configuredActivity(state.assignmentActivity);
+  const journeyId = state.journey.id, activity = state.assignmentActivity;
+  const sequence = ++assignmentLoadSequence;
+  const configured = configuredActivity(activity);
   const groupBased = configured?.assignment?.mode === "automatic_groups";
-  const roomRequests = groupBased ? [
-    api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms?status=published`),
-    api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms?status=preview`),
-  ] : [Promise.resolve(null), Promise.resolve(null)];
-  const [operation, publishedRooms, workingRooms, publishedRound, workingRound] = await Promise.all([
-    api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/operation`),
-    ...roomRequests,
-    api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}?status=published`),
-    api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}?status=preview`),
-  ]);
+  const bundle = prefetched || await loadAssignmentWorkspace(journeyId, activity);
+  if (sequence !== assignmentLoadSequence || state.journey?.id !== journeyId || state.assignmentActivity !== activity || state.section !== "assignments" || state.dirty) return;
+  const {operation, publishedRooms, workingRooms, publishedRound, workingRound} = bundle;
   state.activityOperation = operation;
   state.roomPlan = workingRooms || publishedRooms;
   state.assignmentRound = workingRound || publishedRound;
@@ -938,7 +945,7 @@ async function renderAssignmentsV2() {
     <div class="panel"><div class="panel-header"><div><h2>${h(assignmentName)} assignments</h2>${assignmentVersion}<p class="muted">${workingRound ? "Editing a private working version." : publishedRound ? "Showing the evaluator-visible version." : "No assignments prepared."}</p></div><div class="inline-actions"><button class="button ghost" id="generateAssignments">${workingRound ? "Regenerate automatic" : "Generate assignments"}</button>${publishedRound && !workingRound ? `<button class="button secondary" id="editPublishedAssignments">Edit published</button>` : ""}${workingRound ? `<button class="button primary" id="applyAssignments">Apply changes</button>` : ""}</div></div>
       ${roomMismatch ? `<div class="warning-box">These assignments were prepared from an older room plan. They remain unchanged until you regenerate or edit them.</div>` : ""}${state.assignmentRound ? renderAssignmentRound(state.assignmentRound) : `<div class="empty-state"><p>Generate assignments or start from the published version.</p></div>`}
     </div>`;
-  $$(".assignment-activity-tabs button", host).forEach(button => button.onclick = () => { state.assignmentActivity = button.dataset.activity; renderAssignments(); });
+  $$(".assignment-activity-tabs button", host).forEach(button => button.onclick = () => { if (!guardDirty()) return; state.dirty = false; state.assignmentActivity = button.dataset.activity; renderAssignments(); });
   $("#activityAvailability").onclick = () => activityAvailabilityDialog(operation);
   if ($("#mandatoryRooms")) $("#mandatoryRooms").onclick = () => mandatoryRoomsDialog(operation);
   if ($("#saveActivityRoomCount")) $("#saveActivityRoomCount").onclick = async () => {
@@ -959,7 +966,17 @@ async function renderAssignmentsV2() {
     } catch (error) { toast(error.message, "error"); }
   };
   if ($("#clearWorkingPlan")) $("#clearWorkingPlan").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/working-plan`, "DELETE", {}, "Working plan cleared. Published rooms and assignments were not changed.", renderAssignments);
-  if ($("#editPublishedRooms")) $("#editPublishedRooms").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${publishedRooms.id}/edit`, "POST", {}, "Published rooms copied into an editable working version.", renderAssignments);
+  if ($("#editPublishedRooms")) $("#editPublishedRooms").onclick = async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const workingRooms = await api(`/api/admin/journeys/${journeyId}/activities/${activity}/rooms/${publishedRooms.id}/edit`, mutation("POST", {}));
+      // Copy changes private room versions and audit only; other loaded dependencies remain valid.
+      if (state.journey?.id !== journeyId || state.assignmentActivity !== activity || state.section !== "assignments") return;
+      await renderAssignmentsV2({...bundle, workingRooms});
+      toast("Published rooms copied into an editable working version.");
+    } catch (error) { button.disabled = false; toast(error.message, "error"); }
+  };
   if ($("#applyRoomChanges")) $("#applyRoomChanges").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${workingRooms.id}/publish?base_revision=${workingRooms.editRevision}`, "POST", {}, `Published room plan v${workingRooms.version}.`, renderAssignments);
   if (workingRooms) wireRoomEditors(workingRooms);
   $("#generateAssignments").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}/preview`, "POST", {}, "Working assignments generated.", renderAssignments);

@@ -1118,6 +1118,7 @@ def rotate_recruit_attendance_link(
 @router.get("/journeys/{journey_id}/dashboard")
 def dashboard(
     journey_id: str,
+    include_details: bool = False,
     context: AdminContext = Depends(require_admin),
     db: Session = Depends(get_db),
 ):
@@ -1143,9 +1144,10 @@ def dashboard(
                     }
                 )
     active_monitoring = monitoring_snapshot(db, journey, journey.current_activity) if journey.current_activity else None
+    details = journey_detail(journey_id, context=None, db=db) if include_details else None
     return {
-        "journey": serialize_journey(db, journey, include_token=True),
-        "activities": _activity_states(db, journey.id),
+        "journey": details or serialize_journey(db, journey, include_token=True),
+        "activities": details["activities"] if details else _activity_states(db, journey.id),
         "evaluatorCategoryCounts": {
             category.key: sum(1 for item in evaluators if item.role == category.key)
             for category in active_assessment_definition().assessors.categories
@@ -1529,6 +1531,45 @@ def read_activity_operation(
     payload = activity_operation_payload(db, journey, activity_code)
     _commit(db)
     return payload
+
+
+@router.get("/journeys/{journey_id}/activities/{activity_code}/workspace")
+def activity_workspace(
+    journey_id: str,
+    activity_code: str,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    del context
+    journey = get_journey_or_404(db, journey_id)
+    if activity_code not in RUBRICS:
+        raise HTTPException(status_code=404, detail="Unknown activity.")
+    operation = activity_operation_payload(db, journey, activity_code)
+    # Preserve operation GET's intentional initialization and commit. Build the
+    # related versions afterward in this callable/session; never share ORM rows.
+    _commit(db)
+    recruits = {r.id: r for r in db.scalars(select(Recruit).where(Recruit.journey_id == journey.id))}
+    evaluators = {e.id: e for e in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
+    plans = list(db.scalars(select(RoomPlan).where(
+        RoomPlan.journey_id == journey.id,
+        RoomPlan.activity_code == operation_activity_code(activity_code),
+        RoomPlan.status.in_(["published", "preview"]),
+    ).order_by(RoomPlan.version.desc())))
+    rounds = list(db.scalars(select(AssignmentRound).where(
+        AssignmentRound.journey_id == journey.id,
+        AssignmentRound.activity_code == activity_code,
+        AssignmentRound.status.in_(["published", "preview"]),
+    ).order_by(AssignmentRound.version.desc())))
+    def payload(rows, status, serializer):
+        row = next((r for r in rows if r.status == status), None)
+        return serializer(db, row, recruits=recruits, evaluators=evaluators) if row else None
+    return {
+        "operation": operation,
+        "publishedRooms": payload(plans, "published", room_plan_payload),
+        "workingRooms": payload(plans, "preview", room_plan_payload),
+        "publishedRound": payload(rounds, "published", assignment_round_payload),
+        "workingRound": payload(rounds, "preview", assignment_round_payload),
+    }
 
 
 @router.put("/journeys/{journey_id}/activities/{activity_code}/availability")
