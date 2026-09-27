@@ -13,7 +13,8 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import STATIC_DIR, settings
 from .auth import SYSTEM_COOKIE, USER_COOKIE, _token_hash, ensure_owner_account, ensure_platform_owner, set_system_cookie
-from .db import SessionLocal, initialize_database
+from .db import SessionLocal, engine, initialize_database
+from .request_timing import install_request_timing, phase, timed
 from .routes_admin import router as admin_router
 from .routes_evaluator import router as evaluator_router
 from .routes_attendance import router as attendance_router
@@ -104,6 +105,7 @@ app.include_router(platform_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
+@timed("workspace")
 def _request_system_id(request: Request) -> str | None:
     """Resolve the recruitment before dependencies and scoring code run."""
     with SessionLocal() as db:
@@ -180,6 +182,7 @@ def _parsed_runtime_definition(system_id: str, version: int, definition_json: st
     return load_stored_definition(loads(definition_json, {}) if definition_json else {})
 
 
+@timed("runtime")
 def _runtime_for_system(system_id: str):
     with SessionLocal() as db:
         record = db.execute(
@@ -198,6 +201,7 @@ def _runtime_for_system(system_id: str):
     return _parsed_runtime_definition(system_id, record.published_version, record.definition_json).model_copy(deep=True)
 
 
+@timed("cookie")
 def _slug_for_system(system_id: str) -> str | None:
     # Keep each synchronous session entirely inside one worker. Returning only
     # a scalar prevents a connection or ORM session crossing thread boundaries.
@@ -304,12 +308,17 @@ def health_live():
 
 
 @app.get("/health/ready", include_in_schema=False)
+@timed("ready")
 def health_ready():
     global database_startup_error
     try:
         with SessionLocal() as db:
-            db.connection().exec_driver_sql("select 1")
-            revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
+            with phase("acquire"):
+                connection = db.connection()
+            with phase("ping"):
+                connection.exec_driver_sql("select 1")
+            with phase("revision"):
+                revision = connection.exec_driver_sql("select version_num from alembic_version").scalar_one()
             if revision != "0018_dynamic_general_factors":
                 raise RuntimeError(
                     f"Database migration is {revision!r}, expected '0018_dynamic_general_factors'."
@@ -432,3 +441,7 @@ def workspace_attendance(workspace_slug: str, token: str):
     if not valid:
         raise HTTPException(status_code=404, detail="Attendance link not found.")
     return _workspace_file(workspace_slug, "recruit_attendance.html")
+
+
+# Temporary numeric-only diagnostics; installed outside the workspace middleware.
+install_request_timing(app, engine)
