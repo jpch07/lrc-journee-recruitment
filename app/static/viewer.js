@@ -1,5 +1,20 @@
+import { assessmentAutosave } from "/static/assessment-autosave.js?v=20260927.1";
 import { api, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, wireAccountPicker, wireBoundedNumberInputs } from "/static/common.js?v=20260810.1";
 import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
+
+let profileAutosave = null;
+let profileRenderSequence = 0;
+async function leaveProfile() {
+  ++profileRenderSequence;
+  if (!profileAutosave) return true;
+  if (!await profileAutosave.save()) { toast("Your assessment has unsaved changes. Save or resolve the conflict before leaving.", "error"); return false; }
+  profileAutosave.dispose();
+  profileAutosave = null;
+  return true;
+}
+window.addEventListener("beforeunload", event => {
+  if (profileAutosave?.dirty()) { event.preventDefault(); event.returnValue = ""; }
+});
 
 const systemConfiguration = await initializeSystemUI().catch(() => null);
 
@@ -91,22 +106,25 @@ async function loadJourney() {
   await render();
 }
 
-$("#viewerJourney").onchange = async event => { state.journeyId = event.target.value; state.profileKey = ""; await loadJourney(); };
+$("#viewerJourney").onchange = async event => { if (!await leaveProfile()) { event.target.value = state.journeyId; return; } state.journeyId = event.target.value; state.profileKey = ""; await loadJourney(); };
 $("#viewerNav").onclick = async event => {
   const button = event.target.closest("button[data-tab]");
   if (!button) return;
+  if (!await leaveProfile()) return;
   state.tab = button.dataset.tab;
   $("#viewerSidebar").classList.remove("open");
   await render();
 };
 $("#viewerMenu").onclick = () => $("#viewerSidebar").classList.toggle("open");
 $("#viewerLogout").onclick = async () => {
+  if (!await leaveProfile()) return;
   try { await api("/api/auth/logout", { method: "POST", headers: { "X-CSRF-Token": state.session.csrfToken } }); } catch {}
   state.session = null;
   await prepareLogin();
 };
 
 async function render() {
+  if (state.tab !== "profiles" && !await leaveProfile()) { state.tab = "profiles"; return; }
   $$("#viewerNav button").forEach(button => button.classList.toggle("active", button.dataset.tab === state.tab));
   if (state.tab === "attendance") renderAttendance();
   else if (state.tab === "results") renderResults();
@@ -174,12 +192,15 @@ function profileHtml(profile) {
 }
 
 async function renderProfile() {
+  if (!await leaveProfile()) return;
   const recruits = [...state.data.recruits].sort((a, b) => a.name.localeCompare(b.name) || a.journeyName.localeCompare(b.journeyName));
   const selected = recruits.find(item => item.profileKey === state.profileKey);
   const scopeQuery = state.journeyId === COMPLETED_SCOPE ? "?scope=completed" : "";
+  const sequence = profileRenderSequence;
   const profile = selected ? await api(`/api/view/journeys/${selected.journeyId}/recruits/${selected.id}/profile${scopeQuery}`) : null;
+  if (sequence !== profileRenderSequence || state.tab !== "profiles") return;
   host.innerHTML = `${sectionHeading("Individual record", "Recruit profile", "Grades, rankings, comments, and evaluation history.", `<select id="viewerRecruit">${recruits.map(item => `<option value="${item.profileKey}" ${item.profileKey === state.profileKey ? "selected" : ""}>${h(item.name)} · ${h(item.journeyName)}</option>`).join("")}</select>`)}${profile ? profileHtml(profile) : `<div class="empty-state"><h2>No recruits</h2></div>`}`;
-  $("#viewerRecruit")?.addEventListener("change", async event => { state.profileKey = event.target.value; await renderProfile(); });
+  $("#viewerRecruit")?.addEventListener("change", async event => { if (!await leaveProfile()) { event.target.value = state.profileKey; return; } state.profileKey = event.target.value; await renderProfile(); });
   if (!profile) return;
   $$(".dimension-card", host).forEach(button => button.onclick = () => showDimension(profile, button.dataset.dimension));
   $$(".activity-card-button", host).forEach(button => button.onclick = () => showActivity(profile, button.dataset.activity));
@@ -193,43 +214,35 @@ async function renderProfile() {
   if (assessmentForm) {
     const status = $("#viewerProfileSaveStatus");
     const actions = $("#viewerConflictActions");
-    let version = profile.assessment.version, timer = null, saving = false, queued = false, conflict = false;
-    const setStatus = (label, kind) => { status.textContent = label; status.className = `save-state ${kind}`; };
-    const values = baseVersion => {
+    const setStatus = (label, kind) => { if (!navigator.onLine && ["Error", "Saving"].includes(label)) { label = "Offline"; kind = "offline"; } status.textContent = label; status.className = `save-state ${kind}`; };
+    const values = () => {
       const form = new FormData(assessmentForm);
       const factorValues = Object.fromEntries((systemConfiguration?.generalFactors || []).map((factor) => {
         const raw = form.get(`factor:${factor.storageKey}`);
         return [factor.storageKey, raw === "" || raw == null ? null : Number(raw)];
       }));
-      return { values: factorValues, comment: form.get("comment") || "", notes: form.get("notes") || "", base_version: baseVersion };
+      return { values: factorValues, comment: form.get("comment") || "", notes: form.get("notes") || "" };
     };
-    const save = async (forceVersion = null) => {
-      clearTimeout(timer);
-      if (conflict && forceVersion == null) return;
-      if (saving) { queued = true; return; }
-      saving = true; queued = false; setStatus(navigator.onLine ? "Saving" : "Offline", navigator.onLine ? "saving" : "offline");
-      try {
-        const result = await api(`/api/view/journeys/${profile.journey.id}/recruits/${profile.recruit.id}/profile`, {
-          method: "PUT", headers: { "X-CSRF-Token": state.session.csrfToken }, body: values(forceVersion ?? version),
-        });
-        version = result.version; conflict = false; actions.classList.add("hidden"); setStatus("Saved", "saved");
-      } catch (error) {
-        if (error.status === 409) { conflict = true; actions.classList.remove("hidden"); setStatus("Conflict", "conflict"); }
-        else setStatus(navigator.onLine ? "Error" : "Offline", navigator.onLine ? "error" : "offline");
-      } finally { saving = false; if (queued && !conflict) save(); }
-    };
-    const schedule = () => { setStatus(navigator.onLine ? "Saving" : "Offline", navigator.onLine ? "saving" : "offline"); clearTimeout(timer); timer = setTimeout(() => save(), 700); };
-    assessmentForm.addEventListener("input", schedule);
-    assessmentForm.addEventListener("focusout", () => save());
-    assessmentForm.addEventListener("submit", event => { event.preventDefault(); save(); });
-    $("#viewerReloadProfile").onclick = () => renderProfile();
+    const controller = assessmentAutosave({
+      read: values, version: profile.assessment.version, status: setStatus,
+      onConflict: conflict => actions.classList.toggle("hidden", !conflict),
+      write: body => api(`/api/view/journeys/${profile.journey.id}/recruits/${profile.recruit.id}/profile`, {
+        method: "PUT", headers: { "X-CSRF-Token": state.session.csrfToken }, body,
+      }),
+    });
+    const online = () => controller.save();
+    window.addEventListener("online", online);
+    profileAutosave = {...controller, dispose() { controller.dispose(); window.removeEventListener("online", online); }};
+    assessmentForm.addEventListener("input", controller.schedule);
+    assessmentForm.addEventListener("focusout", () => controller.save());
+    assessmentForm.addEventListener("submit", event => { event.preventDefault(); controller.save(); });
+    $("#viewerReloadProfile").onclick = () => { profileAutosave.dispose(); profileAutosave = null; renderProfile(); };
     $("#viewerOverwriteProfile").onclick = async () => {
       try {
         const latest = await api(`/api/view/journeys/${profile.journey.id}/recruits/${profile.recruit.id}/profile`);
-        conflict = false; await save(latest.assessment.version);
+        await controller.save(latest.assessment.version);
       } catch (error) { toast(error.message, "error"); }
     };
-    window.addEventListener("online", () => { if (!conflict) save(); }, { once: true });
   }
   /* Legacy explicit-save handler removed: management edits now autosave. */
   /*
