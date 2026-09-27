@@ -47,3 +47,22 @@ run().catch(error=>{console.error(error);process.exitCode=1;});
 """
     result = subprocess.run(["node", "-e", script, str(Path(__file__).parents[1]/"app/static/assessment-autosave.js")], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_concurrent_profile_navigation_disposes_once():
+    source = Path(__file__).parents[1]/"app/static/viewer.js"
+    script = r"""
+const assert = require('node:assert/strict');
+const vm = require('node:vm');
+const fs = require('node:fs');
+const source = fs.readFileSync(process.argv[1],'utf8');
+const code = source.slice(source.indexOf('let profileAutosave'),source.indexOf('window.addEventListener("beforeunload"'));
+let resolve, disposed=0;
+const pending=new Promise(r=>resolve=r);
+const context={controller:{save:()=>pending,dispose:()=>disposed++},toast:()=>{}};
+const leave=vm.runInNewContext(code+';profileAutosave=controller;leaveProfile',context);
+async function run(){const a=leave(),b=leave();resolve(true);assert.deepEqual(await Promise.all([a,b]),[true,false]);assert.equal(disposed,1);}
+run().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    result = subprocess.run(["node", "-e", script, str(source)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr

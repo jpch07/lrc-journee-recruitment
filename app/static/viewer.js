@@ -6,9 +6,11 @@ let profileAutosave = null;
 let profileRenderSequence = 0;
 async function leaveProfile() {
   ++profileRenderSequence;
-  if (!profileAutosave) return true;
-  if (!await profileAutosave.save()) { toast("Your assessment has unsaved changes. Save or resolve the conflict before leaving.", "error"); return false; }
-  profileAutosave.dispose();
+  const controller = profileAutosave;
+  if (!controller) return true;
+  if (!await controller.save()) { toast("Your assessment has unsaved changes. Save or resolve the conflict before leaving.", "error"); return false; }
+  if (profileAutosave !== controller) return false;
+  controller.dispose();
   profileAutosave = null;
   return true;
 }

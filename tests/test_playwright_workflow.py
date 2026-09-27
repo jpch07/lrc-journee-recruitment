@@ -176,6 +176,13 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.locator('#viewerGeneralAssessmentForm textarea[name="notes"]').blur()
             viewer_page.wait_for_function("document.querySelector('#viewerProfileSaveStatus')?.textContent === 'Saved'")
             viewer_page.wait_for_function("document.querySelector('#viewerGeneralAssessmentForm textarea[name=notes]')?.value === 'Management note'")
+            assessment_writes = []
+            viewer_page.on("request", lambda request: assessment_writes.append(request.url) if request.method == "PUT" and request.url.endswith("/profile") else None)
+            notes = viewer_page.locator('#viewerGeneralAssessmentForm textarea[name="notes"]')
+            notes.focus(); notes.blur()
+            viewer_page.evaluate("window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('online'))")
+            viewer_page.wait_for_timeout(800)
+            assert assessment_writes == [], "Unchanged focusout and online must not save"
             viewer_page.locator(".dimension-card").first.click()
             viewer_page.wait_for_selector("#viewerModal[open]")
             viewer_page.click("#closeViewerModal")
