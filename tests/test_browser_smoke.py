@@ -80,7 +80,7 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "Download interactive Excel report" not in viewer_js
     assert "Download Excel Report" in viewer
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260908.1" in viewer
+    assert "viewer.js?v=20260927.2" in viewer
     assert "platformLoginForm" in home
     assert "platformSignupForm" in home
     assert "workspaceList" in home
