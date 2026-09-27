@@ -93,3 +93,23 @@ def test_bundle_tenant_isolation_and_revocation(client):
         for session in db.scalars(select(UserSession)): db.delete(session)
         db.commit()
     assert client.get(f"/api/admin/journeys/{j}/activities/escape_room/workspace").status_code == 401
+
+
+def test_batched_operation_initialization_matches_original(client):
+    from sqlalchemy import delete
+    from app.models import ActivityOperation, ActivityEvaluatorAvailability
+    j = seed(client)
+    def clear_operations():
+        with SessionLocal() as db:
+            db.execute(delete(ActivityEvaluatorAvailability).where(ActivityEvaluatorAvailability.journey_id == j))
+            db.execute(delete(ActivityOperation).where(ActivityOperation.journey_id == j))
+            db.commit()
+    base = f"/api/admin/journeys/{j}/activities/escape_room"
+    clear_operations()
+    original = client.get(base+"/operation")
+    assert original.status_code == 200
+    clear_operations()
+    bundled = client.get(base+"/workspace")
+    assert bundled.status_code == 200
+    assert bundled.json()["operation"] == original.json()
+    assert client.get(base+"/operation").json() == original.json()

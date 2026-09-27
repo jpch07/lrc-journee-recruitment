@@ -91,6 +91,7 @@ function setDirty(value) {
 }
 
 function guardDirty() {
+  if (state.assignmentSaveInFlight) { toast("Wait for the current working plan to finish saving.", "error"); return false; }
   if (state.recruitAttendanceSaves.size) {
     toast("Wait for the current recruit changes to finish saving.", "error");
     return false;
@@ -1098,12 +1099,13 @@ function roomSelector(type, id, selected) {
 }
 
 function wireRoomEditors(plan) {
+  $$(".room-move, .recruit-lock, .evaluator-lock", host).forEach(input => input.onchange = () => setDirty(true));
   const save = async () => {
     const recruit_rooms = {}, evaluator_rooms = {};
     $$(".room-move", host).forEach(select => (select.dataset.type === "recruit" ? recruit_rooms : evaluator_rooms)[select.dataset.id] = select.value ? Number(select.value) : null);
     const locked_recruits = $$(".recruit-lock:checked", host).map(input => input.dataset.id);
     const locked_evaluators = $$(".evaluator-lock:checked", host).map(input => input.dataset.id);
-    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms, locked_recruits, locked_evaluators, base_version: plan.editRevision }, "Manual room changes saved to the working plan.", renderAssignments);
+    await saveWorkingEdits(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms, locked_recruits, locked_evaluators, base_version: plan.editRevision }, "Manual room changes saved to the working plan.", renderAssignments);
   };
   $("#saveRoomMoves").onclick = save;
   $("#bulkRoomMoves").onclick = () => {
@@ -1126,7 +1128,7 @@ function wireRoomEditors(plan) {
         if (select) select.value = room;
       }
       if (errors.length) return toast(errors.slice(0, 3).join(" "), "error");
-      closeModal(); toast("Bulk placements applied. Press Save room changes to confirm.");
+      setDirty(true); closeModal(); toast("Bulk placements applied. Press Save room changes to confirm.");
     };
   };
 }
@@ -1145,7 +1147,7 @@ function wireAssignmentEditors(round) {
   const evaluators = state.journey.evaluators.filter(item => item.active);
   const recruits = state.journey.recruits.filter(item => item.active);
   const wireRow = (container) => {
-    $(".remove-assignment", container).onclick = () => container.remove();
+    $(".remove-assignment", container).onclick = () => { container.remove(); setDirty(true); };
     $(".edit-assignment", container).onclick = () => openPairDialog(container);
   };
   const drawRow = (container, evaluator, recruit, reason = "") => {
@@ -1172,6 +1174,7 @@ function wireAssignmentEditors(round) {
       const target = container || document.createElement("div");
       drawRow(target, evaluator, recruit, String(form.get("reason") || "").trim());
       if (!container) $(".assignment-list").append(target);
+      setDirty(true);
       closeModal();
     };
   };
@@ -1179,7 +1182,7 @@ function wireAssignmentEditors(round) {
   $("#addAssignment").onclick = () => openPairDialog();
   $("#saveAssignmentEdits").onclick = async () => {
     const items = $$(".assignment-row", host).map(row => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
-    await actionAndRefresh(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
+    await saveWorkingEdits(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
   };
 }
 
@@ -1258,6 +1261,24 @@ function mandatoryRoomsDialog(operation = null) {
       toast("Mandatory placements saved.");
     } catch (error) { toast(error.message, "error"); }
   };
+}
+
+async function saveWorkingEdits(url, method, body, message, refresh) {
+  if (state.assignmentSaveInFlight) return;
+  state.assignmentSaveInFlight = true;
+  const controls = $$("input, select, textarea, button", host).map(element => [element, element.disabled]);
+  controls.forEach(([element]) => { element.disabled = true; });
+  try {
+    await api(url, mutation(method, body));
+    state.dirty = false;
+    toast(message);
+    await refreshJourney();
+    await refresh();
+  } catch (error) { toast(error.message, "error"); }
+  finally {
+    state.assignmentSaveInFlight = false;
+    controls.forEach(([element, disabled]) => { if (element.isConnected) element.disabled = disabled; });
+  }
 }
 
 async function actionAndRefresh(url, method, body, message, refresh) {

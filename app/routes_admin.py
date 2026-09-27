@@ -1546,7 +1546,14 @@ def activity_workspace(
     if activity_code not in RUBRICS:
         raise HTTPException(status_code=404, detail="Unknown activity.")
     evaluators = {e.id: e for e in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
-    operation = activity_operation_payload(db, journey, activity_code, evaluators=evaluators)
+    # Batch the predecessor chain once; initialization still follows the same
+    # recursive rules and flushes, confined to this callable's session.
+    loaded = {
+        "evaluators": evaluators,
+        "operations": {r.activity_code: r for r in db.scalars(select(ActivityOperation).where(ActivityOperation.journey_id == journey.id))},
+        "availability": list(db.scalars(select(ActivityEvaluatorAvailability).where(ActivityEvaluatorAvailability.journey_id == journey.id))),
+    }
+    operation = activity_operation_payload(db, journey, activity_code, evaluators=evaluators, loaded=loaded)
     # Preserve operation GET's intentional initialization and commit. Build the
     # related versions afterward in this callable/session; never share ORM rows.
     _commit(db)

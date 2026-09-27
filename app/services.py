@@ -111,11 +111,11 @@ def preceding_operation_activity(activity_code: str) -> str:
     return ""
 
 
-def ensure_activity_operation(db: Session, journey: Journey, activity_code: str) -> ActivityOperation:
+def ensure_activity_operation(db: Session, journey: Journey, activity_code: str, *, loaded=None) -> ActivityOperation:
     """Create an independent activity operation, copying only its initial availability."""
     code = operation_activity_code(activity_code)
     predecessor = preceding_operation_activity(code)
-    operation = db.scalar(select(ActivityOperation).where(
+    operation = loaded["operations"].get(code) if loaded is not None else db.scalar(select(ActivityOperation).where(
         ActivityOperation.journey_id == journey.id,
         ActivityOperation.activity_code == code,
     ))
@@ -123,13 +123,13 @@ def ensure_activity_operation(db: Session, journey: Journey, activity_code: str)
         if operation.initialized_from != (predecessor or None):
             operation.initialized_from = predecessor or None
         if predecessor:
-            ensure_activity_operation(db, journey, predecessor)
-        _sync_activity_availability(db, journey, code, predecessor)
+            ensure_activity_operation(db, journey, predecessor, loaded=loaded)
+        _sync_activity_availability(db, journey, code, predecessor, loaded=loaded)
         db.flush()
         return operation
     if predecessor:
-        ensure_activity_operation(db, journey, predecessor)
-    prior = db.scalar(select(ActivityOperation).where(
+        ensure_activity_operation(db, journey, predecessor, loaded=loaded)
+    prior = loaded["operations"].get(predecessor) if loaded is not None else db.scalar(select(ActivityOperation).where(
         ActivityOperation.journey_id == journey.id,
         ActivityOperation.activity_code == predecessor,
     )) if predecessor else None
@@ -140,34 +140,44 @@ def ensure_activity_operation(db: Session, journey: Journey, activity_code: str)
         initialized_from=predecessor or None,
     )
     db.add(operation)
+    if loaded is not None:
+        loaded["operations"][code] = operation
     db.flush()
-    _sync_activity_availability(db, journey, code, predecessor)
+    _sync_activity_availability(db, journey, code, predecessor, loaded=loaded)
     db.flush()
     return operation
 
 
-def _sync_activity_availability(db: Session, journey: Journey, code: str, predecessor: str) -> None:
+def _sync_activity_availability(db: Session, journey: Journey, code: str, predecessor: str, *, loaded=None) -> None:
     """Backfill activity records when evaluators are added after a plan was created."""
-    source_values = {
-        item.evaluator_id: item.available for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+    if loaded is not None:
+        source_values = {r.evaluator_id: r.available for r in loaded["availability"] if r.activity_code == predecessor} if predecessor else {}
+        existing = {r.evaluator_id for r in loaded["availability"] if r.activity_code == code}
+        evaluators = [e for e in loaded["evaluators"].values() if e.active]
+    else:
+        source_values = {
+            item.evaluator_id: item.available for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+                ActivityEvaluatorAvailability.journey_id == journey.id,
+                ActivityEvaluatorAvailability.activity_code == predecessor,
+            ))
+        } if predecessor else {}
+        existing = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
             ActivityEvaluatorAvailability.journey_id == journey.id,
-            ActivityEvaluatorAvailability.activity_code == predecessor,
-        ))
-    } if predecessor else {}
-    existing = set(db.scalars(select(ActivityEvaluatorAvailability.evaluator_id).where(
-        ActivityEvaluatorAvailability.journey_id == journey.id,
-        ActivityEvaluatorAvailability.activity_code == code,
-    )))
-    evaluators = list(db.scalars(select(Evaluator).where(
-        Evaluator.journey_id == journey.id, Evaluator.active.is_(True))))
+            ActivityEvaluatorAvailability.activity_code == code,
+        )))
+        evaluators = list(db.scalars(select(Evaluator).where(
+            Evaluator.journey_id == journey.id, Evaluator.active.is_(True))))
     for evaluator in evaluators:
         if evaluator.id not in existing:
-            db.add(ActivityEvaluatorAvailability(
+            record = ActivityEvaluatorAvailability(
                 journey_id=journey.id,
                 activity_code=code,
                 evaluator_id=evaluator.id,
                 available=source_values.get(evaluator.id, evaluator.present),
-            ))
+            )
+            db.add(record)
+            if loaded is not None:
+                loaded["availability"].append(record)
 
 
 def get_recruit_or_404(db: Session, journey_id: str, recruit_id: str) -> Recruit:
@@ -525,8 +535,8 @@ def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: st
     return plan
 
 
-def activity_operation_payload(db: Session, journey: Journey, activity_code: str, *, evaluators=None) -> dict:
-    operation = ensure_activity_operation(db, journey, activity_code)
+def activity_operation_payload(db: Session, journey: Journey, activity_code: str, *, evaluators=None, loaded=None) -> dict:
+    operation = ensure_activity_operation(db, journey, activity_code, loaded=loaded)
     code = operation.activity_code
     if evaluators is None:
         evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(
@@ -536,7 +546,7 @@ def activity_operation_payload(db: Session, journey: Journey, activity_code: str
     directory = {item.id: item for item in db.scalars(select(EvaluatorDirectory).where(
         EvaluatorDirectory.id.in_([item.directory_id for item in evaluators.values() if item.directory_id])
     ))} if evaluators else {}
-    availability = {item.evaluator_id: item for item in db.scalars(select(ActivityEvaluatorAvailability).where(
+    availability = {item.evaluator_id: item for item in loaded["availability"] if item.activity_code == code} if loaded is not None else {item.evaluator_id: item for item in db.scalars(select(ActivityEvaluatorAvailability).where(
         ActivityEvaluatorAvailability.journey_id == journey.id,
         ActivityEvaluatorAvailability.activity_code == code,
     ))}
