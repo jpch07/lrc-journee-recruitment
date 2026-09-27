@@ -1545,31 +1545,45 @@ def activity_workspace(
     journey = get_journey_or_404(db, journey_id)
     if activity_code not in RUBRICS:
         raise HTTPException(status_code=404, detail="Unknown activity.")
-    operation = activity_operation_payload(db, journey, activity_code)
+    evaluators = {e.id: e for e in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
+    operation = activity_operation_payload(db, journey, activity_code, evaluators=evaluators)
     # Preserve operation GET's intentional initialization and commit. Build the
     # related versions afterward in this callable/session; never share ORM rows.
     _commit(db)
     recruits = {r.id: r for r in db.scalars(select(Recruit).where(Recruit.journey_id == journey.id))}
-    evaluators = {e.id: e for e in db.scalars(select(Evaluator).where(Evaluator.journey_id == journey.id))}
+    configured = activity_definition(activity_code)
+    group_based = configured and configured.assignment.mode == "automatic_groups"
     plans = list(db.scalars(select(RoomPlan).where(
         RoomPlan.journey_id == journey.id,
         RoomPlan.activity_code == operation_activity_code(activity_code),
         RoomPlan.status.in_(["published", "preview"]),
-    ).order_by(RoomPlan.version.desc())))
+    ).order_by(RoomPlan.version.desc()))) if group_based else []
     rounds = list(db.scalars(select(AssignmentRound).where(
         AssignmentRound.journey_id == journey.id,
         AssignmentRound.activity_code == activity_code,
         AssignmentRound.status.in_(["published", "preview"]),
     ).order_by(AssignmentRound.version.desc())))
-    def payload(rows, status, serializer):
-        row = next((r for r in rows if r.status == status), None)
-        return serializer(db, row, recruits=recruits, evaluators=evaluators) if row else None
+    plan_ids = [p.id for p in plans]
+    recruit_members = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id.in_(plan_ids)))) if plan_ids else []
+    evaluator_members = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id.in_(plan_ids)))) if plan_ids else []
+    round_ids = [r.id for r in rounds]
+    assignments = list(db.scalars(select(Assignment).where(Assignment.round_id.in_(round_ids)))) if round_ids else []
+    def room_payload(status):
+        row = next((r for r in plans if r.status == status), None)
+        return room_plan_payload(db, row, recruits=recruits, evaluators=evaluators,
+            room_count=operation["roomCount"],
+            recruit_members=[m for m in recruit_members if m.plan_id == row.id],
+            evaluator_members=[m for m in evaluator_members if m.plan_id == row.id]) if row else None
+    def round_payload(status):
+        row = next((r for r in rounds if r.status == status), None)
+        return assignment_round_payload(db, row, recruits=recruits, evaluators=evaluators,
+            assignments=[m for m in assignments if m.round_id == row.id]) if row else None
     return {
         "operation": operation,
-        "publishedRooms": payload(plans, "published", room_plan_payload),
-        "workingRooms": payload(plans, "preview", room_plan_payload),
-        "publishedRound": payload(rounds, "published", assignment_round_payload),
-        "workingRound": payload(rounds, "preview", assignment_round_payload),
+        "publishedRooms": room_payload("published"),
+        "workingRooms": room_payload("preview"),
+        "publishedRound": round_payload("published"),
+        "workingRound": round_payload("preview"),
     }
 
 

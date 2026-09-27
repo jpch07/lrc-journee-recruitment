@@ -399,18 +399,21 @@ def latest_room_plan(db: Session, journey_id: str, status: str, activity_code: s
     )
 
 
-def room_plan_payload(db: Session, plan: RoomPlan, *, recruits=None, evaluators=None) -> dict:
+def room_plan_payload(db: Session, plan: RoomPlan, *, recruits=None, evaluators=None, room_count=None, recruit_members=None, evaluator_members=None) -> dict:
     if recruits is None:
         recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == plan.journey_id))}
     if evaluators is None:
         evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(Evaluator.journey_id == plan.journey_id))}
-    recruit_members = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == plan.id)))
-    evaluator_members = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == plan.id)))
-    operation = db.scalar(select(ActivityOperation).where(
-        ActivityOperation.journey_id == plan.journey_id,
-        ActivityOperation.activity_code == plan.activity_code,
-    ))
-    room_count = operation.room_count if operation else get_journey_or_404(db, plan.journey_id).room_count
+    if recruit_members is None:
+        recruit_members = list(db.scalars(select(RoomPlanRecruit).where(RoomPlanRecruit.plan_id == plan.id)))
+    if evaluator_members is None:
+        evaluator_members = list(db.scalars(select(RoomPlanEvaluator).where(RoomPlanEvaluator.plan_id == plan.id)))
+    if room_count is None:
+        operation = db.scalar(select(ActivityOperation).where(
+            ActivityOperation.journey_id == plan.journey_id,
+            ActivityOperation.activity_code == plan.activity_code,
+        ))
+        room_count = operation.room_count if operation else get_journey_or_404(db, plan.journey_id).room_count
     rooms: dict[int, dict] = {
         number: {"number": number, "recruits": [], "evaluators": []}
         for number in range(1, room_count + 1)
@@ -522,11 +525,14 @@ def create_room_preview(db: Session, journey: Journey, actor_name: str, seed: st
     return plan
 
 
-def activity_operation_payload(db: Session, journey: Journey, activity_code: str) -> dict:
+def activity_operation_payload(db: Session, journey: Journey, activity_code: str, *, evaluators=None) -> dict:
     operation = ensure_activity_operation(db, journey, activity_code)
     code = operation.activity_code
-    evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(
+    if evaluators is None:
+        evaluators = {item.id: item for item in db.scalars(select(Evaluator).where(
         Evaluator.journey_id == journey.id, Evaluator.active.is_(True)))}
+    else:
+        evaluators = {key: item for key, item in evaluators.items() if item.active}
     directory = {item.id: item for item in db.scalars(select(EvaluatorDirectory).where(
         EvaluatorDirectory.id.in_([item.directory_id for item in evaluators.values() if item.directory_id])
     ))} if evaluators else {}
@@ -910,8 +916,9 @@ def create_assignment_preview(
     return round_record
 
 
-def assignment_round_payload(db: Session, round_record: AssignmentRound, *, recruits=None, evaluators=None) -> dict:
-    assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
+def assignment_round_payload(db: Session, round_record: AssignmentRound, *, recruits=None, evaluators=None, assignments=None) -> dict:
+    if assignments is None:
+        assignments = list(db.scalars(select(Assignment).where(Assignment.round_id == round_record.id)))
     if recruits is None:
         recruits = {item.id: item for item in db.scalars(select(Recruit).where(Recruit.journey_id == round_record.journey_id))}
     if evaluators is None:
