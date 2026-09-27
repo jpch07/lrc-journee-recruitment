@@ -975,7 +975,7 @@ async function renderAssignmentsV2(prefetched = null) {
     try {
       const workingRooms = await api(`/api/admin/journeys/${journeyId}/activities/${activity}/rooms/${publishedRooms.id}/edit`, mutation("POST", {}));
       // Copy changes private room versions and audit only; other loaded dependencies remain valid.
-      if (state.journey?.id !== journeyId || state.assignmentActivity !== activity || state.section !== "assignments") return;
+      if (sequence !== assignmentLoadSequence || state.journey?.id !== journeyId || state.assignmentActivity !== activity || state.section !== "assignments") return;
       await renderAssignmentsV2({...bundle, workingRooms});
       toast("Published rooms copied into an editable working version.");
     } catch (error) { button.disabled = false; toast(error.message, "error"); }

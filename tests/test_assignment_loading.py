@@ -27,3 +27,22 @@ run().catch(error=>{console.error(error);process.exitCode=1});
 """
     result = subprocess.run(["node", "-e", script, str(Path(__file__).parents[1]/"app/static/admin.js")],capture_output=True,text=True)
     assert result.returncode == 0, result.stdout+result.stderr
+
+
+def test_old_room_copy_response_cannot_replace_a_newer_render():
+    script = r"""
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const start=source.indexOf('  if ($("#editPublishedRooms"))');
+const code=source.slice(start,source.indexOf('  if ($("#applyRoomChanges"))',start));
+let resolve,rendered=0,calls=0;
+const button={disabled:false};
+const context={button,$:()=>button,guardDirty:()=>true,state:{journey:{id:'alpha'},assignmentActivity:'escape_room',section:'assignments'},sequence:1,assignmentLoadSequence:1,
+ journeyId:'alpha',activity:'escape_room',publishedRooms:{id:'plan'},bundle:{},mutation:()=>({}),
+ api:()=>{calls++;return new Promise(r=>resolve=r);},renderAssignmentsV2:()=>{rendered++;},toast:()=>{}};
+const edit=vm.runInNewContext(code+';button.onclick',context);
+async function run(){const old=edit({currentTarget:button});context.assignmentLoadSequence=2;resolve({id:'working'});await old;assert.equal(rendered,0);assert.equal(calls,1);}
+run().catch(error=>{console.error(error);process.exitCode=1});
+"""
+    result=subprocess.run(["node","-e",script,str(Path(__file__).parents[1]/"app/static/admin.js")],capture_output=True,text=True)
+    assert result.returncode == 0,result.stdout+result.stderr
