@@ -1,0 +1,117 @@
+{
+  "sha": "feed5bdff4b57c6dc865caa7f5c9f4cb335ad6bb",
+  "deploy": "dep-dasob38jo6nc73cmao3g",
+  "live_utc": "2026-09-27T21:08:02.8495Z",
+  "measurement_end_utc": "2026-09-27T21:13:19Z",
+  "management_visible_ms": [
+    6753,
+    5279,
+    5462
+  ],
+  "management_api_ms": {
+    "public": [
+      719,
+      690,
+      815
+    ],
+    "bootstrap": [
+      3043,
+      2362,
+      2577
+    ]
+  },
+  "completed_scope_switch": {
+    "visible_ms": [
+      2843,
+      2660,
+      2969
+    ],
+    "request_ms": [
+      2556,
+      2387,
+      2416
+    ]
+  },
+  "admin": {
+    "open": {
+      "visible_ms": [
+        2501,
+        2127
+      ],
+      "request_ms": [
+        1502,
+        1782
+      ]
+    },
+    "results": {
+      "visible_ms": [
+        958,
+        918
+      ],
+      "request_ms": [
+        897,
+        854
+      ]
+    },
+    "sport": {
+      "visible_ms": [
+        2184,
+        2227
+      ],
+      "request_ms": [
+        1057,
+        1044
+      ]
+    },
+    "escape": {
+      "visible_ms": [
+        1174,
+        2023
+      ],
+      "request_ms": [
+        1096,
+        1094
+      ]
+    },
+    "negotiation": {
+      "visible_ms": [
+        2219
+      ],
+      "request_ms": [
+        1314
+      ]
+    },
+    "profile": {
+      "visible_ms": [
+        2316
+      ],
+      "request_ms": [
+        2187
+      ]
+    }
+  },
+  "verification": {
+    "same_signed_in_workspace": true,
+    "library_journees": 4,
+    "completed_results_rows": 51,
+    "existing_photo_loaded": true,
+    "new_viewer_asset": true,
+    "browser_warnings_errors": 0,
+    "app_warnings_errors": 0,
+    "http_5xx": 0,
+    "log_window_utc": [
+      "2026-09-27T21:08:02Z",
+      "2026-09-27T21:13:19Z"
+    ],
+    "production_tests_get_only": true,
+    "no_initialization": true,
+    "admin_left_at_library": true
+  },
+  "limits": [
+    "Automation dispatch/poll overhead included only in visible timings; not a native paint timestamp.",
+    "Network durations include transport/body, not SQL CPU or server/pool timing.",
+    "Completed endpoint before was warm reload; after was warm existing-scope switch. Same path/network definition, different trigger.",
+    "Three Management samples and two Admin samples after; no load/peak capacity claim.",
+    "No production pool queue timing observer; controlled local acquire fixture is not production waiting."
+  ]
+}

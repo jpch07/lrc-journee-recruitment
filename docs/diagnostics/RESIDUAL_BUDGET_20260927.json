@@ -8,5 +8,6 @@
   "oregon_deploy_overlap": 12,
   "legacy_deploy_overlap": 16,
   "pool2_legacy_overlap": 17,
-  "decision": "keep Oregon pool1/overflow0; pool2 leaves no nonreserved admin slot"
+  "decision": "keep Oregon pool1/overflow0; pool2 leaves no nonreserved admin slot",
+  "other_reserved": 0
 }

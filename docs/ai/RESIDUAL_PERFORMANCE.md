@@ -12,3 +12,29 @@ Controlled warmed SQLite pool fixture,150ms explicit connection hold: actual acq
 Fresh approved secure in-memory configuration/catalog check: both existing pools5/0, Oregon1/0, one worker;5 current clients INCLUDING check, max20/reserved3. Closed check. Pool2 would use17 slots under legacy deployment overlap, leaving no nonreserved administration slot. Oregon pool1/0 retained, steady11/Oregon overlap12/legacy overlap16; no simultaneous overlaps. Public matching CA copied locally under current-user-only ACL; no credential contents persisted.
 Fresh billing:482.97/750 Free hours,3/500 pipeline minutes,1.39/5GB,3/25 services; Hobby/no card/$0 accrued/projected. No purchase/new service/configuration change.
 Runtime changes require one exact-head CI/non-browser/browser/Docker build before explicit SHA deployment. Previous code/config rollback recorded above.
+
+## Completed release ?2026-09-27 UTC
+Live Oregon runtime feed5bdff4b57c6dc865caa7f5c9f4cb335ad6bb / dep-dasob38jo6nc73cmao3g, live21:08:02.8495UTC. Explicit-commit Render CLI waited/exit0; progress output was not JSON, so authenticated deployment API independently verified SHA/status/ID. No generic latest deploy.
+Exact-head CI36350342520 success:319 non-browser passed,2 deselected,1 warning33.81s;2 browser passed,319 deselected,1 warning34.43s;Docker build succeeded. Previous run36350218337 failed only stale viewer asset-version smoke assertion (318 passed,1 failed); repaired test-only commitfeed5bd. Focused smoke3 passed3.44s. No application revision changed after final targeted browser check. No general reviews/subagents/unchanged local full-suite reruns.
+
+| Measurement | Before median(range), seconds | After median(range), seconds |
+|---|---|---|
+| Full Management reload ->51 visible rows, n3 |6.250(6.223?7.490)|5.462(5.279?6.753)|
+| Sum of sequential initial API durations, n3 |4.958(4.902?5.303),4 requests|3.392(3.052?3.762),2 requests|
+| Completed-view network request, n3 |2.755(2.649?3.065)|2.416(2.387?2.556)|
+| Admin opening network, n2 |1.598(1.379?1.816)|1.642(1.502?1.782)|
+| Admin Results network, before n3/after n2 |0.853(0.840?0.866)|0.876(0.854?0.897)|
+| Initial Sport network, before n3/after n2 |1.137(1.028?1.217)|1.051(1.044?1.057)|
+| Escape switch network, n2 |1.150(1.142?1.158)|1.095(1.094?1.096)|
+
+Management totals include HTML/assets, dispatch and DOM polling; request timings separately use CDP request-start ->loadingFinished. API sums are sums of measured durations, not full wall/server time. No percentage or serverCPU/SQL/pool-time claim. Completed before sample came from reload, after from an existing scope switch; endpoint/data/network definition match, trigger differs. Admin complete visible medians before/after:open1.961/2.314;Results1.782/0.938;Sport3.222/2.206;Escape2.480/1.599s, with large varying dispatch overhead. No attributable Admin improvement or clear regression established; handlers/pool unchanged. Missing CDP events/dispatch-timeout samples censored, not invented. Raw numeric samples/limitations preserved in RESIDUAL_BEFORE/AFTER JSON.
+
+Final live browser verified existing authenticated tenant/library,4 Journees,51 completed result rows, dashboard, results, Sport/Escape/Negotiation, existing profile and loaded R2 photo; zero bounded browser warnings/errors. Fresh READ ONLY verify-full DB check immediately before post-release activities confirmed all enabled operation/predecessor chains and availability for80 active evaluators; no initialization/backfill required. No production PUT/POST test, Edit published, grade/recruitment mutation, schema/storage/provider change. Mutation/editor/autosave validation remains in disposable fixtures/CI. Only tested existing workspace/photo and bounded flows verified, not every tenant/photo or peak load.
+
+Readiness three200/ready, external670.3/727.9/404.1ms. App warn/error and HTTP5xx log queries21:08:02?21:13:19UTC empty. Free Oregon/auto-deploy/previewsOFF/linked branch unchanged; verify-onlytrue/pool1/overflow0/verify-full retained. Virginia unchanged258638de459d7b3091797e6e27d85ecd4aaa067a /dep-dasm2a0jo6nc73cd2jug, autoOFF/main linked; legacy unchanged1faeb9647624995aed3373e474a70f641bc1fa6f /dep-dapac6rbc2fs73evu5ig. Main/scheduled workflows/original secrets/Aiven untouched.
+
+Rollback remains Oregon dep-dasnl917lnhs73a07vrg /386cb0dec265df9402b2113842b46c90a6f8023d and unchanged pool1/0/verify-onlytrue/auto/previewsOFF. Use exact previous deployment/revision, no DB restoration/downgrade or Virginia/legacy change. No rollback needed: no clear functional regression. Virginia URL remains fallback, Oregon primary.
+
+Cleanup verified current-user-only public CA file then removed exactly that created file and empty local task directory; Test-Pathfalse. All catalog connections closed, test servers terminated; no credential copy persisted, original CLI/application secrets untouched. Admin left at library without Journee polling; no recurring monitor/keepalive. Usage budget unavailable. Documentation-only follow-up is not deployed and uses skip-ci.
+
+Stop after this bounded pass. Management still approximately5?7s, completed request~2.4s, profile~2.2s(n1); actual production pool queue contribution remains unresolved without timing instrumentation. Controlled local fixture cannot establish Oregon contention. Pool2 fails administration-headroom condition under legacy overlap; do not increase any other service pool or propose provider changes here. Free inactivity sleep and network/database exchange latency remain. Ready to proceed with original grading/ranking implementation in its separately agreed feature scope; no grading features begun. Future schema-changing deployment requires explicit migration/release plan because verify-only intentionally rejects revision mismatch. No release approval/access blocker remains for this pass.

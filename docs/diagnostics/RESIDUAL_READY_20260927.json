@@ -1,0 +1,17 @@
+[
+  {
+    "status": 200,
+    "ready": true,
+    "external_ms": 670.3
+  },
+  {
+    "status": 200,
+    "ready": true,
+    "external_ms": 727.9
+  },
+  {
+    "status": 200,
+    "ready": true,
+    "external_ms": 404.1
+  }
+]

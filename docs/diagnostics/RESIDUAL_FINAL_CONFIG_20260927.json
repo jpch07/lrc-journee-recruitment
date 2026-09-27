@@ -1,0 +1,8 @@
+{
+  "verify_only": true,
+  "pool_size": 1,
+  "max_overflow": 0,
+  "tls_verify_full": true,
+  "ca_secret_file_present": true,
+  "temporary_directory_removed": true
+}

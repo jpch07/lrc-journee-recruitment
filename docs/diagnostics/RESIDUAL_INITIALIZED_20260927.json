@@ -1,0 +1,37 @@
+{
+  "read_only": true,
+  "initialized_checks": [
+    {
+      "activity": "sport",
+      "operation_present": true,
+      "predecessor_matches": true,
+      "availability_complete": true
+    },
+    {
+      "activity": "escape_room",
+      "operation_present": true,
+      "predecessor_matches": true,
+      "availability_complete": true
+    },
+    {
+      "activity": "negotiation",
+      "operation_present": true,
+      "predecessor_matches": true,
+      "availability_complete": true
+    },
+    {
+      "activity": "skills",
+      "operation_present": true,
+      "predecessor_matches": true,
+      "availability_complete": true
+    },
+    {
+      "activity": "simulation",
+      "operation_present": true,
+      "predecessor_matches": true,
+      "availability_complete": true
+    }
+  ],
+  "active_evaluator_count": 80,
+  "connection_closed": true
+}
