@@ -105,70 +105,74 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def _request_system_id(request: Request) -> str | None:
-    """Resolve the recruitment before dependencies and scoring code run."""
     with SessionLocal() as db:
-        path = request.url.path
-        workspace_match = re.match(r"^/([^/]+)(?:/|$)", path)
-        if workspace_match and workspace_match.group(1) not in {
-            "api", "static", "health", "admin", "configure", "evaluate",
-            "view", "j", "recruit-attendance",
-        }:
-            workspace_id = db.scalar(
-                select(AssessmentSystem.id)
-                .where(
-                    AssessmentSystem.slug == workspace_match.group(1),
-                    AssessmentSystem.status == "active",
-                )
-                .execution_options(bypass_recruitment_scope=True)
+        return _resolve_request_system_id(request, db)
+
+
+def _resolve_request_system_id(request: Request, db) -> str | None:
+    """Resolve the recruitment before dependencies and scoring code run."""
+    path = request.url.path
+    workspace_match = re.match(r"^/([^/]+)(?:/|$)", path)
+    if workspace_match and workspace_match.group(1) not in {
+        "api", "static", "health", "admin", "configure", "evaluate",
+        "view", "j", "recruit-attendance",
+    }:
+        workspace_id = db.scalar(
+            select(AssessmentSystem.id)
+            .where(
+                AssessmentSystem.slug == workspace_match.group(1),
+                AssessmentSystem.status == "active",
             )
-            if workspace_id:
-                return workspace_id
-        user_token = request.cookies.get(USER_COOKIE, "")
-        if user_token:
-            system_id = db.scalar(
-                select(UserAccount.system_id)
-                .join(UserSession, UserSession.account_id == UserAccount.id)
-                .where(UserSession.token_hash == _token_hash(user_token))
-                .execution_options(bypass_recruitment_scope=True)
-            )
-            if system_id:
-                return system_id
-        slug = request.cookies.get(SYSTEM_COOKIE, "") or request.query_params.get("recruitment", "")
-        if slug:
-            system_id = db.scalar(
-                select(AssessmentSystem.id)
-                .where(AssessmentSystem.slug == slug)
-                .execution_options(bypass_recruitment_scope=True)
-            )
-            if system_id:
-                return system_id
-        token_match = re.match(r"^/(?:j|api/public/journeys)/([^/]+)", path)
-        if token_match:
-            return db.scalar(
-                select(Journey.system_id)
-                .where(Journey.public_token == token_match.group(1))
-                .execution_options(bypass_recruitment_scope=True)
-            )
-        attendance_match = re.match(r"^/(?:recruit-attendance|api/public/recruit-attendance)/([^/]+)", path)
-        if attendance_match:
-            return db.scalar(
-                select(Journey.system_id)
-                .join(RecruitAttendanceAccess, RecruitAttendanceAccess.journey_id == Journey.id)
-                .where(RecruitAttendanceAccess.token == attendance_match.group(1))
-                .execution_options(bypass_recruitment_scope=True)
-            )
-        # Preserve the established permanent evaluator/management URLs while
-        # this installation contains a single recruitment. Once an owner adds
-        # more workspaces, selecting one supplies the explicit workspace cookie.
-        if path != "/" and not path.startswith("/api/platform"):
-            systems = list(db.scalars(
-                select(AssessmentSystem.id)
-                .where(AssessmentSystem.status == "active")
-                .limit(2)
-                .execution_options(bypass_recruitment_scope=True)
-            ))
-            if len(systems) == 1:
-                return systems[0]
+            .execution_options(bypass_recruitment_scope=True)
+        )
+        if workspace_id:
+            return workspace_id
+    user_token = request.cookies.get(USER_COOKIE, "")
+    if user_token:
+        system_id = db.scalar(
+            select(UserAccount.system_id)
+            .join(UserSession, UserSession.account_id == UserAccount.id)
+            .where(UserSession.token_hash == _token_hash(user_token))
+            .execution_options(bypass_recruitment_scope=True)
+        )
+        if system_id:
+            return system_id
+    slug = request.cookies.get(SYSTEM_COOKIE, "") or request.query_params.get("recruitment", "")
+    if slug:
+        system_id = db.scalar(
+            select(AssessmentSystem.id)
+            .where(AssessmentSystem.slug == slug)
+            .execution_options(bypass_recruitment_scope=True)
+        )
+        if system_id:
+            return system_id
+    token_match = re.match(r"^/(?:j|api/public/journeys)/([^/]+)", path)
+    if token_match:
+        return db.scalar(
+            select(Journey.system_id)
+            .where(Journey.public_token == token_match.group(1))
+            .execution_options(bypass_recruitment_scope=True)
+        )
+    attendance_match = re.match(r"^/(?:recruit-attendance|api/public/recruit-attendance)/([^/]+)", path)
+    if attendance_match:
+        return db.scalar(
+            select(Journey.system_id)
+            .join(RecruitAttendanceAccess, RecruitAttendanceAccess.journey_id == Journey.id)
+            .where(RecruitAttendanceAccess.token == attendance_match.group(1))
+            .execution_options(bypass_recruitment_scope=True)
+        )
+    # Preserve the established permanent evaluator/management URLs while
+    # this installation contains a single recruitment. Once an owner adds
+    # more workspaces, selecting one supplies the explicit workspace cookie.
+    if path != "/" and not path.startswith("/api/platform"):
+        systems = list(db.scalars(
+            select(AssessmentSystem.id)
+            .where(AssessmentSystem.status == "active")
+            .limit(2)
+            .execution_options(bypass_recruitment_scope=True)
+        ))
+        if len(systems) == 1:
+            return systems[0]
     return None
 
 
@@ -182,20 +186,31 @@ def _parsed_runtime_definition(system_id: str, version: int, definition_json: st
 
 def _runtime_for_system(system_id: str):
     with SessionLocal() as db:
-        record = db.execute(
-            select(AssessmentSystem.published_version, AssessmentSystemVersion.definition_json)
-            .outerjoin(AssessmentSystemVersion, (
-                (AssessmentSystemVersion.system_id == AssessmentSystem.id)
-                & (AssessmentSystemVersion.version == AssessmentSystem.published_version)
-            ))
-            .where(AssessmentSystem.id == system_id)
-            .execution_options(bypass_recruitment_scope=True)
-        ).first()
+        return _workspace_runtime(db, system_id)[0]
+
+
+def _workspace_runtime(db, system_id):
+    record = db.execute(
+        select(AssessmentSystem.published_version, AssessmentSystem.slug, AssessmentSystemVersion.definition_json)
+        .outerjoin(AssessmentSystemVersion, (
+            (AssessmentSystemVersion.system_id == AssessmentSystem.id)
+            & (AssessmentSystemVersion.version == AssessmentSystem.published_version)
+        ))
+        .where(AssessmentSystem.id == system_id)
+        .execution_options(bypass_recruitment_scope=True)
+    ).first()
     if record is None:
-        return None
-    # The current published version is checked on every request: publishing or
-    # fixing a configuration is visible immediately, without a time-based TTL.
-    return _parsed_runtime_definition(system_id, record.published_version, record.definition_json).model_copy(deep=True)
+        return None, None
+    return (_parsed_runtime_definition(system_id, record.published_version, record.definition_json).model_copy(deep=True), record.slug)
+
+
+def _request_workspace(request: Request):
+    # One synchronous callable owns its session from checkout through close.
+    # Only scalars and a detached configuration copy cross the worker boundary.
+    with SessionLocal() as db:
+        system_id = _resolve_request_system_id(request, db)
+        definition, slug = _workspace_runtime(db, system_id) if system_id else (None, None)
+        return system_id, definition, slug
 
 
 def _slug_for_system(system_id: str) -> str | None:
@@ -250,20 +265,18 @@ async def prevent_stale_frontend_assets(request: Request, call_next):
     # Synchronous queries (including pool checkout and connection retries) must
     # not block the ASGI event loop. Starlette uses AnyIO's bounded shared worker
     # pool and copies contextvars, preserving the per-request tenant context.
-    system_id = await run_in_threadpool(_request_system_id, request)
+    try:
+        system_id, definition, slug = await run_in_threadpool(_request_workspace, request)
+    except ValidationError:
+        logger.error("Invalid saved configuration on %s", path)
+        return _workspace_configuration_error(path)
     system_token = select_system(system_id)
     runtime_token = None
     try:
-        try:
-            definition = await run_in_threadpool(_runtime_for_system, system_id) if system_id else None
-        except ValidationError:
-            logger.error("Invalid saved configuration for workspace %s on %s", system_id, path)
-            return _workspace_configuration_error(path)
         if definition:
             runtime_token = activate_assessment_definition(definition)
         response = await call_next(request)
         if system_id and not request.cookies.get(SYSTEM_COOKIE):
-            slug = await run_in_threadpool(_slug_for_system, system_id)
             if slug:
                 set_system_cookie(response, slug)
     finally:

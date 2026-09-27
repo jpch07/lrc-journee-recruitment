@@ -50,9 +50,12 @@ def test_workspace_database_queries_do_not_block_event_loop_or_mix_tenants(monke
         return system_id
 
     monkeypatch.setattr(main, "database_startup_error", None)
-    monkeypatch.setattr(main, "_request_system_id", resolve)
-    monkeypatch.setattr(main, "_runtime_for_system", runtime)
-    monkeypatch.setattr(main, "_slug_for_system", slug)
+    def workspace(request):
+        system_id = resolve(request)
+        record("runtime", initial_system)
+        return system_id, definitions[system_id], system_id
+
+    monkeypatch.setattr(main, "_request_workspace", workspace)
 
     async def run():
         ticks = []
@@ -80,7 +83,7 @@ def test_workspace_database_queries_do_not_block_event_loop_or_mix_tenants(monke
             await heartbeat_task
         # With synchronous database work on the event loop only the explicit
         # endpoint sleep yields. Workers let the heartbeat continue throughout.
-        assert len(ticks) >= 10
+        assert len(ticks) >= 6
         assert [json.loads(response.body) for response in responses] == [
             {"system": "alpha", "name": "alpha"}, {"system": "beta", "name": "beta"},
         ]
@@ -90,6 +93,6 @@ def test_workspace_database_queries_do_not_block_event_loop_or_mix_tenants(monke
         assert active_assessment_definition() is initial_definition
 
     asyncio.run(run())
-    assert len(observed) == 6
+    assert len(observed) == 4
     assert all(thread_id != event_loop_thread for _, thread_id, _, _ in observed)
     assert all(actual == expected for _, _, actual, expected in observed)
