@@ -65,6 +65,16 @@ def test_sitewide_click_flows(client, tmp_path):
             page.wait_for_selector('#applyRoomChanges')
             editing={"ms":round((time.perf_counter()-started)*1000,1),"requests":len(requests)}
             assert editing["requests"] == (7 if baseline else 1)
+            if not baseline:
+                selector = page.locator('.room-move[data-type="recruit"]').first
+                selector.select_option('2')
+                page.once('dialog', lambda dialog: dialog.dismiss())
+                page.click('.assignment-activity-tabs button[data-activity="sport"]')
+                assert page.locator('.assignment-activity-tabs button.active').get_attribute('data-activity') == 'escape_room'
+                assert selector.input_value() == '2'
+                page.click('#saveRoomMoves')
+                page.wait_for_function("!document.querySelector('#saveRoomMoves')?.disabled")
+
             # Force old activity responses to finish after a newer selection.
             if not baseline:
                 page.route('**/activities/sport/workspace', lambda route: (time.sleep(.15), route.continue_()))

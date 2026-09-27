@@ -67,7 +67,9 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert "General assessment editable" in viewer
     assert "viewerGeneralAssessmentForm" in viewer_js
     assert "viewerProfileSaveStatus" in viewer_js
-    assert 'setStatus("Saved", "saved")' in viewer_js
+    assert "assessmentAutosave" in viewer_js
+    autosave_js = (static / "assessment-autosave.js").read_text(encoding="utf-8")
+    assert 'status("Saved", "saved")' in autosave_js
     assert "View criteria" in viewer_js
     assert "View evaluations" in viewer_js
     assert "Evaluator breakdown" in viewer_js

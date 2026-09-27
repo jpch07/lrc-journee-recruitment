@@ -968,6 +968,8 @@ async function renderAssignmentsV2(prefetched = null) {
   };
   if ($("#clearWorkingPlan")) $("#clearWorkingPlan").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/working-plan`, "DELETE", {}, "Working plan cleared. Published rooms and assignments were not changed.", renderAssignments);
   if ($("#editPublishedRooms")) $("#editPublishedRooms").onclick = async event => {
+    if (!guardDirty()) return;
+    state.dirty = false;
     const button = event.currentTarget;
     button.disabled = true;
     try {
