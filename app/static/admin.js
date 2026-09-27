@@ -20,6 +20,7 @@ const state = {
   roomPlan: null,
   assignmentRound: null,
   activityOperation: null,
+  assignmentDrafts: { rooms: false, assignments: false },
   profileId: null,
   dirty: false,
   pollTimer: null,
@@ -919,6 +920,7 @@ async function renderAssignmentsV2(prefetched = null) {
   const bundle = prefetched || await loadAssignmentWorkspace(journeyId, activity);
   if (sequence !== assignmentLoadSequence || state.journey?.id !== journeyId || state.assignmentActivity !== activity || state.section !== "assignments" || state.dirty) return;
   const {operation, publishedRooms, workingRooms, publishedRound, workingRound} = bundle;
+  state.assignmentDrafts = { rooms: false, assignments: false };
   state.activityOperation = operation;
   state.roomPlan = workingRooms || publishedRooms;
   state.assignmentRound = workingRound || publishedRound;
@@ -960,6 +962,7 @@ async function renderAssignmentsV2(prefetched = null) {
   if ($("#generateRecruitRooms")) $("#generateRecruitRooms").onclick = () => roomPreview("recruits", "Unplaced recruit rooms generated; locked placements were preserved.");
   if ($("#distributeEvaluators")) $("#distributeEvaluators").onclick = () => roomPreview("evaluators", "Evaluators redistributed without moving recruits.");
   if ($("#prepareFullActivity")) $("#prepareFullActivity").onclick = async () => {
+    if (!canChangeWorkingPlans()) return;
     try {
       await api(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/preview?mode=full`, mutation("POST", {}));
       await api(`/api/admin/journeys/${state.journey.id}/assignments/${state.assignmentActivity}/preview`, mutation("POST", {}));
@@ -968,7 +971,7 @@ async function renderAssignmentsV2(prefetched = null) {
   };
   if ($("#clearWorkingPlan")) $("#clearWorkingPlan").onclick = () => actionAndRefresh(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/working-plan`, "DELETE", {}, "Working plan cleared. Published rooms and assignments were not changed.", renderAssignments);
   if ($("#editPublishedRooms")) $("#editPublishedRooms").onclick = async event => {
-    if (!guardDirty()) return;
+    if (!canChangeWorkingPlans()) return;
     state.dirty = false;
     const button = event.currentTarget;
     button.disabled = true;
@@ -1053,6 +1056,7 @@ function warningHtml(warnings) {
 }
 
 function activityAvailabilityDialog(operation) {
+  if (!canChangeWorkingPlans()) return;
   const evaluators = [...operation.evaluators];
   const values = Object.fromEntries(evaluators.map(item => [item.id, Boolean(item.available)]));
   openModal(`<form id="activityAvailabilityForm"><p class="eyebrow">${h(configuredActivityName(operation.activityCode))}</p><h2>Evaluator availability</h2><div class="evaluator-quick-toggle"><input id="activityAvailabilitySearch" autocomplete="off" placeholder="Type evaluator name and press Enter"><div id="activityAvailabilitySuggestions" class="search-suggestions" role="listbox"></div></div><div class="inline-actions compact-actions"><button type="button" class="button ghost" id="resetActivityAvailability">Reset from previous activity</button><span id="activityAvailabilityCount" class="subtle"></span></div><div id="activityAvailabilityList" class="mandatory-list"></div><div class="modal-actions"><button type="button" class="button ghost" id="cancelModal">Cancel</button><button class="button primary">Apply availability</button></div></form>`, { wide: true });
@@ -1092,7 +1096,7 @@ function renderRoomPlan(plan) {
   const unassignedEvaluators = state.journey.evaluators.filter(item => item.active && availableEvaluatorIds.has(item.id) && !placedEvaluators.has(item.id));
   const person = (item, type, room) => `<div class="member-chip room-person"><span>${h(item.name)} ${item.mandatory ? "★" : ""}</span>${item.role ? `<span class="role-badge ${item.role}">${h(categoryName(item.role))}</span>` : ""}${editable && type === "recruit" ? `<label class="room-lock" title="Keep this recruit in this room during automatic generation"><input class="recruit-lock" type="checkbox" data-id="${item.id}" ${item.locked ? "checked" : ""}> Lock</label>` : ""}${editable && type === "evaluator" && room != null && !item.mandatory ? `<label class="room-lock" title="Keep this evaluator in this room when redistributing evaluators"><input class="evaluator-lock" type="checkbox" data-id="${item.id}" ${item.locked ? "checked" : ""}> Lock</label>` : ""}${editable ? roomSelector(type, item.id, room) : ""}</div>`;
   const unassigned = editable && (unassignedRecruits.length || unassignedEvaluators.length) ? `<article class="room-card unassigned-card"><h3>Unassigned</h3><small class="muted">Recruits</small><div class="member-list">${unassignedRecruits.map(item => person(item, "recruit", null)).join("") || `<span class="subtle">None</span>`}</div><small class="muted section-label">Evaluators</small><div class="member-list">${unassignedEvaluators.map(item => person(item, "evaluator", null)).join("") || `<span class="subtle">None</span>`}</div></article>` : "";
-  return `${warningHtml(plan.warnings)}<p class="subtle"><strong>${editable ? "Working" : "Published"} v${plan.version}</strong> · edit ${plan.editRevision || 1} · seed ${h(plan.seed)}</p><div class="room-grid">${plan.rooms.map(room => `<article class="room-card"><h3>Room ${room.number}<span class="subtle">${room.recruits.length}R / ${room.evaluators.length}E</span></h3><small class="muted">Recruits</small><div class="member-list">${room.recruits.map(item => person(item, "recruit", room.number)).join("") || `<span class="subtle">None</span>`}</div><small class="muted section-label">Evaluators</small><div class="member-list">${room.evaluators.map(item => person(item, "evaluator", room.number)).join("") || `<span class="subtle">None</span>`}</div></article>`).join("")}${unassigned}</div>${editable ? `<div class="inline-actions room-edit-actions"><button class="button secondary" id="bulkRoomMoves">Bulk paste placements</button><button class="button primary" id="saveRoomMoves">Save room changes</button></div>` : ""}`;
+  return `${warningHtml(plan.warnings)}<p class="subtle"><strong>${editable ? "Working" : "Published"} v${plan.version}</strong> · edit <span${editable ? ' id="workingRoomRevision"' : ""}>${plan.editRevision || 1}</span> · seed ${h(plan.seed)}</p><div class="room-grid">${plan.rooms.map(room => `<article class="room-card"><h3>Room ${room.number}<span class="subtle">${room.recruits.length}R / ${room.evaluators.length}E</span></h3><small class="muted">Recruits</small><div class="member-list">${room.recruits.map(item => person(item, "recruit", room.number)).join("") || `<span class="subtle">None</span>`}</div><small class="muted section-label">Evaluators</small><div class="member-list">${room.evaluators.map(item => person(item, "evaluator", room.number)).join("") || `<span class="subtle">None</span>`}</div></article>`).join("")}${unassigned}</div>${editable ? `<div class="inline-actions room-edit-actions"><button class="button secondary" id="bulkRoomMoves">Bulk paste placements</button><button class="button primary" id="saveRoomMoves">Save room changes</button></div>` : ""}`;
 }
 
 function roomSelector(type, id, selected) {
@@ -1101,13 +1105,17 @@ function roomSelector(type, id, selected) {
 }
 
 function wireRoomEditors(plan) {
-  $$(".room-move, .recruit-lock, .evaluator-lock", host).forEach(input => input.onchange = () => setDirty(true));
+  $$(".room-move, .recruit-lock, .evaluator-lock", host).forEach(input => input.onchange = () => markWorkingDirty("rooms"));
   const save = async () => {
     const recruit_rooms = {}, evaluator_rooms = {};
     $$(".room-move", host).forEach(select => (select.dataset.type === "recruit" ? recruit_rooms : evaluator_rooms)[select.dataset.id] = select.value ? Number(select.value) : null);
     const locked_recruits = $$(".recruit-lock:checked", host).map(input => input.dataset.id);
     const locked_evaluators = $$(".evaluator-lock:checked", host).map(input => input.dataset.id);
-    await saveWorkingEdits(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms, locked_recruits, locked_evaluators, base_version: plan.editRevision }, "Manual room changes saved to the working plan.", renderAssignments);
+    await saveWorkingEdits(`/api/admin/journeys/${state.journey.id}/activities/${state.assignmentActivity}/rooms/${plan.id}`, "PUT", { recruit_rooms, evaluator_rooms, locked_recruits, locked_evaluators, base_version: plan.editRevision }, "Manual room changes saved to the working plan.", renderAssignments, "rooms", result => {
+      Object.assign(plan, result);
+      state.roomPlan = plan;
+      if ($("#workingRoomRevision")) $("#workingRoomRevision").textContent = plan.editRevision;
+    });
   };
   $("#saveRoomMoves").onclick = save;
   $("#bulkRoomMoves").onclick = () => {
@@ -1130,7 +1138,7 @@ function wireRoomEditors(plan) {
         if (select) select.value = room;
       }
       if (errors.length) return toast(errors.slice(0, 3).join(" "), "error");
-      setDirty(true); closeModal(); toast("Bulk placements applied. Press Save room changes to confirm.");
+      markWorkingDirty("rooms"); closeModal(); toast("Bulk placements applied. Press Save room changes to confirm.");
     };
   };
 }
@@ -1142,14 +1150,14 @@ function renderAssignmentRound(round) {
   const editable = round.status === "preview" && !reused;
   const rows = round.assignments.map((item) => `<div class="assignment-row ${item.repeatedPair ? "repeat" : ""}" data-evaluator="${item.evaluatorId}" data-recruit="${item.recruitId}" data-room="${item.roomNumber ?? ""}" data-reason="${h(item.repeatReason || "")}"><span><strong>${h(item.evaluatorName)}</strong> <span class="role-badge ${item.evaluatorRole}">${h(categoryName(item.evaluatorRole))}</span></span><span>→</span><span><strong>${h(item.recruitName)}</strong>${item.roomNumber ? ` <small>Room ${item.roomNumber}</small>` : ""}${item.repeatReason ? `<small class="assignment-note">${h(item.repeatReason)}</small>` : ""}</span>${editable ? `<div class="assignment-row-actions"><button type="button" class="button ghost small edit-assignment">Edit</button><button type="button" class="button ghost small remove-assignment">Remove</button></div>` : item.repeatedPair ? `<span class="status-pill warning">Repeat</span>` : ""}</div>`).join("");
   const controls = editable ? `<div class="inline-actions" style="margin-top:14px"><button class="button secondary" id="addAssignment">Add pairing</button><button class="button primary" id="saveAssignmentEdits">Save manual edits</button></div>` : reused && round.status === "preview" ? `<p class="subtle">This is an exact, read-only copy of the configured source assignment.</p>` : "";
-  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${round.status === "preview" ? "Working" : "Published"} v${round.version}</strong> · edit ${round.editRevision || 1} · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${rows}</div>${controls}`;
+  return `${warningHtml(round.warnings)}<p class="subtle"><strong>${round.status === "preview" ? "Working" : "Published"} v${round.version}</strong> · edit <span${editable ? ' id="workingAssignmentRevision"' : ""}>${round.editRevision || 1}</span> · seed ${h(round.seed)} · ${round.assignments.length} evaluator tasks</p><div class="assignment-list">${rows}</div>${controls}`;
 }
 
 function wireAssignmentEditors(round) {
   const evaluators = state.journey.evaluators.filter(item => item.active);
   const recruits = state.journey.recruits.filter(item => item.active);
   const wireRow = (container) => {
-    $(".remove-assignment", container).onclick = () => { container.remove(); setDirty(true); };
+    $(".remove-assignment", container).onclick = () => { container.remove(); markWorkingDirty("assignments"); };
     $(".edit-assignment", container).onclick = () => openPairDialog(container);
   };
   const drawRow = (container, evaluator, recruit, reason = "") => {
@@ -1176,7 +1184,7 @@ function wireAssignmentEditors(round) {
       const target = container || document.createElement("div");
       drawRow(target, evaluator, recruit, String(form.get("reason") || "").trim());
       if (!container) $(".assignment-list").append(target);
-      setDirty(true);
+      markWorkingDirty("assignments");
       closeModal();
     };
   };
@@ -1184,11 +1192,16 @@ function wireAssignmentEditors(round) {
   $("#addAssignment").onclick = () => openPairDialog();
   $("#saveAssignmentEdits").onclick = async () => {
     const items = $$(".assignment-row", host).map(row => ({ evaluator_id: row.dataset.evaluator, recruit_id: row.dataset.recruit, room_number: row.dataset.room ? Number(row.dataset.room) : null, override_reason: row.dataset.reason || null }));
-    await saveWorkingEdits(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments);
+    await saveWorkingEdits(`/api/admin/journeys/${state.journey.id}/assignments/${round.id}`, "PUT", { items, base_version: round.editRevision }, "Manual assignment edits saved to the working plan.", renderAssignments, "assignments", result => {
+      Object.assign(round, result);
+      state.assignmentRound = round;
+      if ($("#workingAssignmentRevision")) $("#workingAssignmentRevision").textContent = round.editRevision;
+    });
   };
 }
 
 function mandatoryRoomsDialog(operation = null) {
+  if (!canChangeWorkingPlans()) return;
   const availableById = Object.fromEntries((operation?.evaluators || []).map(item => [item.id, item]));
   const evaluators = (operation?.evaluators || state.journey.evaluators.filter(item => item.active)).map(item => ({ ...item, present: operation ? item.available : item.present })).sort(evaluatorAttendanceSort);
   const placements = Object.fromEntries(evaluators.filter(item => operation ? item.mandatoryRoom : item.mandatoryRoom).map(item => [item.id, item.mandatoryRoom]));
@@ -1265,17 +1278,33 @@ function mandatoryRoomsDialog(operation = null) {
   };
 }
 
-async function saveWorkingEdits(url, method, body, message, refresh) {
+function markWorkingDirty(editor) {
+  state.assignmentDrafts[editor] = true;
+  setDirty(true);
+}
+
+function canChangeWorkingPlans() {
+  if (state.assignmentSaveInFlight || state.dirty) {
+    toast("Save your working edits before changing or publishing plans.", "error");
+    return false;
+  }
+  return true;
+}
+
+async function saveWorkingEdits(url, method, body, message, refresh, editor, acknowledged) {
   if (state.assignmentSaveInFlight) return;
   state.assignmentSaveInFlight = true;
   const controls = $$("input, select, textarea, button", host).map(element => [element, element.disabled]);
   controls.forEach(([element]) => { element.disabled = true; });
   try {
-    await api(url, mutation(method, body));
-    state.dirty = false;
+    const result = await api(url, mutation(method, body));
+    acknowledged(result);
+    state.assignmentDrafts[editor] = false;
+    state.dirty = Object.values(state.assignmentDrafts).some(Boolean);
     toast(message);
-    await refreshJourney();
-    await refresh();
+    // Keep the other editor's DOM draft and base revision intact. Its save will
+    // refresh both panels once every draft has been acknowledged.
+    if (!state.dirty) { await refreshJourney(); await refresh(); }
   } catch (error) { toast(error.message, "error"); }
   finally {
     state.assignmentSaveInFlight = false;
@@ -1284,6 +1313,7 @@ async function saveWorkingEdits(url, method, body, message, refresh) {
 }
 
 async function actionAndRefresh(url, method, body, message, refresh) {
+  if (refresh === renderAssignments && !canChangeWorkingPlans()) return;
   try { await api(url, mutation(method, body)); toast(message); await refreshJourney(); await refresh(); } catch (error) { toast(error.message, "error"); }
 }
 
