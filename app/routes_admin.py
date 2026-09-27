@@ -1131,18 +1131,19 @@ def dashboard(
     results = result_snapshot(db, journey)
     warnings: list[str] = loads(room_plan.warnings_json, []) if room_plan else []
     states = list(db.scalars(select(ActivityState).where(ActivityState.journey_id == journey.id)))
+    round_ids = {state.assignment_round_id for state in states if state.assignment_round_id}
+    rounds = {r.id: r for r in db.scalars(select(AssignmentRound).where(AssignmentRound.id.in_(round_ids)))} if round_ids else {}
     for state in states:
-        if state.assignment_round_id:
-            round_record = db.get(AssignmentRound, state.assignment_round_id)
-            if round_record:
-                warnings.extend(
-                    f"{RUBRICS[state.code].name}: {message}"
-                    for message in loads(round_record.warnings_json, [])
-                    if message not in {
-                        "Shared Skills & Simulation assignment.",
-                        "Simulation reuses the published Skills assignment.",
-                    }
-                )
+        round_record = rounds.get(state.assignment_round_id)
+        if round_record:
+            warnings.extend(
+                f"{RUBRICS[state.code].name}: {message}"
+                for message in loads(round_record.warnings_json, [])
+                if message not in {
+                    "Shared Skills & Simulation assignment.",
+                    "Simulation reuses the published Skills assignment.",
+                }
+            )
     active_monitoring = monitoring_snapshot(db, journey, journey.current_activity) if journey.current_activity else None
     details = journey_detail(journey_id, context=None, db=db) if include_details else None
     return {

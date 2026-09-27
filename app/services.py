@@ -10,7 +10,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException
 from PIL import Image, ImageOps
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from .assignments import (
@@ -249,22 +249,15 @@ def create_journey(db: Session, name: str, event_date, room_count: int, actor_na
 
 
 def serialize_journey(db: Session, journey: Journey, *, include_token: bool = False) -> dict:
-    recruits = db.scalar(
-        select(func.count()).select_from(Recruit).where(Recruit.journey_id == journey.id, Recruit.active.is_(True))
-    ) or 0
-    present_recruits = db.scalar(
-        select(func.count()).select_from(Recruit).where(
-            Recruit.journey_id == journey.id, Recruit.active.is_(True), Recruit.present.is_(True)
-        )
-    ) or 0
-    evaluators = db.scalar(
-        select(func.count()).select_from(Evaluator).where(Evaluator.journey_id == journey.id, Evaluator.active.is_(True))
-    ) or 0
-    present_evaluators = db.scalar(
-        select(func.count()).select_from(Evaluator).where(
-            Evaluator.journey_id == journey.id, Evaluator.active.is_(True), Evaluator.present.is_(True)
-        )
-    ) or 0
+    # Count active and present members in the same exchange for each roster.
+    recruits, present_recruits = db.execute(
+        select(func.count(), func.count(case((Recruit.present.is_(True), 1))))
+        .select_from(Recruit).where(Recruit.journey_id == journey.id, Recruit.active.is_(True))
+    ).one()
+    evaluators, present_evaluators = db.execute(
+        select(func.count(), func.count(case((Evaluator.present.is_(True), 1))))
+        .select_from(Evaluator).where(Evaluator.journey_id == journey.id, Evaluator.active.is_(True))
+    ).one()
     result = {
         "id": journey.id,
         "name": journey.name,
