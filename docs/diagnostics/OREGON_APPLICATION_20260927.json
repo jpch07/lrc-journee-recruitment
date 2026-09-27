@@ -1,0 +1,250 @@
+{
+  "sha": "b37e381ee5df4efb3a1e033c5d699f291715bff4",
+  "measurement_phase": "initial application deployment before R2 config repair; measured flows do not load photos",
+  "unit": "ms",
+  "method": "automation click dispatch to populated DOM visibility including automation overhead; CDP request start to loadingFinished separately",
+  "samples": {
+    "Open Journee/dashboard": {
+      "Virginia": [
+        [
+          3647,
+          3479,
+          3613
+        ],
+        [
+          3473,
+          3400,
+          3037
+        ]
+      ],
+      "Oregon": [
+        [
+          2706,
+          2248,
+          1999
+        ],
+        [
+          1974,
+          1670,
+          1468
+        ]
+      ]
+    },
+    "Results": {
+      "Virginia": [
+        [
+          2667,
+          2554,
+          2584
+        ],
+        [
+          1595,
+          1594,
+          1602
+        ]
+      ],
+      "Oregon": [
+        [
+          1397,
+          1309,
+          1306
+        ],
+        [
+          896,
+          903,
+          864
+        ]
+      ]
+    },
+    "Initial Sport rooms/activity": {
+      "Virginia": [
+        [
+          2418,
+          2508,
+          2436
+        ],
+        [
+          2038,
+          2057,
+          1994
+        ]
+      ],
+      "Oregon": [
+        [
+          1892,
+          1447,
+          1430
+        ],
+        [
+          1467,
+          1052,
+          1039
+        ]
+      ]
+    },
+    "Switch Escape Room": {
+      "Virginia": [
+        [
+          2313,
+          3085,
+          3080
+        ],
+        [
+          2231,
+          2217,
+          2223
+        ]
+      ],
+      "Oregon": [
+        [
+          1864,
+          1845,
+          1837
+        ],
+        [
+          1130,
+          1116,
+          1114
+        ]
+      ]
+    },
+    "Switch Negotiation": {
+      "Virginia": [
+        [
+          3227,
+          2979,
+          3004
+        ],
+        [
+          2398,
+          2207,
+          2228
+        ]
+      ],
+      "Oregon": [
+        [
+          1740,
+          1539,
+          1545
+        ],
+        [
+          1312,
+          1132,
+          1129
+        ]
+      ]
+    }
+  },
+  "post_storage_repair_samples": {
+    "Open Journee/dashboard": {
+      "Oregon": [
+        [
+          3200,
+          2583,
+          2989
+        ],
+        [
+          1974,
+          1418,
+          1469
+        ]
+      ]
+    },
+    "Results": {
+      "Oregon": [
+        [
+          1838,
+          1246,
+          1243
+        ],
+        [
+          1434,
+          844,
+          843
+        ]
+      ]
+    },
+    "Initial Sport rooms/activity": {
+      "Oregon": [
+        [
+          1443,
+          1468,
+          1598
+        ],
+        [
+          1040,
+          1058,
+          1168
+        ]
+      ]
+    },
+    "Switch Escape Room": {
+      "Oregon": [
+        [
+          1890,
+          1879,
+          1859
+        ],
+        [
+          1150,
+          1136,
+          1129
+        ]
+      ]
+    },
+    "Switch Negotiation": {
+      "Oregon": [
+        [
+          1710,
+          1585,
+          1661
+        ],
+        [
+          1264,
+          1177,
+          1166
+        ]
+      ]
+    }
+  },
+  "management_completed_pair": {
+    "Virginia": {
+      "navigation_to_visible_ms": 12277,
+      "request_ms": {
+        "configuration": 1285,
+        "session": 1323,
+        "journeys": 1602,
+        "completed": 6278
+      }
+    },
+    "Oregon": {
+      "navigation_to_visible_ms": 8060,
+      "request_ms": {
+        "configuration": 1459,
+        "session": 914,
+        "journeys": 906,
+        "completed": 3006
+      }
+    },
+    "rows": 51,
+    "n": 1,
+    "limit": "One completed pair. Extra repetitions unavailable after browser connection failure; unfinished/censored timings excluded."
+  },
+  "verification": {
+    "photo_loaded_after_storage_repair": true,
+    "generated_navigation_origins": [
+      "https://evalday-oregon.onrender.com"
+    ],
+    "initialized_activities_checked_read_only": [
+      "sport",
+      "escape_room",
+      "negotiation",
+      "skills",
+      "simulation"
+    ],
+    "all_completed_navigation_requests": "GET/200",
+    "mutations_tested_only_in_disposable_fixtures": true
+  },
+  "startup_isolation_followup_sha": "386cb0dec265df9402b2113842b46c90a6f8023d",
+  "final_revision_measurement_limit": "Measured b37e381 UI/routes/config, before health-only tenant-isolation fix 386cb0d. No frontend or navigation handler change in followup; final-head browser retest unavailable."
+}

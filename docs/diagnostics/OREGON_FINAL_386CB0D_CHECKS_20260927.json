@@ -1,0 +1,52 @@
+{
+  "connection_usage": {
+    "clients_including_check": 6,
+    "max": 20,
+    "superuser_reserved": 3,
+    "reserved": 0,
+    "tls": [
+      true,
+      "TLSv1.3"
+    ],
+    "check_connection_closed": true
+  },
+  "resources": [
+    {
+      "label": "Virginia",
+      "service": "srv-da61170u01pc738qvcag",
+      "live_deploy": "dep-dasm2a0jo6nc73cd2jug",
+      "sha": "258638de459d7b3091797e6e27d85ecd4aaa067a",
+      "plan": "free",
+      "autoDeploy": "no",
+      "instances": 1,
+      "workers": 1,
+      "pool": 5,
+      "overflow": 0
+    },
+    {
+      "label": "legacy",
+      "service": "srv-d9q508navr4c73aqmk2g",
+      "live_deploy": "dep-dapac6rbc2fs73evu5ig",
+      "sha": "1faeb9647624995aed3373e474a70f641bc1fa6f",
+      "plan": "free",
+      "autoDeploy": "yes",
+      "instances": 1,
+      "workers": 1,
+      "pool": 5,
+      "overflow": 0
+    },
+    {
+      "label": "Oregon",
+      "service": "srv-dasn8re0tbcc738644sg",
+      "live_deploy": "dep-dasnl917lnhs73a07vrg",
+      "sha": "386cb0dec265df9402b2113842b46c90a6f8023d",
+      "plan": "free",
+      "autoDeploy": "no",
+      "instances": 1,
+      "workers": 1,
+      "pool": 1,
+      "overflow": 0
+    }
+  ],
+  "signing_storage_match": true
+}
