@@ -108,3 +108,19 @@ def test_second_workspace_is_also_verified(client, monkeypatch):
     with TestClient(main.app) as verified:
         assert verified.get("/health/ready").status_code == 503
     main.database_startup_error = None
+
+
+def test_successful_startup_keeps_later_workspace_failure_isolated(client, monkeypatch):
+    from test_workspace_recovery import create_workspaces
+    _, workspaces = create_workspaces(client)
+    enable_verified(monkeypatch)
+    with TestClient(main.app) as verified:
+        assert verified.get("/health/ready").status_code == 200
+        with engine.begin() as connection:
+            connection.execute(text("update assessment_system_versions set definition_json='{}' where system_id=(select id from assessment_systems where name='Test workspace')"))
+        assert verified.get("/health/ready").status_code == 200
+        assert main.database_startup_error is None
+        bad_slug = workspaces[1]["slug"]
+        good_slug = workspaces[0]["slug"]
+        assert verified.get(f"/{bad_slug}/admin").status_code == 409
+        assert verified.get(f"/{good_slug}/admin").status_code == 200

@@ -32,6 +32,7 @@ from sqlalchemy import inspect, select
 
 
 database_startup_error: str | None = None
+startup_prerequisites_verified = False
 logger = logging.getLogger(__name__)
 
 
@@ -78,10 +79,12 @@ def verify_existing_startup() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    global database_startup_error
+    global database_startup_error, startup_prerequisites_verified
     if settings.startup_verify_only:
+        startup_prerequisites_verified = False
         try:
             await run_in_threadpool(verify_existing_startup)
+            startup_prerequisites_verified = True
             database_startup_error = None
         except Exception:
             # Do not expose connection details or saved configuration values.
@@ -368,12 +371,14 @@ def health_live():
 
 @app.get("/health/ready", include_in_schema=False)
 def health_ready():
-    global database_startup_error
+    global database_startup_error, startup_prerequisites_verified
     try:
-        if settings.startup_verify_only:
+        if settings.startup_verify_only and not startup_prerequisites_verified:
+            # Retry failed startup prerequisites without ever initializing them.
+            # After success, tenant configuration changes remain isolated by the
+            # ordinary request resolver; a health probe must not couple tenants.
             verify_existing_startup()
-            database_startup_error = None
-            return {"status": "ready"}
+            startup_prerequisites_verified = True
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
