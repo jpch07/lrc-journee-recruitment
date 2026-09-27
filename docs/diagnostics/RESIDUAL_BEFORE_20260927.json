@@ -1,0 +1,83 @@
+{
+  "sha": "386cb0dec265df9402b2113842b46c90a6f8023d",
+  "definition": "automation reload/click dispatch to populated visible DOM; network request start to loadingFinished separately; no server SQL/CPU/pool durations",
+  "management_visible_ms": [
+    7490,
+    6250,
+    6223
+  ],
+  "management_api_ms": {
+    "public": [
+      628,
+      660,
+      652
+    ],
+    "session": [
+      708,
+      774,
+      703
+    ],
+    "journeys": [
+      902,
+      819,
+      848
+    ],
+    "completed": [
+      3065,
+      2649,
+      2755
+    ]
+  },
+  "admin": {
+    "open": {
+      "visible_ms": [
+        1954,
+        1968
+      ],
+      "request_ms": [
+        1816,
+        1379
+      ]
+    },
+    "results": {
+      "visible_ms": [
+        1553,
+        3478
+      ],
+      "request_ms": [
+        853,
+        840
+      ]
+    },
+    "sport": {
+      "visible_ms": [
+        3222,
+        6131
+      ],
+      "request_ms": [
+        1028,
+        1217
+      ]
+    },
+    "escape": {
+      "visible_ms": [
+        3732
+      ],
+      "request_ms": [
+        1158
+      ]
+    }
+  },
+  "limits": [
+    "Later dispatch timeout was censored, although UI reached escape room.",
+    "Third opening CDP capture missing request events; excluded from paired evidence.",
+    "Admin visible timings show substantial dispatch overhead; no percentage claims."
+  ],
+  "final_head_browser_gap_closed": {
+    "authenticated": true,
+    "tenant_library_journeys": 4,
+    "completed_result_rows": 51,
+    "existing_photo_loaded": true,
+    "initialized_activities": "prior chain/availability evidence reused on same Journee; no missing operations touched"
+  }
+}

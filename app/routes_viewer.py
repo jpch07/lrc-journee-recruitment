@@ -37,11 +37,12 @@ from .services import (
     serialize_recruit,
 )
 from .object_storage import has_photo, read_recruit_photo
+from .routes_auth import session as session_payload
 
 router = APIRouter(prefix="/api/view", tags=["read-only-management"])
 
 
-def _journey_payload(db: Session, journey: Journey) -> dict:
+def _journey_payload(db: Session, journey: Journey, *, include_metadata: bool = True) -> dict:
     recruits = list(db.scalars(select(Recruit).where(
         Recruit.journey_id == journey.id, Recruit.active.is_(True)
     ).order_by(func.lower(Recruit.name))))
@@ -61,7 +62,6 @@ def _journey_payload(db: Session, journey: Journey) -> dict:
         payload = serialize_evaluator(item)
         payload["mandatoryRoom"] = mandatory_rooms.get(item.id)
         evaluators.append(payload)
-    journey_payload = serialize_journey(db, journey)
     for recruit in recruits:
         payload = serialize_recruit(recruit)
         payload.update({
@@ -79,8 +79,8 @@ def _journey_payload(db: Session, journey: Journey) -> dict:
         })
         yield "evaluator", evaluator
     yield "meta", {
-        "journey": journey_payload,
-        "activities": _activity_states(db, journey.id),
+        **({"journey": serialize_journey(db, journey),
+            "activities": _activity_states(db, journey.id)} if include_metadata else {}),
         "results": result_snapshot(db, journey),
     }
 
@@ -158,22 +158,28 @@ def _aggregate_results(snapshots: list[tuple[Journey, dict]]) -> dict:
     }
 
 
-def _completed_view(db: Session) -> dict:
-    journeys = list(db.scalars(
+def _completed_view(db: Session, *, journey_items=None, journey_payloads=None) -> dict:
+    journeys = journey_items if journey_items is not None else list(db.scalars(
         select(Journey).where(Journey.status == "completed").order_by(Journey.event_date.desc(), func.lower(Journey.name))
     ))
     recruits: list[dict] = []
     evaluators: list[dict] = []
     snapshots: list[tuple[Journey, dict]] = []
     for journey in journeys:
-        payload = _single_journey_view(db, journey)
-        recruits.extend(payload["recruits"])
-        evaluators.extend(payload["evaluators"])
-        snapshots.append((journey, payload["results"]))
+        # Completed scope never returns per-Journee activity state or metadata.
+        # Avoid reading and serializing those discarded values twice.
+        for kind, payload in _journey_payload(db, journey, include_metadata=False):
+            if kind == "recruit":
+                recruits.append(payload)
+            elif kind == "evaluator":
+                evaluators.append(payload)
+            else:
+                snapshots.append((journey, payload["results"]))
     return {
         "scope": "completed",
         "journey": None,
-        "journeys": [serialize_journey(db, journey) for journey in journeys],
+        "journeys": [journey_payloads[journey.id] if journey_payloads is not None
+                     else serialize_journey(db, journey) for journey in journeys],
         "activities": [{"code": code, "name": RUBRICS[code].name} for code in ACTIVITY_ORDER],
         "recruits": recruits,
         "evaluators": evaluators,
@@ -199,6 +205,21 @@ def journeys(context: UserContext = Depends(require_results), db: Session = Depe
     return [serialize_journey(db, item) for item in db.scalars(
         select(Journey).order_by(Journey.event_date.desc(), func.lower(Journey.name))
     )]
+
+
+@router.get("/bootstrap")
+def bootstrap(context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
+    """One authorized request/session for the library and initial completed view."""
+    items = list(db.scalars(select(Journey).order_by(
+        Journey.event_date.desc(), func.lower(Journey.name)
+    )))
+    payloads = {item.id: serialize_journey(db, item) for item in items}
+    return {
+        "session": session_payload(context, db),
+        "journeys": list(payloads.values()),
+        "completed": _completed_view(db, journey_items=[item for item in items if item.status == "completed"],
+                                     journey_payloads=payloads),
+    }
 
 
 @router.get("/journeys/{journey_id}")

@@ -1,0 +1,12 @@
+{
+  "read_only": "on",
+  "max_connections": 20,
+  "superuser_reserved": 3,
+  "current_clients_including_check": 5,
+  "check_closed_afterwards": true,
+  "configured_steady": 11,
+  "oregon_deploy_overlap": 12,
+  "legacy_deploy_overlap": 16,
+  "pool2_legacy_overlap": 17,
+  "decision": "keep Oregon pool1/overflow0; pool2 leaves no nonreserved admin slot"
+}

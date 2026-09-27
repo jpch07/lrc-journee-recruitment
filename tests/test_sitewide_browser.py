@@ -50,7 +50,8 @@ def test_sitewide_click_flows(client, tmp_path):
         with sync_playwright() as pw:
             try: browser = pw.chromium.launch(headless=True)
             except Exception: browser = pw.chromium.launch(channel="msedge",headless=True)
-            page = browser.new_page()
+            context = browser.new_context()
+            page = context.new_page()
             errors = []
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.goto(base+"/admin",wait_until="networkidle")
@@ -135,6 +136,44 @@ def test_sitewide_click_flows(client, tmp_path):
                 page.wait_for_selector('#applyRoomChanges')
                 page.wait_for_timeout(300)
                 assert page.locator('.assignment-activity-tabs button.active').get_attribute('data-activity') == 'escape_room'
+            # Management must keep the full roster/profile behavior while
+            # eliminating the library -> completed-view request waterfall.
+            management = page.context.new_page()
+            management_requests = []
+            management.on("request", lambda request: management_requests.append(request.url) if "/api/view/" in request.url else None)
+            management.goto(base+"/view", wait_until="networkidle")
+            management.wait_for_selector('#viewerHost tbody tr')
+            assert len([url for url in management_requests if url.endswith('/bootstrap')]) == 1
+            assert not [url for url in management_requests if url.endswith('/completed') or url.endswith('/journeys')]
+            management.click('#viewerNav button[data-tab="attendance"]')
+            management.wait_for_selector('#viewerHost h1')
+            assert management.locator('#viewerHost h1').inner_text() == 'Attendance'
+            assert management.locator('#viewerHost tbody tr').count() > 0
+            management.click('#viewerNav button[data-tab="profiles"]')
+            management.wait_for_selector('#viewerGeneralAssessmentForm textarea[name="comment"]')
+            management.click('#viewerNav button[data-tab="results"]')
+            management.wait_for_selector('#viewerHost tbody tr')
+            management.select_option('#viewerJourney', j)
+            management.wait_for_load_state('networkidle')
+            held = []
+            def hold_completed(route):
+                response = route.fetch()
+                held.append((route, response))
+            management.route('**/api/view/completed', hold_completed)
+            management.select_option('#viewerJourney', 'completed')
+            management.wait_for_function("document.querySelector('#viewerJourney').value === 'completed'")
+            # Pump browser events until the old completed response is retained.
+            for _ in range(50):
+                if held: break
+                management.wait_for_timeout(20)
+            assert held
+            management.select_option('#viewerJourney', j)
+            management.wait_for_timeout(200)
+            held[0][0].fulfill(response=held[0][1])
+            management.wait_for_load_state('networkidle')
+            assert management.locator('#viewerJourney').input_value() == j
+            assert 'Shared rankings across every completed Journee.' not in management.locator('#viewerHost').inner_text()
+            management.close()
             assert not errors, errors
             print("BROWSER_FLOW", {"baseline":baseline,"simulated_exchange_ms":delay*1000,"open":opening,"initial_activity":initial_load,"activity_switch":loading,"click_to_editable":editing})
             browser.close()

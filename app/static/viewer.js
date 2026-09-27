@@ -91,19 +91,26 @@ $("#viewerLoginForm").onsubmit = async event => {
   } catch (error) { $("#viewerLoginError").textContent = error.message; }
 };
 
-async function openApp() {
+async function openApp(prefetched = null) {
   $("#viewerLoginView").classList.add("hidden");
   $("#viewerApp").classList.add("hidden");
   $("#viewerName").textContent = state.session.username;
-  state.journeys = await api("/api/view/journeys");
+  const bootstrap = prefetched || await api("/api/view/bootstrap");
+  state.session = bootstrap.session;
+  state.journeys = bootstrap.journeys;
   if (state.journeyId !== COMPLETED_SCOPE && !state.journeys.some(item => item.id === state.journeyId)) state.journeyId = COMPLETED_SCOPE;
   $("#viewerJourney").innerHTML = `<option value="${COMPLETED_SCOPE}" ${state.journeyId === COMPLETED_SCOPE ? "selected" : ""}>All completed Journees</option>${state.journeys.map(item => `<option value="${item.id}" ${item.id === state.journeyId ? "selected" : ""}>${h(item.name)} · ${h(item.eventDate)}</option>`).join("")}`;
-  await loadJourney();
+  await loadJourney(state.journeyId === COMPLETED_SCOPE ? bootstrap.completed : null);
   $("#viewerApp").classList.remove("hidden");
 }
 
-async function loadJourney() {
-  state.data = await api(state.journeyId === COMPLETED_SCOPE ? "/api/view/completed" : `/api/view/journeys/${state.journeyId}`);
+let journeyLoadSequence = 0;
+async function loadJourney(prefetched = null) {
+  const sequence = ++journeyLoadSequence;
+  const journeyId = state.journeyId;
+  const data = prefetched || await api(journeyId === COMPLETED_SCOPE ? "/api/view/completed" : `/api/view/journeys/${journeyId}`);
+  if (sequence !== journeyLoadSequence || journeyId !== state.journeyId) return;
+  state.data = data;
   if (!state.data.recruits.some(item => item.profileKey === state.profileKey)) state.profileKey = state.data.recruits[0]?.profileKey || "";
   await render();
 }
@@ -122,6 +129,7 @@ $("#viewerLogout").onclick = async () => {
   if (!await leaveProfile()) return;
   try { await api("/api/auth/logout", { method: "POST", headers: { "X-CSRF-Token": state.session.csrfToken } }); } catch {}
   state.session = null;
+  ++journeyLoadSequence;
   await prepareLogin();
 };
 
@@ -311,8 +319,9 @@ async function showEvaluation(profile, code, index) {
 
 (async () => {
   try {
-    state.session = await api("/api/auth/session");
+    const bootstrap = await api("/api/view/bootstrap");
+    state.session = bootstrap.session;
     if (!(state.session.isOwner || state.session.canAdmin || state.session.canResults)) throw new Error();
-    await openApp();
+    await openApp(bootstrap);
   } catch { await prepareLogin(); }
 })();

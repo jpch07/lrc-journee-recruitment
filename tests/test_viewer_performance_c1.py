@@ -297,8 +297,9 @@ def test_select_query_count_reduction():
     print(f"  Difference:         {difference} fewer SELECT queries")
     # Specific regression bound for this two-Journee fixture and C1 baseline.
     # Site-wide roster count batching also improves the full-view reference.
-    # Historical C1 alone was 39 -> 15; integrated helpers now measure 31 -> 15.
-    assert difference == 16
+    # Historical C1 alone was39 ->15; site-wide roster batching was31 ->15.
+    # Residual full-view discarded metadata removal reduces this to25 ->15.
+    assert difference == 10
 
 
 def test_completed_results_and_profile_respect_workspace_isolation(client):
@@ -357,6 +358,12 @@ def test_completed_results_and_profile_respect_workspace_isolation(client):
         f"/api/view/journeys/{other_journey_id}/recruits/{other_recruit_id}/profile?scope=completed"
     )
     assert response.status_code == 404, response.text
+    bootstrap = client.get("/api/view/bootstrap")
+    assert bootstrap.status_code == 200
+    assert other_journey_id not in {row["id"] for row in bootstrap.json()["journeys"]}
+    assert {row["name"] for row in bootstrap.json()["completed"]["results"]["rows"]} == {
+        "Recruit One", "Recruit Two", "Recruit Three",
+    }
 
 
 def test_completed_profile_reflects_general_assessment_save(client):
