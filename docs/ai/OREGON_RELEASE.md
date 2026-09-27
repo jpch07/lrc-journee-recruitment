@@ -1,0 +1,13 @@
+# Oregon application release checkpoint
+
+Approved: one Free Oregon full application, new URL, existing Aiven; Virginia unchanged at 258638de459d7b3091797e6e27d85ecd4aaa067a / dep-dasm2a0jo6nc73cd2jug, auto-deploy OFF. Base is that tested revision; no probe application files included.
+
+Opt-in LRC_STARTUP_VERIFY_ONLY=true validates settings/rubrics, exact existing Alembic revision, required tables, every active workspace published configuration and active linked owner. PostgreSQL transaction is READ ONLY. No migrations/bootstrap/commit/startup jobs. Missing prerequisites return sanitized readiness 503; repeated readiness cannot clear a prerequisite failure on ping alone. Default remains unchanged. Normal authorized operations remain writable.
+
+Focused fixture checks: 9 passed in 7.35s (Python 3.11 / Windows, pytest tests/test_verify_startup.py -q). They cover no initialization calls or startup DML/DDL, normal authentication/session writes, schema/config/owner/table/workspace failures, second-tenant validation, PostgreSQL read-only statement ordering and opt-in default. Earlier failed checks were fixture issues: wrong session endpoint and persistent non-ORM Alembic revision table; repaired without application changes. Exact-head CI/build is the next gate.
+
+Current preflight: Hobby/no card/$0 accrued/projected; 480.97/750 hours, 2/500 build minutes, 1.39/5GB used. Two existing Free services. Both use same database, no pool overrides, five connections/zero overflow/one worker each, no current deployment overlap. TLS1.3 verify-full CA matches prior official fingerprint; read-only catalog check saw 2 clients including itself, max20, 3 superuser reserved, 0 other reserved; closed afterward.
+
+Connection candidate: Oregon one connection/no overflow, existing pools unchanged. Steady configured maximum11; Oregon deployment overlap12; single existing-service deployment overlap16, leaving3 reserved+1 administration slot. Do not deploy Oregon during another deployment overlap: concurrent overlaps would exhaust administration headroom. Auto-deploy/previews OFF for Oregon. This conservative single-connection choice requires actual navigation verification and may limit concurrent-user throughput; do not claim peak-load capacity. No resource created yet.
+
+Next: exact-head CI, secure config transfer, current gate recheck, create Oregon once, verify exact deployment/readiness/storage/browser flows, paired warm navigation, sanitized evidence, temporary credential cleanup. Existing region comparison (57.3% lower warm exchange) is reused, not repeated. No changes to main/legacy/Virginia/Aiven/scheduled workflows. Free sleep unresolved.

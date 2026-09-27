@@ -13,7 +13,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import STATIC_DIR, settings
 from .auth import SYSTEM_COOKIE, USER_COOKIE, _token_hash, ensure_owner_account, ensure_platform_owner, set_system_cookie
-from .db import SessionLocal, initialize_database
+from .db import Base, SessionLocal, initialize_database
 from .routes_admin import router as admin_router
 from .routes_evaluator import router as evaluator_router
 from .routes_attendance import router as attendance_router
@@ -25,19 +25,69 @@ from .rubric import validate_rubrics
 from .assessment_service import ensure_assessment_system
 from .assessment_runtime import active_assessment_definition, activate_assessment_definition, reset_assessment_definition
 from .assessment_config import load_stored_definition
-from .models import AssessmentSystem, AssessmentSystemVersion, Journey, RecruitAttendanceAccess, UserAccount, UserSession
+from .models import AssessmentSystem, AssessmentSystemVersion, Journey, RecruitAttendanceAccess, UserAccount, UserSession, PlatformAccount
 from .tenant import reset_system, select_system
 from .utils import loads
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 
 
 database_startup_error: str | None = None
 logger = logging.getLogger(__name__)
 
 
+def verify_existing_startup() -> None:
+    """Validate an existing installation without migration/bootstrap effects.
+
+    Each call owns its synchronous session. PostgreSQL enforces read-only for
+    the entire transaction; no ORM objects or sessions escape this callable.
+    """
+    settings.validate_production()
+    validate_rubrics()
+    with SessionLocal() as db:
+        connection = db.connection()
+        if connection.dialect.name == "postgresql":
+            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        revision = connection.exec_driver_sql("select version_num from alembic_version").scalar_one()
+        if revision != "0018_dynamic_general_factors":
+            raise RuntimeError("Existing schema revision does not match this application")
+        schema = "journee_recruitment" if connection.dialect.name == "postgresql" else None
+        present = set(inspect(connection).get_table_names(schema=schema))
+        if not set(Base.metadata.tables).issubset(present):
+            raise RuntimeError("Existing schema is missing application tables")
+        systems = db.scalars(select(AssessmentSystem).where(
+            AssessmentSystem.status == "active"
+        ).execution_options(bypass_recruitment_scope=True)).all()
+        if not systems:
+            raise RuntimeError("No active workspace is configured")
+        for system in systems:
+            record = db.scalar(select(AssessmentSystemVersion).where(
+                AssessmentSystemVersion.system_id == system.id,
+                AssessmentSystemVersion.version == system.published_version,
+            ).execution_options(bypass_recruitment_scope=True))
+            if record is None:
+                raise RuntimeError("A workspace has no published configuration")
+            load_stored_definition(loads(record.definition_json, {}))
+            owner = db.scalar(select(UserAccount.id).join(
+                PlatformAccount, UserAccount.platform_account_id == PlatformAccount.id
+            ).where(UserAccount.system_id == system.id, UserAccount.is_owner.is_(True),
+                    UserAccount.active.is_(True), PlatformAccount.active.is_(True)
+            ).execution_options(bypass_recruitment_scope=True))
+            if owner is None:
+                raise RuntimeError("A workspace has no active linked owner")
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     global database_startup_error
+    if settings.startup_verify_only:
+        try:
+            await run_in_threadpool(verify_existing_startup)
+            database_startup_error = None
+        except Exception:
+            # Do not expose connection details or saved configuration values.
+            database_startup_error = "Existing installation prerequisites are not satisfied"
+        yield
+        return
     settings.validate_production()
     validate_rubrics()
     try:
@@ -320,6 +370,10 @@ def health_live():
 def health_ready():
     global database_startup_error
     try:
+        if settings.startup_verify_only:
+            verify_existing_startup()
+            database_startup_error = None
+            return {"status": "ready"}
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
@@ -330,8 +384,11 @@ def health_ready():
         database_startup_error = None
         return {"status": "ready"}
     except Exception as exc:
-        database_startup_error = str(exc)
-        raise HTTPException(status_code=503, detail=f"Database not ready: {exc}") from exc
+        database_startup_error = (
+            "Existing installation prerequisites are not satisfied"
+            if settings.startup_verify_only else str(exc)
+        )
+        raise HTTPException(status_code=503, detail=f"Database not ready: {database_startup_error}") from exc
 
 
 @app.get("/", include_in_schema=False)

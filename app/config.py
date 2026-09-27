@@ -32,6 +32,7 @@ class Settings:
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
     r2_bucket: str = ""
+    startup_verify_only: bool = False
     database_pool_size: int = 5
     database_max_overflow: int = 0
     database_pool_timeout_seconds: int = 30
@@ -115,6 +116,7 @@ def load_settings() -> Settings:
         r2_access_key_id=os.getenv("LRC_R2_ACCESS_KEY_ID", "").strip(),
         r2_secret_access_key=os.getenv("LRC_R2_SECRET_ACCESS_KEY", "").strip(),
         r2_bucket=os.getenv("LRC_R2_BUCKET", "").strip(),
+        startup_verify_only=_bool_env("LRC_STARTUP_VERIFY_ONLY", False),
         database_pool_size=_bounded_int_env("LRC_DATABASE_POOL_SIZE", 5, 1, 100),
         database_max_overflow=_bounded_int_env("LRC_DATABASE_MAX_OVERFLOW", 0, 0, 100),
         database_pool_timeout_seconds=_bounded_int_env("LRC_DATABASE_POOL_TIMEOUT_SECONDS", 30, 1, 120),
