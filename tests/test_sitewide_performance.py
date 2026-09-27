@@ -9,6 +9,7 @@ from test_viewer_performance_c1 import _login
 
 
 def measure(client, paths):
+    csrf = client.get("/api/auth/session").json().get("csrfToken") if any(isinstance(path, tuple) for path in paths) else None
     counts = {"sql": 0, "checkouts": 0}
     def sql(*args): counts["sql"] += 1
     def checkout(*args): counts["checkouts"] += 1
@@ -16,7 +17,7 @@ def measure(client, paths):
     event.listen(engine, "checkout", checkout)
     started = time.perf_counter()
     try:
-        responses = [client.get(path) for path in paths]
+        responses = [client.request(path[0], path[1], json=path[2], headers={"X-CSRF-Token": csrf}) if isinstance(path, tuple) else client.get(path) for path in paths]
         assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
         return [r.json() for r in responses], {**counts, "requests": len(paths), "ms": round((time.perf_counter()-started)*1000, 1)}
     finally:
@@ -55,7 +56,12 @@ def test_http_flow_measurement(client):
     assert list(new[0].values()) == old
     assert bundled["sql"] < loading["sql"]
     assert bundled["checkouts"] < loading["checkouts"]
-    print("HTTP_BASELINE", {"open": opening, "activity": loading, "bundled_open": bundled_open, "bundled_activity": bundled})
+    edit_path = base+"/activities/escape_room/rooms/"+new[0]["publishedRooms"]["id"]+"/edit"
+    _, old_edit = measure(client, [("POST",edit_path,{}),base,*paths])
+    edit, new_edit = measure(client, [("POST",edit_path,{})])
+    assert edit[0]["status"] == "preview"
+    assert client.get(paths[1]).json() == old[1], "Published data must remain untouched"
+    print("HTTP_BASELINE", {"open": opening, "activity": loading, "bundled_open": bundled_open, "bundled_activity": bundled, "legacy_edit_flow_on_candidate":old_edit, "reused_edit":new_edit})
 
 
 def test_bundle_initialization_and_authorization(client):
