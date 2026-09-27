@@ -296,7 +296,9 @@ def test_select_query_count_reduction():
     print(f"  _completed_results: {len(new_queries)} SELECT queries")
     print(f"  Difference:         {difference} fewer SELECT queries")
     # Specific regression bound for this two-Journee fixture and C1 baseline.
-    assert difference == 24
+    # Site-wide roster count batching also improves the full-view reference.
+    # Historical C1 alone was 39 -> 15; integrated helpers now measure 31 -> 15.
+    assert difference == 16
 
 
 def test_completed_results_and_profile_respect_workspace_isolation(client):
