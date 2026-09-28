@@ -449,6 +449,26 @@ class SubmissionVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ManagementCorrection(Base):
+    __tablename__ = "management_corrections"
+    __table_args__ = (
+        UniqueConstraint("system_id", "journey_id", "recruit_id", name="uq_management_correction_scope"),
+        Index("ix_management_correction_journey", "system_id", "journey_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    system_id: Mapped[str] = mapped_column(ForeignKey("assessment_systems.id", ondelete="CASCADE"), nullable=False)
+    journey_id: Mapped[str] = mapped_column(ForeignKey("journeys.id", ondelete="CASCADE"), nullable=False)
+    recruit_id: Mapped[str] = mapped_column(ForeignKey("recruits.id", ondelete="CASCADE"), nullable=False)
+    criterion_values_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    color_key: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    configuration_signature: Mapped[str] = mapped_column(String(64), nullable=False)
+    configuration_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    updated_by: Mapped[str] = mapped_column(String(200), nullable=False)
+
+
 class GeneralAssessment(Base):
     __tablename__ = "general_assessments"
 
