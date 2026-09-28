@@ -39,3 +39,26 @@ injected audit failure rollback. CAS updates and unique initial insertion
 protect concurrent correction saves. Added dedicated routes_corrections.py
 to share admin/viewer contracts without duplicating route logic.
 Task 4: in progress. Browser workflow test extended first; execution pending.
+
+Task 4: implemented. Reused the existing Playwright workflow instead of a
+separate browser module, preserving its isolated server/fixture. Browser
+activity correction, restore, manual color/restore and desktop/mobile fit passed.
+Impeccable detector for the new shared editor reported no findings.
+Ruling: moved expected schema revision to Task 4 because local browser startup
+correctly refused migrated schema 0019 while code still expected 0018.
+Ruling: correction_scoring.py isolates provenance/overlay arithmetic from the
+existing aggregate implementation. Normal list rows retain their old fields.
+
+Task 5: in progress. Full non-browser suite initially passed 348 tests. One
+earlier overlapping test run was interrupted and discarded; suites run serially.
+Fresh protected export: 35 tables / 7,788 rows. Local restore verified its hash;
+0018-to-0019 rehearsal preserved every original table hash. Old/new result,
+rank and every export-cell comparison passed across both workspaces; only
+request generatedAt is excluded. Production migration has NOT run.
+Fresh independent reviewer found three issues; reproduced failures and fixed:
+nonzero-minimum missing criteria normalize to zero, general factor scoring
+configuration enters the signature, and before/after/apply now share one
+repeatable-read snapshot with configuration reloaded inside it. SQLite upgrade
+conflicts and PostgreSQL serialization conflicts return 409 without retry.
+Added concurrent first/update saves, mid-calculation grading changes, tenant
+isolation and immutable submission/version tests. Re-running full verification.

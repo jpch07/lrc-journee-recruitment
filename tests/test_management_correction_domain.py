@@ -33,6 +33,18 @@ def test_signature_ignores_labels_not_scoring():
     assert correction_signature(definition) != before
 
 
+def test_signature_covers_general_factor_scales_and_membership_not_names():
+    definition = active_assessment_definition().model_copy(deep=True)
+    before = correction_signature(definition)
+    definition.generalFactors[0].name = 'Renamed factor'
+    assert correction_signature(definition) == before
+    definition.generalFactors[0].maximum += 1
+    assert correction_signature(definition) != before
+    definition.generalFactors[0].maximum -= 1
+    definition.generalFactors.pop()
+    assert correction_signature(definition) != before
+
+
 def test_unknown_target_and_copy_isolation():
     definition = active_assessment_definition()
     with pytest.raises(ValueError):

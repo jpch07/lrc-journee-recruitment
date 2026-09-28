@@ -231,6 +231,26 @@ tr.inactive { opacity: .5; }
 .result-rank { display: inline-flex; flex-direction: column; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .result-rank-value { color: var(--ink); font-size: 1.1rem; font-weight: 750; line-height: 1.2; }
 .result-rank-total { color: var(--muted); font-size: .75rem; line-height: 1.3; }
+.correction-editor > summary { cursor: pointer; font-size: 1.1rem; font-weight: 750; }
+.correction-editor > summary span { margin-left: 10px; font-size: .85rem; font-weight: 400; }
+.correction-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; min-width: 0; margin: 20px 0; padding: 0; border: 0; }
+.correction-fields label { min-width: 0; }
+.correction-fields select, .correction-fields input { width: 100%; min-width: 0; }
+.correction-target, .correction-current, .correction-fields .inline-actions { grid-column: 1 / -1; }
+.correction-current { margin: 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.correction-editor [hidden] { display: none !important; }
+.correction-preview:empty { display: none; }
+.correction-preview { margin: 20px 0; padding-top: 16px; border-top: 1px solid var(--line, #dfe3e8); }
+.correction-history { margin-top: 24px; }
+.correction-history article { padding: 14px 0; border-bottom: 1px solid var(--line, #dfe3e8); }
+.correction-history article > div { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; }
+.correction-history time { color: var(--muted); font-size: .85rem; }
+.correction-undo { margin-left: 12px; }
+.manual-grade-marker { display: block; margin-top: 3px; color: var(--muted); font-size: .75rem; font-weight: 500; }
+@media (max-width: 600px) {
+  .correction-fields { grid-template-columns: minmax(0, 1fr); }
+  .correction-editor > summary span { display: block; margin: 6px 0 0; }
+}
 .testing-panel { margin-top: 18px; border: 2px dashed #e6bd62; background: #fffaf0; }
 .simulator-controls { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px) auto; align-items: end; gap: 14px; }
 .activation-check { display: flex; align-items: center; gap: 9px; padding-bottom: 10px; font-weight: 700; }

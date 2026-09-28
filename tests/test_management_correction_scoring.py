@@ -9,6 +9,25 @@ from app.services import create_journey, result_snapshot
 from app.utils import dumps
 
 
+def test_missing_custom_scale_criteria_have_zero_normalized_contribution():
+    from app.correction_scoring import criterion_facts
+    definition = active_assessment_definition().model_copy(deep=True)
+    activity = next(a for a in definition.activities if a.scoring != 'target_average')
+    for criterion in activity.criteria:
+        criterion.minimum, criterion.maximum = Decimal(1), Decimal(5)
+    first, second = activity.criteria[:2]
+    for policy in ('submitted_only', 'missing_as_zero'):
+        definition.scoring.assessorAggregation = policy
+        facts = criterion_facts(definition, {}, {}, {activity.key: 2},
+                                {activity.key: {first.key: '0'}})[activity.key]
+        assert facts[first.key]['_normalized'] == 0
+        assert facts[second.key]['_normalized'] == 0
+    facts = criterion_facts(definition, {activity.key: [{second.key: 5}]}, {},
+                            {activity.key: 2}, {activity.key: {first.key: '0'}})[activity.key]
+    assert facts[second.key]['_normalized'] == Decimal('.5')
+    assert facts[second.key]['rawAverage'] == 5
+
+
 def fixture(db):
     journey = create_journey(db, 'Correction test', date(2026, 9, 28), 1, 'Test')
     journey.status = 'completed'

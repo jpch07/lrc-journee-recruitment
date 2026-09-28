@@ -50,7 +50,7 @@ def verify_existing_startup() -> None:
         if connection.dialect.name == "postgresql":
             connection.exec_driver_sql("SET TRANSACTION READ ONLY")
         revision = connection.exec_driver_sql("select version_num from alembic_version").scalar_one()
-        if revision != "0018_dynamic_general_factors":
+        if revision != "0019_management_corrections":
             raise RuntimeError("Existing schema revision does not match this application")
         schema = "journee_recruitment" if connection.dialect.name == "postgresql" else None
         present = set(inspect(connection).get_table_names(schema=schema))
@@ -385,9 +385,9 @@ def health_ready():
         with SessionLocal() as db:
             db.connection().exec_driver_sql("select 1")
             revision = db.connection().exec_driver_sql("select version_num from alembic_version").scalar_one()
-            if revision != "0018_dynamic_general_factors":
+            if revision != "0019_management_corrections":
                 raise RuntimeError(
-                    f"Database migration is {revision!r}, expected '0018_dynamic_general_factors'."
+                    f"Database migration is {revision!r}, expected '0019_management_corrections'."
                 )
         database_startup_error = None
         return {"status": "ready"}

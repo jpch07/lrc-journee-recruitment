@@ -180,7 +180,7 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.set_viewport_size({"width": 390, "height": 844})
             assert viewer_page.locator("#viewerGeneralAssessmentForm input:not([disabled])").count() == 3
             assert viewer_page.locator("#viewerGeneralAssessmentForm textarea:not([disabled])").count() == 2
-            assert viewer_page.locator("#viewerHost input:not([disabled]), #viewerHost textarea:not([disabled])").count() == 5
+            assert viewer_page.locator("#viewerHost input:enabled, #viewerHost textarea:enabled").count() == 5
             viewer_page.fill('#viewerGeneralAssessmentForm input[name="factor:punctuality"]', "0.8")
             viewer_page.fill('#viewerGeneralAssessmentForm input[name="factor:respect"]', "0.9")
             viewer_page.fill('#viewerGeneralAssessmentForm input[name="factor:seriousness"]', "1")
@@ -196,6 +196,55 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.evaluate("window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('online'))")
             viewer_page.wait_for_timeout(800)
             assert assessment_writes == [], "Unchanged focusout and online must not save"
+            viewer_page.locator('#managementCorrections > summary').click()
+            viewer_page.locator('#correctionTarget').select_option(label='Activity — Sport')
+            viewer_page.locator('#correctionValue').fill('4')
+            viewer_page.locator('#correctionReason').fill('Preserve this correction reason')
+            viewer_page.route('**/corrections/preview', lambda route: route.fulfill(
+                status=409, content_type='application/json', body='{"detail":"Changed elsewhere. Reload latest."}'))
+            viewer_page.locator('#previewCorrection').click()
+            viewer_page.wait_for_selector('#reloadCorrections:not([hidden])')
+            assert viewer_page.locator('#correctionValue').input_value() == '4'
+            assert viewer_page.locator('#correctionReason').input_value() == 'Preserve this correction reason'
+            assert viewer_page.locator('#applyCorrection').is_hidden()
+            viewer_page.unroute('**/corrections/preview')
+            viewer_context.set_offline(True)
+            viewer_page.locator('#previewCorrection').click()
+            viewer_page.wait_for_function("document.querySelector('#correctionStatus').textContent.startsWith('Offline')")
+            assert viewer_page.locator('#correctionValue').input_value() == '4'
+            viewer_context.set_offline(False)
+            viewer_page.locator('#previewCorrection').click()
+            viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
+            assert 'does not create evaluator submissions' in viewer_page.locator('#correctionPreview').inner_text()
+            for width, label in [(390, 'mobile'), (1280, 'desktop')]:
+                viewer_page.set_viewport_size({'width': width, 'height': 844})
+                viewer_page.locator('#managementCorrections').scroll_into_view_if_needed()
+                assert viewer_page.evaluate('document.documentElement.scrollWidth') == width
+                viewer_page.screenshot(path=str(tmp_path / f'management-corrections-{label}.png'))
+            viewer_page.set_viewport_size({'width': 390, 'height': 844})
+            viewer_page.locator('#applyCorrection').click()
+            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            viewer_page.locator('#managementCorrections > summary').click()
+            viewer_page.locator('#correctionTarget').select_option(label='Activity — Sport')
+            assert 'Effective: 4.00' in viewer_page.locator('#correctionCurrent').inner_text()
+            viewer_page.locator('#restoreCorrection').click()
+            viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
+            viewer_page.locator('#applyCorrection').click()
+            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            viewer_page.locator('#managementCorrections > summary').click()
+            viewer_page.locator('#correctionTarget').select_option(label='Display — Color grade')
+            viewer_page.locator('#correctionColor').select_option('green')
+            viewer_page.locator('#previewCorrection').click()
+            viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
+            viewer_page.locator('#applyCorrection').click()
+            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            assert 'Manual' in viewer_page.locator('.grade-orb small').inner_text()
+            viewer_page.locator('#managementCorrections > summary').click()
+            viewer_page.locator('#correctionTarget').select_option(label='Display — Color grade')
+            viewer_page.locator('#restoreCorrection').click()
+            viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
+            viewer_page.locator('#applyCorrection').click()
+            viewer_page.wait_for_selector('#managementCorrections:not([open])')
             viewer_page.locator(".dimension-card").first.click()
             viewer_page.wait_for_selector("#viewerModal[open]")
             viewer_page.click("#closeViewerModal")

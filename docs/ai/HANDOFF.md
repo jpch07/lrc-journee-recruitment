@@ -264,3 +264,19 @@ Planning skill requires plan review/execution-method choice before the new
 correction-layer code and migration; async approval requested. Recommended
 native implementation with separate whole-branch reviewer. Do not confuse
 the implemented rank refinement with completed grade/color corrections.
+
+## Approved corrections implementation — 2026-09-28
+
+User approved the written plan and native execution with final reviewer.
+Implemented the separate revisioned management correction layer, additive 0019
+schema, shared scoring overlays and raw/automatic/effective provenance, atomic
+preview/apply/restore/undo APIs, audit history, shared admin/management editor,
+manual configured color independent of numeric grades/ranks, and export evidence.
+General Assessment retains existing autosave and history.
+
+All 355 non-browser tests and both browser workflows passed. Independent review
+findings fixed and cleared; see CORRECTIONS_PROGRESS.md and
+MANAGEMENT_CORRECTIONS_ROLLOUT.md for exact evidence/rollback limitations.
+Current rank-only release 6a27b15 is live on main and Oregon. Correction release
+is pending CI, additive production migration and sequential deployments. Fresh
+backup/restore and exact original-table, score, rank and export parity passed.

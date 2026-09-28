@@ -224,7 +224,7 @@ def test_dynamic_factor_migration_backfills_legacy_columns(tmp_path):
         "respect": 0.8,
         "seriousness": 0.9,
     }
-    assert revision == "0018_dynamic_general_factors"
+    assert revision == "0019_management_corrections"
 
 
 def test_dynamic_factor_migration_resumes_after_column_was_already_added(tmp_path):
@@ -251,4 +251,4 @@ def test_dynamic_factor_migration_resumes_after_column_was_already_added(tmp_pat
         "respect": 0.7,
         "seriousness": 0.8,
     }
-    assert revision == "0018_dynamic_general_factors"
+    assert revision == "0019_management_corrections"

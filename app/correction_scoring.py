@@ -26,8 +26,11 @@ def criterion_facts(definition, responses, admin_responses, expected, overrides)
             denominator = (expected.get(activity.key, 0)
                            if definition.scoring.assessorAggregation == 'missing_as_zero' and admin is None
                            else len(source))
-            automatic = sum(source, Decimal(0)) / max(denominator, 1) if source else None
-            normalized = ((automatic or Decimal(0)) - minimum) / (maximum - minimum)
+            # Missing evaluations contribute zero achievement, not a raw grade
+            # below the configured minimum. Normalize before missing-as-zero.
+            normalized = (sum(((grade - minimum) / (maximum - minimum) for grade in source), Decimal(0))
+                          / max(denominator, 1))
+            automatic = minimum + normalized * (maximum - minimum) if source else None
             adjusted = overrides.get(activity.key, {}).get(criterion.key)
             effective_normalized = Decimal(adjusted) if adjusted is not None else normalized
             facts[activity.key][criterion.key] = {

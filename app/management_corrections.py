@@ -66,6 +66,8 @@ def correction_configuration(definition) -> dict:
         'dimensions': [{k: d.model_dump(mode='json')[k] for k in
                         ('key', 'source', 'activityKey', 'displayMaximum')} for d in definition.dimensions],
         'scoring': definition.scoring.model_dump(mode='json', exclude={'bands'}),
+        'generalFactors': [{k: factor.model_dump(mode='json')[k] for k in ('storageKey', 'maximum')}
+                           for factor in definition.generalFactors],
         'bands': sorted(b.key for b in definition.scoring.bands),
     }
 
