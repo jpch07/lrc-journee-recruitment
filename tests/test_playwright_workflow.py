@@ -165,6 +165,18 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.click("#viewerMenu")
             viewer_page.click('#viewerNav button[data-tab="profiles"]')
             viewer_page.wait_for_selector(".dimension-card")
+            rank_summary = viewer_page.locator(".profile-rank-summary")
+            assert "Overall rank" in rank_summary.inner_text()
+            assert "Journee rank" in rank_summary.inner_text()
+            assert "1 of 1" in rank_summary.inner_text()
+            for width, label in [(390, "mobile"), (1280, "desktop")]:
+                viewer_page.set_viewport_size({"width": width, "height": 844})
+                assert viewer_page.evaluate("document.documentElement.scrollWidth") == width
+                bounds = rank_summary.bounding_box()
+                assert bounds and bounds['x'] >= 0 and bounds['x'] + bounds['width'] <= width
+                viewer_page.screenshot(path=str(tmp_path / f"management-ranks-{label}.png"))
+            print(f"Management rank screenshots: {tmp_path}")
+            viewer_page.set_viewport_size({"width": 390, "height": 844})
             assert viewer_page.locator("#viewerGeneralAssessmentForm input:not([disabled])").count() == 3
             assert viewer_page.locator("#viewerGeneralAssessmentForm textarea:not([disabled])").count() == 2
             assert viewer_page.locator("#viewerHost input:not([disabled]), #viewerHost textarea:not([disabled])").count() == 5
@@ -191,6 +203,10 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.wait_for_selector('table:has-text("Mobile Recruit")')
             assert viewer_page.locator("#viewerHost input:not([disabled]), #viewerHost textarea:not([disabled])").count() == 0
             assert viewer_page.evaluate("document.documentElement.scrollWidth") == viewer_page.evaluate("window.innerWidth")
+            viewer_page.click("#viewerMenu")
+            viewer_page.click('#viewerNav button[data-tab="results"]')
+            viewer_page.wait_for_selector("#viewerHost table")
+            assert [text.casefold() for text in viewer_page.locator("#viewerHost th").all_inner_texts()[:3]] == ["color", "overall rank", "journee rank"]
             viewer_context.close()
             attendance_context.close()
 

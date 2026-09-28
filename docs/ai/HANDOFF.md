@@ -188,3 +188,21 @@ audit/restore semantics; manual color override. No propagation algorithm has
 been approved. Do not flatten or redistribute criterion grades by assumption.
 The earlier numeric-change proposal is design-only, not authorization to
 change live scores. Aiven migration and snapshot-backup work remain paused.
+
+Release integration checkpoint:
+- Cherry-picked onto feed5bd in codex/management-ranks-release; no conflicts.
+- Asset versions bumped to 20260928.1 for admin/viewer and their stylesheet.
+- Full non-browser suite: 327 passed, 2 deselected (90.25s).
+- Browser workflow: passed including desktop/mobile rank-summary bounds,
+  distinct labels and color-first table. Sitewide browser flow also passed.
+- An initial parallel invocation collided on the shared disposable SQLite
+  fixture; reruns were serial. A new browser assertion initially expected
+  title case despite the existing uppercase CSS; assertion corrected.
+- Both responsive screenshots inspected. No new overflow; retained incumbent
+  design. Mechanical design scan reported only pre-existing CSS patterns;
+  no unrelated redesign performed.
+- JavaScript syntax checks and git diff --check passed.
+- No migrations, scoring formulas, model definitions, or DB configuration
+  changes in this release relative to the tested Oregon runtime.
+- Deployment status will be recorded after live verification. Support email
+  draft is in docs/RENDER_HOSTNAME_SUPPORT_EMAIL.md; it has NOT been sent.
