@@ -1161,6 +1161,15 @@ def build_management_report_workbook(db: Session) -> Workbook:
     _management_attendance_sheet(workbook, db, journeys, by_id)
     _management_results_sheet(workbook, journeys, by_id, combined)
     _management_profile_sheet(workbook, db, journeys, by_id, combined)
+    adjusted = [row for row in combined['rows'] if row.get('manualColor') or
+                any(a.get('manuallyGraded') for a in row['activities'].values())]
+    if adjusted:
+        sheet = _new_sheet(workbook, 'Management corrections', landscape=True)
+        _write_table(sheet, 1,
+            ['Journee', 'Recruit', 'Automatic overall', 'Effective overall', 'Automatic color', 'Effective color', 'Manual color'],
+            [[row['journeyName'], row['name'], row['automaticScore'], row['overallScore'],
+              row['automaticColor'], row['color'], 'Yes' if row['manualColor'] else 'No'] for row in adjusted],
+            widths=[24, 26, 20, 20, 18, 18, 16])
     workbook.calculation.fullCalcOnLoad = True
     workbook.calculation.forceFullCalc = True
     workbook.calculation.calcMode = "auto"

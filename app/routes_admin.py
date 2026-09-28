@@ -3059,6 +3059,15 @@ def _dimension_breakdowns(details: dict[str, list[dict]], result_row: dict | Non
             "complete": official.get("complete", False),
             "activities": activities,
         }
+        for activity in activities:
+            for criterion in activity['criteria']:
+                fact = (result_row or {}).get('criteria', {}).get(activity['code'], {}).get(criterion['key'])
+                if fact:
+                    criterion.update(fact)
+                    criterion['criterionAverage'] = fact['effectiveAverage']
+                    criterion['weightedContribution'] = (
+                        (fact['effectiveAverage'] - fact['minimum']) / (fact['maximum'] - fact['minimum']) * criterion['weight']
+                        if fact['effectiveAverage'] is not None else 0)
     return breakdowns
 
 
@@ -3095,7 +3104,7 @@ def recruit_profile(
     del context
     journey = get_journey_or_404(db, journey_id)
     recruit = get_recruit_or_404(db, journey.id, recruit_id)
-    results = result_snapshot(db, journey)
+    results = result_snapshot(db, journey, include_criteria=True)
     result_row = next((item for item in results["rows"] if item["recruitId"] == recruit.id), None)
     if result_row is None:
         definition = active_assessment_definition()
@@ -3155,11 +3164,16 @@ def recruit_profile(
             .order_by(AuditEvent.created_at.desc())
         )
     )
+    from .correction_service import read_corrections
+    breakdowns = _dimension_breakdowns(details, result_row)
+    criteria = result_row.pop('criteria', {})
     return {
+        "corrections": read_corrections(db, journey, recruit),
+        "criteria": criteria,
         "recruit": serialize_recruit(recruit),
         "photoUrl": f"/api/admin/journeys/{journey.id}/recruits/{recruit.id}/photo" if has_photo(recruit) else None,
         "result": result_row,
-        "dimensionBreakdowns": _dimension_breakdowns(details, result_row),
+        "dimensionBreakdowns": breakdowns,
         "dimensionAverages": results["dimensionAverages"],
         "activityAverages": results["activityAverages"],
         "assessment": {

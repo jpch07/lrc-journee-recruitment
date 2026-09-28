@@ -34,6 +34,7 @@ from .models import (
     Evaluator,
     EvaluatorDirectory,
     GeneralAssessment,
+    ManagementCorrection,
     Journey,
     MandatoryRoomEvaluator,
     Recruit,
@@ -1163,8 +1164,14 @@ def publish_assignment_round(db: Session, journey: Journey, round_record: Assign
         )
 
 
-def result_snapshot(db: Session, journey: Journey) -> dict:
+def result_snapshot(db: Session, journey: Journey, *, correction_overrides: dict | None = None,
+                    include_criteria: bool = False) -> dict:
+    from .management_corrections import correction_signature, validate_override_map
+    from .correction_scoring import criterion_facts, apply_numeric_overlays, public_facts
     definition = active_assessment_definition()
+    correction_records = {item.recruit_id: item for item in db.scalars(
+        select(ManagementCorrection).where(ManagementCorrection.system_id == journey.system_id,
+                                           ManagementCorrection.journey_id == journey.id))}
     configured_activities = [item for item in definition.activities if item.enabled]
     recruits = list(
         db.scalars(
@@ -1222,6 +1229,15 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
     dimension_rank_inputs: dict[str, list[tuple[str, Decimal]]] = {item.key: [] for item in definition.dimensions}
     overall_rank_inputs: list[tuple[str, Decimal]] = []
     for recruit in recruits:
+        correction = correction_records.get(recruit.id)
+        adjustment = {'values': loads(correction.criterion_values_json, {}) if correction else {},
+                      'color': correction.color_key if correction else None}
+        if correction_overrides and recruit.id in correction_overrides:
+            adjustment = correction_overrides[recruit.id]
+        elif correction and (adjustment['values'] or adjustment['color']) and correction.configuration_signature != correction_signature(definition):
+            raise HTTPException(status_code=409, detail='Management corrections need review after an assessment configuration change. Restore or review corrections before recalculating results.')
+        overrides = adjustment['values']
+        validate_override_map(definition, overrides)
         activity_values: dict[str, Decimal] = {}
         activities_payload: dict[str, dict] = {}
         submitted_by_activity: dict[str, list[EvaluationSubmission]] = {}
@@ -1247,7 +1263,6 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
             else:
                 value = sum(submitted_values, Decimal("0")) / Decimal(submitted) if submitted else Decimal("0")
             activity_values[code] = value
-            activity_rank_inputs[code].append((recruit.id, value))
             activities_payload[code] = {
                 "score": float(value),
                 "expected": expected,
@@ -1266,7 +1281,6 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                 activity_payload = activities_payload.get(activity_code, {})
                 value = activity_values.get(activity_code, Decimal("0")) / Decimal("5")
                 dimension_values[dimension] = value
-                dimension_rank_inputs[dimension].append((recruit.id, value))
                 dimensions_payload[dimension] = {
                     "name": dimension_config.name,
                     "score": float(value),
@@ -1342,7 +1356,6 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                     weighted_value += ((criterion_average - minimum) / scale) * criterion.weight
             value = weighted_value / total_weight if total_weight else Decimal("0")
             dimension_values[dimension] = value
-            dimension_rank_inputs[dimension].append((recruit.id, value))
             dimensions_payload[dimension] = {
                 "name": dimension_config.name,
                 "score": float(value),
@@ -1360,7 +1373,21 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
         complete_components = {("dimension", key) for key, item in dimensions_payload.items() if item["complete"]}
         if general_missing == 0 and definition.generalFactors:
             complete_components.add(("general", "general"))
-        overall = overall_score(dimension_values, general, complete_components)
+        automatic_overall = overall_score(dimension_values, general, complete_components)
+        facts = criterion_facts(
+            definition,
+            {code: [loads(s.responses_json, {}) for s in records] for code, records in submitted_by_activity.items()},
+            {a.key: loads(admin_evaluations[(recruit.id, a.key)].responses_json, {})
+             for a in configured_activities if (recruit.id, a.key) in admin_evaluations},
+            {code: item['expected'] for code, item in activities_payload.items()}, overrides,
+        ) if overrides or include_criteria else {}
+        manually_ready = apply_numeric_overlays(definition, overrides, facts, activity_values,
+                                               dimension_values, activities_payload, dimensions_payload)
+        overall = overall_score(dimension_values, general, complete_components | manually_ready)
+        for code, value in activity_values.items():
+            activity_rank_inputs[code].append((recruit.id, value))
+        for code, value in dimension_values.items():
+            dimension_rank_inputs[code].append((recruit.id, value))
         overall_rank_inputs.append((recruit.id, overall))
         missing_activities = [
             code for code, item in activities_payload.items() if not item["complete"]
@@ -1384,7 +1411,11 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
                 "generalComment": assessment.comment if assessment else "",
                 "notes": assessment.notes if assessment else "",
                 "overallScore": float(overall),
-                "color": color_grade(overall),
+                "color": adjustment['color'] or color_grade(overall),
+                "automaticColor": color_grade(overall),
+                "manualColor": bool(adjustment['color']),
+                "automaticScore": float(automatic_overall),
+                **({'criteria': public_facts(facts)} if include_criteria else {}),
                 "missingCount": missing,
                 "missingComponents": missing_components,
                 "missingActivityCount": len(missing_activities),
