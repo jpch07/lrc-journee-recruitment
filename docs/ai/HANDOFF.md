@@ -157,3 +157,34 @@ this checkpoint. Stage only the four files listed above.
   of the C2 commit over restoring entire files containing subsequent work.
 - No database rollback or data deletion is needed for this read-only change.
 <!-- C2_VERIFIED_CHECKPOINT_END -->
+
+## Management ranks and color placement - 2026-09-28
+
+Accepted product decision: Overall Rank includes only completed Journees in
+the current recruitment/workspace. Journee Rank remains local. Preserve the
+configured tie policy and existing present/active recruit eligibility.
+
+Implemented in this worktree:
+- Management overall tables and profiles now show both ranks and populations.
+- Draft/active Journees retain a local rank but have no overall rank.
+- Color is the first column in management and admin overall-results tables.
+- No score formula, submission, schema, database, or history changes.
+- Explicit workspace filtering protects the completed-rank lookup; selected
+  table snapshots are reused rather than calculated a second time.
+
+Changed application files: routes_viewer.py, routes_admin.py, services.py,
+static/viewer.js, static/admin.js, static/styles.css.
+Tests: test_management_dual_ranks.py (new), test_viewer_performance_c1.py.
+Focused check (local disposable SQLite): 30 passed in 12.64 seconds across
+dual ranks, C1, C2, and browser-asset smoke tests.
+
+Release integration must start from the tested Oregon runtime commit feed5bd,
+not deploy this older branch wholesale. Preserve all newer startup/performance
+and autosave fixes. Both requested deployment targets are evalday (Virginia)
+and evalday-oregon; the independent backup is not part of this release.
+
+Still pending: numeric grade-correction design/approval, implementation and
+audit/restore semantics; manual color override. No propagation algorithm has
+been approved. Do not flatten or redistribute criterion grades by assumption.
+The earlier numeric-change proposal is design-only, not authorization to
+change live scores. Aiven migration and snapshot-backup work remain paused.

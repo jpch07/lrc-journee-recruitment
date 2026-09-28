@@ -1403,6 +1403,8 @@ def result_snapshot(db: Session, journey: Journey) -> dict:
         for code in dimension_rank_inputs:
             row["dimensions"][code]["rank"] = dimension_ranks[code].get(row["recruitId"])
         row["overallRank"] = overall_ranks.get(row["recruitId"])
+        row["journeyRank"] = row["overallRank"]
+        row["journeyPopulation"] = len(rows)
     rows.sort(key=lambda row: (row["overallRank"] or 10**9, row["name"]))
     activity_averages = {
         code: float(sum((score for _identifier, score in values), Decimal("0")) / Decimal(len(values))) if values else 0.0

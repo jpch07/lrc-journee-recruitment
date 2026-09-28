@@ -121,6 +121,8 @@ def _aggregate_results(snapshots: list[tuple[Journey, dict]]) -> dict:
                 "journeyName": journey.name,
                 "journeyDate": journey.event_date.isoformat(),
                 "profileKey": f"{journey.id}:{row['recruitId']}",
+                "journeyRank": source.get("journeyRank", source.get("overallRank")),
+                "journeyPopulation": len(snapshot["rows"]),
             })
             rows.append(row)
 
@@ -136,6 +138,7 @@ def _aggregate_results(snapshots: list[tuple[Journey, dict]]) -> dict:
     }
     for row in rows:
         row["overallRank"] = overall_ranks.get(row["profileKey"])
+        row["overallPopulation"] = len(rows)
         for code in ACTIVITY_ORDER:
             row["activities"][code]["rank"] = activity_ranks[code].get(row["profileKey"])
         for code in DIMENSION_ORDER:
@@ -187,16 +190,32 @@ def _completed_view(db: Session, *, journey_items=None, journey_payloads=None) -
     }
 
 
-def _completed_results(db: Session) -> dict:
+def _completed_results(db: Session, *, system_id: str | None = None, known_snapshots: dict | None = None) -> dict:
     """Build completed-Journee results without unused roster/metadata payloads."""
-    journeys = list(db.scalars(
-        select(Journey).where(Journey.status == "completed").order_by(
-            Journey.event_date.desc(), func.lower(Journey.name)
-        )
-    ))
+    query = select(Journey).where(Journey.status == "completed")
+    if system_id is not None:
+        query = query.where(Journey.system_id == system_id)
+    journeys = list(db.scalars(query.order_by(Journey.event_date.desc(), func.lower(Journey.name))))
     return _aggregate_results([
-        (journey, result_snapshot(db, journey)) for journey in journeys
+        (journey, known_snapshots[journey.id] if known_snapshots and journey.id in known_snapshots
+         else result_snapshot(db, journey)) for journey in journeys
     ])
+
+
+def _apply_completed_ranks(db: Session, journey: Journey, rows: list[dict], *, snapshot: dict | None = None) -> None:
+    """Add workspace-wide ranks without changing local activity/dimension ranks."""
+    aggregate = _completed_results(
+        db, system_id=journey.system_id,
+        known_snapshots={journey.id: snapshot} if snapshot is not None else None,
+    )
+    ranks = {row["profileKey"]: row for row in aggregate["rows"]}
+    for row in rows:
+        local_rank = row.get("journeyRank", row.get("overallRank"))
+        overall = ranks.get(f"{journey.id}:{row['recruitId']}")
+        row["journeyRank"] = local_rank
+        row.setdefault("journeyPopulation", 0)
+        row["overallRank"] = overall["overallRank"] if overall else None
+        row["overallPopulation"] = len(ranks)
 
 
 @router.get("/journeys")
@@ -226,7 +245,9 @@ def bootstrap(context: UserContext = Depends(require_results), db: Session = Dep
 def journey_view(journey_id: str, context: UserContext = Depends(require_results), db: Session = Depends(get_db)):
     del context
     journey = get_journey_or_404(db, journey_id)
-    return _single_journey_view(db, journey)
+    payload = _single_journey_view(db, journey)
+    _apply_completed_ranks(db, journey, payload["results"]["rows"], snapshot=payload["results"])
+    return payload
 
 
 @router.get("/completed")
@@ -245,22 +266,27 @@ def profile_view(
 ):
     del context
     payload = recruit_profile(journey_id, recruit_id, context=None, db=db)
+    journey = get_journey_or_404(db, journey_id)
     if scope == "completed":
-        journey = get_journey_or_404(db, journey_id)
         if journey.status != "completed":
             raise HTTPException(status_code=404, detail="Recruit is not part of a completed Journee.")
-        aggregate = _completed_results(db)
+        aggregate = _completed_results(db, system_id=journey.system_id)
         result = next((item for item in aggregate["rows"] if item["profileKey"] == f"{journey_id}:{recruit_id}"), None)
         if result is not None:
             payload["result"] = result
+        else:
+            payload["result"]["overallRank"] = None
+            payload["result"]["overallPopulation"] = len(aggregate["rows"])
         payload["dimensionAverages"] = aggregate["dimensionAverages"]
         payload["activityAverages"] = aggregate["activityAverages"]
         for code in DIMENSION_ORDER:
             if result is not None and code in payload.get("dimensionBreakdowns", {}):
                 payload["dimensionBreakdowns"][code]["rank"] = result["dimensions"][code]["rank"]
+    else:
+        _apply_completed_ranks(db, journey, [payload["result"]])
     if payload.get("photoUrl"):
         payload["photoUrl"] = f"/api/view/journeys/{journey_id}/recruits/{recruit_id}/photo"
-    payload["journey"] = serialize_journey(db, get_journey_or_404(db, journey_id))
+    payload["journey"] = serialize_journey(db, journey)
     return payload
 
 

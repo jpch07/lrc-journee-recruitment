@@ -397,7 +397,7 @@ function switchSection(section) {
 
 function rankingTable(rows) {
   if (!rows.length) return `<div class="empty-state"><p>No present recruits yet.</p></div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Recruit</th><th>Color</th><th>Score /${officialScoreMaximum()}</th><th>Missing</th></tr></thead><tbody>${rows.map((row) => `<tr><td><span class="rank-number">${row.overallRank}</span></td><td>${h(row.name)}</td><td><span class="color-chip ${row.color}">${h(row.color)}</span></td><td><strong>${fmt(row.overallScore)}</strong></td><td>${row.missingCount}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Color</th><th>Rank</th><th>Recruit</th><th>Score /${officialScoreMaximum()}</th><th>Missing</th></tr></thead><tbody>${rows.map((row) => `<tr><td><span class="color-chip ${row.color}">${h(row.color)}</span></td><td><span class="rank-number">${row.overallRank}</span></td><td>${h(row.name)}</td><td><strong>${fmt(row.overallScore)}</strong></td><td>${row.missingCount}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function makeAttendanceDraft() {
@@ -1473,7 +1473,7 @@ async function renderResults() {
 
 function overallResultsTable(rows) {
   const generalHeading = hasGeneralAssessment() ? `<th>General assessment /1</th>` : "";
-  return `<div class="table-wrap"><table><thead><tr><th>Rank</th><th>Recruit</th><th>Color</th><th>Overall /${officialScoreMaximum()}</th>${dimensionOrder.map((code) => `<th>${h(dimensionNames[code])} /${dimensionMaximums[code] || 5}</th>`).join("")}${generalHeading}<th>Missing</th><th>General comment</th><th>Notes</th></tr></thead><tbody>${rows.map((row) => `<tr><td><span class="rank-number">${row.overallRank}</span></td><td><button type="button" class="button ghost small result-profile" data-id="${row.recruitId}">${h(row.name)}</button></td><td><span class="color-chip ${row.color}">${h(row.color)}</span></td><td><strong>${fmt(row.overallScore)}</strong></td>${dimensionOrder.map((code) => `<td>${fmt(dimensionGrade(row.dimensions[code].score, code))}</td>`).join("")}${hasGeneralAssessment() ? `<td>${fmt(row.generalAverage)}</td>` : ""}<td>${row.missingCount}</td><td class="results-comment-cell">${h(row.generalComment || "—")}</td><td class="results-comment-cell">${h(row.notes || "—")}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><thead><tr><th>Color</th><th>Rank</th><th>Recruit</th><th>Overall /${officialScoreMaximum()}</th>${dimensionOrder.map((code) => `<th>${h(dimensionNames[code])} /${dimensionMaximums[code] || 5}</th>`).join("")}${generalHeading}<th>Missing</th><th>General comment</th><th>Notes</th></tr></thead><tbody>${rows.map((row) => `<tr><td><span class="color-chip ${row.color}">${h(row.color)}</span></td><td><span class="rank-number">${row.overallRank}</span></td><td><button type="button" class="button ghost small result-profile" data-id="${row.recruitId}">${h(row.name)}</button></td><td><strong>${fmt(row.overallScore)}</strong></td>${dimensionOrder.map((code) => `<td>${fmt(dimensionGrade(row.dimensions[code].score, code))}</td>`).join("")}${hasGeneralAssessment() ? `<td>${fmt(row.generalAverage)}</td>` : ""}<td>${row.missingCount}</td><td class="results-comment-cell">${h(row.generalComment || "—")}</td><td class="results-comment-cell">${h(row.notes || "—")}</td></tr>`).join("")}</tbody></table></div>`;
 }
 
 function dimensionResultsTable(rows, code, average) {

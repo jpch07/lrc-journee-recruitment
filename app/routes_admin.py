@@ -3110,6 +3110,8 @@ def recruit_profile(
             "generalComplete": False,
             "overallScore": 0.0,
             "overallRank": None,
+            "journeyRank": None,
+            "journeyPopulation": len(results["rows"]),
             "color": first_band,
             "missingCount": len(ACTIVITY_ORDER) + len(missing_factors),
             "missingComponents": [RUBRICS[code].name for code in ACTIVITY_ORDER] + missing_factors,

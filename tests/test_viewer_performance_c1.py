@@ -206,7 +206,7 @@ def test_profile_view_completed_scope_does_not_call_completed_view(client, monke
     with monkeypatch.context() as old_path:
         old_path.setattr(
             "app.routes_viewer._completed_results",
-            lambda db: _completed_view(db)["results"],
+            lambda db, **kwargs: _completed_view(db)["results"],
         )
         reference = client.get(url)
         assert reference.status_code == 200, reference.text
@@ -398,16 +398,16 @@ def test_completed_profile_reflects_general_assessment_save(client):
     assert after["activityAverages"] == reference["activityAverages"]
 
 
-def test_single_journee_profile_does_not_use_completed_aggregation(client, monkeypatch):
+def test_single_journee_profile_uses_results_only_for_overall_rank(client, monkeypatch):
     _login(client)
     with SessionLocal() as db:
         j1, _, _, r1, *_ = _populate_test_journeys(db)
         url = f"/api/view/journeys/{j1.id}/recruits/{r1.id}/profile"
 
     def forbidden(db):
-        raise AssertionError("Single-Journee profiles must not aggregate completed Journees")
+        raise AssertionError("Single-Journee profiles must not load completed rosters")
 
-    monkeypatch.setattr("app.routes_viewer._completed_results", forbidden)
+    monkeypatch.setattr("app.routes_viewer._completed_view", forbidden)
     response = client.get(url)
     assert response.status_code == 200, response.text
     assert response.json()["result"]["activities"]["escape_room"]["score"] == 4.0
