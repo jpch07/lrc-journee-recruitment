@@ -240,3 +240,27 @@ headroom proposal. Full design for approval is recorded in
 GRADE_ADJUSTMENT_DESIGN_DRAFT.md; numerical and manual-color corrections are
 not implemented or deployed. Written design/implementation-plan approval
 remains necessary before the correction-layer schema change.
+
+## Rank refinement and correction planning - 2026-09-28
+
+The user reports sending the Render support email; do not send another.
+They approved the remaining correction design and explicitly approved the
+rank refinement: unboxed #1 with smaller muted 'of 51' below it. Removed
+the '· completed Journees' profile suffix without changing rank semantics.
+Scope stays main Virginia plus Oregon; hostname move still awaits support.
+
+Rank UI implementation/test files: viewer.js, styles.css, admin/viewer HTML
+asset versions 20260928.2, browser smoke, dual-rank and Playwright tests.
+Verification: new static regression failed first, then 12 targeted tests
+passed; full browser workflow passed (52.71s), including mobile/desktop
+screenshots inspected, stacked number/total layout, unranked state and no
+page overflow. Node syntax and git diff checks passed. Impeccable detector
+reported only pre-existing shared CSS patterns; incumbent theme preserved.
+No DB, score, rank formula, provider, secret or plan changes.
+
+New correction implementation plan:
+docs/superpowers/plans/2026-09-28-management-corrections.md.
+Planning skill requires plan review/execution-method choice before the new
+correction-layer code and migration; async approval requested. Recommended
+native implementation with separate whole-branch reviewer. Do not confuse
+the implemented rank refinement with completed grade/color corrections.

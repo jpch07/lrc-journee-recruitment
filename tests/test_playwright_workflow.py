@@ -169,6 +169,7 @@ def test_admin_create_and_mobile_layout(tmp_path):
             assert "Overall rank" in rank_summary.inner_text()
             assert "Journee rank" in rank_summary.inner_text()
             assert "1 of 1" in rank_summary.inner_text()
+            assert "completed Journees" not in rank_summary.inner_text()
             for width, label in [(390, "mobile"), (1280, "desktop")]:
                 viewer_page.set_viewport_size({"width": width, "height": 844})
                 assert viewer_page.evaluate("document.documentElement.scrollWidth") == width
@@ -207,6 +208,19 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.click('#viewerNav button[data-tab="results"]')
             viewer_page.wait_for_selector("#viewerHost table")
             assert [text.casefold() for text in viewer_page.locator("#viewerHost th").all_inner_texts()[:3]] == ["color", "overall rank", "journee rank"]
+            rank_cell = viewer_page.locator("#viewerHost tbody tr").first.locator("td").nth(2)
+            assert rank_cell.locator(".result-rank-value").inner_text() == "#1"
+            assert rank_cell.locator(".result-rank-total").inner_text() == "of 1"
+            assert rank_cell.locator(".rank-number").count() == 0
+            assert viewer_page.locator('[aria-label="Not ranked"]').count() == 1
+            for width, label in [(390, "mobile"), (1280, "desktop")]:
+                viewer_page.set_viewport_size({"width": width, "height": 844})
+                assert viewer_page.evaluate("document.documentElement.scrollWidth") == width
+                value_bounds = rank_cell.locator(".result-rank-value").bounding_box()
+                total_bounds = rank_cell.locator(".result-rank-total").bounding_box()
+                assert value_bounds and total_bounds
+                assert total_bounds['y'] >= value_bounds['y'] + value_bounds['height']
+                viewer_page.screenshot(path=str(tmp_path / f"management-rank-table-{label}.png"))
             viewer_context.close()
             attendance_context.close()
 

@@ -109,3 +109,15 @@ def test_management_assets_have_distinct_ranks_and_color_first():
     assert 'result.journeyRank' in viewer and 'result.overallPopulation' in viewer
     admin = (static / 'admin.js').read_text(encoding='utf-8').split('function overallResultsTable(rows) {', 1)[1]
     assert '<thead><tr><th>Color</th>' in admin.split('function ', 1)[0]
+
+
+def test_management_ranks_use_quiet_stacked_numbers():
+    static = Path(__file__).parents[1] / 'app' / 'static'
+    viewer = (static / 'viewer.js').read_text(encoding='utf-8')
+    table = viewer.split('function overallTable(rows) {', 1)[1].split('function dimensionTable', 1)[0]
+    assert 'rankDisplay(row.overallRank, row.overallPopulation)' in table
+    assert 'rankDisplay(row.journeyRank, row.journeyPopulation)' in table
+    assert 'class="rank-number"' not in table
+    assert ' · completed Journees</small>' not in viewer
+    assert 'class="result-rank-value"' in viewer
+    assert 'class="result-rank-total"' in viewer

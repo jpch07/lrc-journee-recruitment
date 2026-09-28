@@ -1,8 +1,11 @@
-# Management corrections: design for approval (not implemented)
+# Management corrections: approved design (not implemented)
 
 The user approved uniform target grades on 2026-09-28: an activity changed
 from average 3/5 to 4/5 with original criteria 2/5 and 4/5 becomes effectively
-4/5 and 4/5. The full persistence/UI/migration design below still needs review.
+4/5 and 4/5. The user approved proceeding with the remaining features on
+2026-09-28. The corresponding implementation plan is in
+`docs/superpowers/plans/2026-09-28-management-corrections.md`; its execution
+review is pending. No correction-layer migration has been run.
 
 ## Purpose and current boundary
 

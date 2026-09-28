@@ -228,6 +228,9 @@ tr.inactive { opacity: .5; }
 .profile-photo { object-fit: cover; background: #e9ecf0; }
 .profile-score-group { display: flex; align-items: center; gap: 14px; }
 .profile-rank-summary { display: grid; gap: 8px; font-size: .85rem; }
+.result-rank { display: inline-flex; flex-direction: column; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.result-rank-value { color: var(--ink); font-size: 1.1rem; font-weight: 750; line-height: 1.2; }
+.result-rank-total { color: var(--muted); font-size: .75rem; line-height: 1.3; }
 .testing-panel { margin-top: 18px; border: 2px dashed #e6bd62; background: #fffaf0; }
 .simulator-controls { display: grid; grid-template-columns: minmax(260px, 1fr) minmax(180px, 260px) auto; align-items: end; gap: 14px; }
 .activation-check { display: flex; align-items: center; gap: 9px; padding-bottom: 10px; font-weight: 700; }
