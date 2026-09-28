@@ -206,3 +206,37 @@ Release integration checkpoint:
   changes in this release relative to the tested Oregon runtime.
 - Deployment status will be recorded after live verification. Support email
   draft is in docs/RENDER_HOSTNAME_SUPPORT_EMAIL.md; it has NOT been sent.
+
+## Live release verification - 2026-09-28
+
+Runtime commit: e0e40187a061f4e69904f5c33a48810dce3f89ed.
+GitHub Actions run 36393217638: non-browser tests, both browser workflows,
+and Docker build all successful.
+
+- Oregon: dep-dat1mivpn0mc73ahou30, live at 07:46:57 UTC.
+- Main Virginia: dep-dat1nhjncjis73cp6j00, live at 07:48:55 UTC.
+- Both /health/ready endpoints returned 200 ready. Both served the exact
+  UTF-8 viewer asset from this release and referenced asset version 20260928.1.
+- Neither service had error-level logs in the checked post-deploy interval.
+- Authenticated Oregon UI: all 51 displayed rows retained their earlier
+  values, comments and ordering after accounting for the reordered columns
+  and added local rank. This is rendered-value parity, not a raw DB checksum.
+- Overall-scope profile showed 1/51 and local 1/18. A single-Journee profile
+  showed overall 8/51 and local 5/18. No live grades were edited.
+- Main authenticated-session check was not completed: its separate management
+  browser session requested login. Main health/assets/deploy/log checks passed.
+- No schema/data migration, secret change, service rename, deletion, plan
+  change, or provider change performed. Backup service untouched.
+
+Rollback commits (redeploy exact SHA; no schema rollback needed):
+Oregon feed5bdff4b57c6dc865caa7f5c9f4cb335ad6bb;
+Main 258638de459d7b3091797e6e27d85ecd4aaa067a.
+Auto-deploy remains disabled; deployment branches/configuration unchanged.
+
+NEW USER DECISION: a target 4/5 activity/dimension sets every contributing
+criterion to the same effective 4/5 equivalent, never proportional scaling.
+Original evaluator grades remain unchanged. This supersedes the unapproved
+headroom proposal. Full design for approval is recorded in
+GRADE_ADJUSTMENT_DESIGN_DRAFT.md; numerical and manual-color corrections are
+not implemented or deployed. Written design/implementation-plan approval
+remains necessary before the correction-layer schema change.
