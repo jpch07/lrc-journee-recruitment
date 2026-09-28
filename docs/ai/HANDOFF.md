@@ -1,4 +1,16 @@
 # Handoff to the next coding session / Codex
+
+## 2026-09-28 — Activity-context correction redesign (current work)
+
+- User approved: results table shows only workspace-wide completed-Journee `Rank`; profile ranks unchanged. Corrections live inside activity View evaluations, not a profile-wide panel.
+- One activity grade sets every criterion to the same normalized achievement. A complete evaluation accepts individual grades, or raw duration/count results for target-based activities. Existing evaluator submissions and legacy admin evaluations remain unchanged.
+- Shared contextual UI for admin/management: author/time, effective management evaluation, expandable corrected criteria, editable single/criterion form, preview/apply, automatic restoration and scoped history. Dimension correction is inside its breakdown; color has an Edit color action.
+- Existing correction model/CAS/audit are reused; NO schema migration. New request fields `criterionValues`/`rawValues` are mutually exclusive and require a complete activity. Raw management entries and generated equivalents are retained in audit metadata.
+- Raw inverse: higher-is-better uses target * normalized grade; lower-is-better uses target / normalized grade. Full marks use exactly the configured target. Fractional integer results and lower-is-better zero grades have no exact finite raw equivalent: preserve the exact effective grade and display that limitation, never fabricate/round an observed performance. Config currently uses continuous targets, not discrete grade bands.
+- Changed: correction service/domain/schema, shared correction UI, viewer/admin integration and asset versions, scoped CSS, focused API/domain and browser tests.
+- Verification: 359 non-browser tests passed; both browser workflows passed (including management full criterion save/restore, single activity save/restore, color save/restore, admin save/author display, no JS page errors, and mobile fit). Node syntax checks and git diff whitespace checks passed. Impeccable detector flagged only incumbent shared-theme patterns; correction surfaces use scoped calmer controls. Desktop/mobile inspected in two bounded batches. Deployment outcome follows below after rollout.
+- No infrastructure, hostname, pricing, database-location or backup changes in this task.
+
 Status: TASK A, C1 AND C2 IMPLEMENTED LOCALLY. Verified tests recorded below. NOT DEPLOYED.
 
 ## Current checkpoint

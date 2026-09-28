@@ -11,6 +11,27 @@ def criterion_scale(activity, criterion):
     return (Decimal(0), Decimal(5)) if activity.scoring == 'target_average' else (Decimal(criterion.minimum), Decimal(criterion.maximum))
 
 
+def raw_equivalent(activity, criterion, normalized):
+    """Canonical threshold value, not an invented evaluator observation.
+
+    Some exact grades have no finite/whole-number inverse. Never round a
+    synthetic result into a different grade just to populate the UI.
+    """
+    if activity.scoring != 'target_average':
+        return None
+    value = Decimal(str(normalized))
+    target = Decimal(criterion.target)
+    if criterion.direction == 'higher':
+        raw = target * value
+    elif value == 0:
+        return None
+    else:
+        raw = target / value
+    if criterion.inputType == 'integer' and raw != raw.to_integral_value():
+        return None
+    return str(raw.normalize())
+
+
 def resolve_targets(definition, level: str, key: str, activity_key: str | None = None) -> list[tuple[str, str]]:
     activities = [a for a in definition.activities if a.enabled]
     if level == 'criterion':
@@ -18,7 +39,7 @@ def resolve_targets(definition, level: str, key: str, activity_key: str | None =
                    if a.key == activity_key and c.key == key]
     elif level == 'activity':
         targets = [(a.key, c.key) for a in activities for c in a.criteria
-                   if a.key == key and c.weight > 0]
+                   if a.key == key]
     elif level == 'dimension':
         dimension = next((d for d in definition.dimensions if d.key == key), None)
         targets = [] if dimension is None else [

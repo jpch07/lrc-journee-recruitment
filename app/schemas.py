@@ -16,6 +16,8 @@ class ManagementCorrectionRequest(BaseModel):
     key: str = Field(max_length=40)
     activityKey: str | None = Field(default=None, max_length=40)
     value: Decimal | None = Field(default=None, allow_inf_nan=False)
+    criterionValues: dict[str, Decimal] | None = None
+    rawValues: dict[str, str] | None = None
     reason: str = Field(default='', max_length=2000)
     eventId: str | None = None
     inputFingerprint: str | None = None

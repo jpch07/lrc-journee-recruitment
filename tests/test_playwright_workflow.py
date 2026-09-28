@@ -151,6 +151,8 @@ def test_admin_create_and_mobile_layout(tmp_path):
 
             viewer_context = browser.new_context(viewport={"width": 390, "height": 844}, is_mobile=True)
             viewer_page = viewer_context.new_page()
+            viewer_errors = []
+            viewer_page.on('pageerror', lambda error: viewer_errors.append(str(error)))
             viewer_page.goto(base + "/lrc-journee-recruitment-2026/view", wait_until="networkidle")
             viewer_page.fill('#viewerLoginForm input[name="username"]', "JP Chaaya")
             viewer_page.fill('#viewerLoginForm input[name="password"]', "browser-secret")
@@ -196,8 +198,8 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.evaluate("window.dispatchEvent(new Event('online')); window.dispatchEvent(new Event('online'))")
             viewer_page.wait_for_timeout(800)
             assert assessment_writes == [], "Unchanged focusout and online must not save"
+            viewer_page.locator('.activity-card-button[data-activity="sport"]').click()
             viewer_page.locator('#managementCorrections > summary').click()
-            viewer_page.locator('#correctionTarget').select_option(label='Activity — Sport')
             viewer_page.locator('#correctionValue').fill('4')
             viewer_page.locator('#correctionReason').fill('Preserve this correction reason')
             viewer_page.route('**/corrections/preview', lambda route: route.fulfill(
@@ -223,28 +225,52 @@ def test_admin_create_and_mobile_layout(tmp_path):
                 viewer_page.screenshot(path=str(tmp_path / f'management-corrections-{label}.png'))
             viewer_page.set_viewport_size({'width': 390, 'height': 844})
             viewer_page.locator('#applyCorrection').click()
-            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            viewer_page.wait_for_selector('#viewerModal:not([open])', state='attached')
+            viewer_page.wait_for_selector('.activity-card-button')
+            viewer_page.locator('.activity-card-button[data-activity="escape_room"]').click()
             viewer_page.locator('#managementCorrections > summary').click()
-            viewer_page.locator('#correctionTarget').select_option(label='Activity — Sport')
-            assert 'Effective: 4.00' in viewer_page.locator('#correctionCurrent').inner_text()
+            viewer_page.locator('input[name="correctionMode"][value="criteria"]').check()
+            for field in viewer_page.locator('.criterion-correction-input').all():
+                field.fill('4')
+            viewer_page.locator('#previewCorrection').click()
+            viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
+            viewer_page.locator('#applyCorrection').click()
+            viewer_page.wait_for_selector('#viewerModal:not([open])', state='attached')
+            viewer_page.locator('.activity-card-button[data-activity="escape_room"]').click()
+            assert '4.00' in viewer_page.locator('.management-evaluation-score').inner_text()
+            viewer_page.locator('#managementCorrections > summary').click()
             viewer_page.locator('#restoreCorrection').click()
             viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
             viewer_page.locator('#applyCorrection').click()
-            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            viewer_page.wait_for_selector('#viewerModal:not([open])', state='attached')
+            viewer_page.locator('.activity-card-button[data-activity="sport"]').click()
             viewer_page.locator('#managementCorrections > summary').click()
-            viewer_page.locator('#correctionTarget').select_option(label='Display — Color grade')
+            assert 'Effective: 4.00' in viewer_page.locator('#correctionCurrent').inner_text()
+            assert 'JP Chaaya' in viewer_page.locator('.management-evaluation').inner_text()
+            viewer_page.locator('input[name="correctionMode"][value="criteria"]').check()
+            assert viewer_page.locator('#correctionCriteria').is_visible()
+            viewer_page.locator('input[name="correctionMode"][value="single"]').check()
+            viewer_page.locator('#restoreCorrection').click()
+            viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
+            viewer_page.locator('#applyCorrection').click()
+            viewer_page.wait_for_selector('#viewerModal:not([open])', state='attached')
+            viewer_page.wait_for_selector('.activity-card-button')
+            viewer_page.locator('.edit-color-correction').click()
+            viewer_page.locator('#managementCorrections > summary').click()
             viewer_page.locator('#correctionColor').select_option('green')
             viewer_page.locator('#previewCorrection').click()
             viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
             viewer_page.locator('#applyCorrection').click()
-            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            viewer_page.wait_for_selector('#viewerModal:not([open])', state='attached')
+            viewer_page.wait_for_selector('.activity-card-button')
             assert 'Manual' in viewer_page.locator('.grade-orb small').inner_text()
+            viewer_page.locator('.edit-color-correction').click()
             viewer_page.locator('#managementCorrections > summary').click()
-            viewer_page.locator('#correctionTarget').select_option(label='Display — Color grade')
             viewer_page.locator('#restoreCorrection').click()
             viewer_page.wait_for_selector('#correctionPreview:not(:empty)')
             viewer_page.locator('#applyCorrection').click()
-            viewer_page.wait_for_selector('#managementCorrections:not([open])')
+            viewer_page.wait_for_selector('#viewerModal:not([open])', state='attached')
+            viewer_page.wait_for_selector('.activity-card-button')
             viewer_page.locator(".dimension-card").first.click()
             viewer_page.wait_for_selector("#viewerModal[open]")
             viewer_page.click("#closeViewerModal")
@@ -256,22 +282,39 @@ def test_admin_create_and_mobile_layout(tmp_path):
             viewer_page.click("#viewerMenu")
             viewer_page.click('#viewerNav button[data-tab="results"]')
             viewer_page.wait_for_selector("#viewerHost table")
-            assert [text.casefold() for text in viewer_page.locator("#viewerHost th").all_inner_texts()[:3]] == ["color", "overall rank", "journee rank"]
-            rank_cell = viewer_page.locator("#viewerHost tbody tr").first.locator("td").nth(2)
-            assert rank_cell.locator(".result-rank-value").inner_text() == "#1"
-            assert rank_cell.locator(".result-rank-total").inner_text() == "of 1"
+            assert "Journee rank" not in viewer_page.locator("#viewerHost thead").inner_text()
+            assert [text.casefold() for text in viewer_page.locator("#viewerHost th").all_inner_texts()[:3]] == ["color", "rank", "recruit"]
+            rank_cell = viewer_page.locator("#viewerHost tbody tr").first.locator("td").nth(1)
+            # This Journee is not completed: no workspace rank yet, and no
+            # misleading fallback to the removed Journee-rank column.
+            assert rank_cell.locator('[aria-label="Not ranked"]').count() == 1
             assert rank_cell.locator(".rank-number").count() == 0
             assert viewer_page.locator('[aria-label="Not ranked"]').count() == 1
             for width, label in [(390, "mobile"), (1280, "desktop")]:
                 viewer_page.set_viewport_size({"width": width, "height": 844})
                 assert viewer_page.evaluate("document.documentElement.scrollWidth") == width
-                value_bounds = rank_cell.locator(".result-rank-value").bounding_box()
-                total_bounds = rank_cell.locator(".result-rank-total").bounding_box()
-                assert value_bounds and total_bounds
-                assert total_bounds['y'] >= value_bounds['y'] + value_bounds['height']
                 viewer_page.screenshot(path=str(tmp_path / f"management-rank-table-{label}.png"))
+            assert viewer_errors == []
             viewer_context.close()
             attendance_context.close()
+
+            admin_errors = []
+            page.on('pageerror', lambda error: admin_errors.append(str(error)))
+            page.click('#menuButton')
+            page.click('#workspaceNav button[data-section="profiles"]')
+            page.locator('.profile-activity-button[data-activity-code="sport"]').click()
+            page.locator('#managementCorrections > summary').click()
+            page.locator('#correctionValue').fill('5')
+            page.locator('#previewCorrection').click()
+            page.wait_for_selector('#correctionPreview:not(:empty)')
+            assert page.locator('.correction-equivalents').count() == 1
+            page.locator('#applyCorrection').click()
+            page.wait_for_selector('#modal:not([open])', state='attached')
+            page.locator('.profile-activity-button[data-activity-code="sport"]').click()
+            assert '5.00' in page.locator('.management-evaluation-score').inner_text()
+            assert 'JP Chaaya' in page.locator('.management-evaluation').inner_text()
+            page.locator('#cancelModal').click()
+            assert admin_errors == []
 
             neutral_context = browser.new_context(viewport={"width": 1280, "height": 820})
             neutral_page = neutral_context.new_page()

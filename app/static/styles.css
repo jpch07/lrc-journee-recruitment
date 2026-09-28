@@ -231,7 +231,43 @@ tr.inactive { opacity: .5; }
 .result-rank { display: inline-flex; flex-direction: column; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .result-rank-value { color: var(--ink); font-size: 1.1rem; font-weight: 750; line-height: 1.2; }
 .result-rank-total { color: var(--muted); font-size: .75rem; line-height: 1.3; }
-.correction-editor > summary { cursor: pointer; font-size: 1.1rem; font-weight: 750; }
+.correction-section { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--line); }
+.correction-editor > summary { cursor: pointer; width: fit-content; color: var(--ink); padding: 10px 14px; border: 1px solid var(--line); border-radius: 8px; font-size: .9rem; font-weight: 650; }
+.correction-editor > summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+.correction-editor > summary:active { transform: scale(.98); }
+.correction-editor[open] > summary { margin-bottom: 16px; }
+.correction-explanation { max-width: 65ch; font-size: .9rem; line-height: 1.5; }
+.management-evaluation { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.management-evaluation p { margin: 6px 0 0; font-size: .85rem; }
+.management-evaluation-detail { margin: 12px 0 18px; font-size: .9rem; }
+.management-evaluation-detail > summary { cursor: pointer; padding: 8px 0; }
+.management-evaluation-score { font-size: 1.4rem; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.management-evaluation-score small { font-size: .85rem; color: var(--muted); }
+.correction-mode { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 24px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+.correction-mode label { display: flex; align-items: center; gap: 8px; min-height: 44px; cursor: pointer; }
+.correction-fields .correction-mode input { width: 18px; height: 18px; margin: 0; accent-color: var(--ink); }
+.correction-wide, .correction-criteria { grid-column: 1 / -1; }
+.correction-criteria { display: grid; gap: 14px; }
+.correction-criteria label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(100px, 160px); gap: 16px; align-items: center; }
+.correction-criteria label small { display: block; margin-top: 4px; font-weight: 400; }
+.correction-equivalents { margin: 12px 0; font-size: .9rem; }
+.correction-equivalents > div { display: flex; justify-content: space-between; gap: 16px; padding: 8px 0; }
+.correction-equivalents dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.edit-color-correction { font-size: .8rem; }
+.modal:has(.correction-section), .modal.wide:has(.correction-section) { width: min(780px, calc(100% - 28px)); border: 0; border-radius: 14px; box-shadow: var(--shadow-lg); }
+.modal:has(.correction-section) .dimension-breakdown-scroll { max-height: none; overflow: visible; display: block; padding: 0; }
+.modal:has(.correction-section) .dimension-criterion { margin-bottom: 14px; }
+.modal:has(.correction-section) .empty-state { padding: 16px 0; text-align: left; }
+.modal:has(.correction-section) .eyebrow { display: none; }
+.modal:has(.correction-section) .button, .modal .correction-editor .button.primary { box-shadow: none; border-radius: 8px; }
+.modal:has(.correction-section) .button:active { transform: scale(.98); }
+.modal:has(.correction-section) .panel-header { align-items: flex-start; }
+.modal:has(.correction-section) .dimension-modal-score { background: transparent; border: 0; padding: 0; }
+.modal:has(.correction-section) .correction-preview th { background: var(--surface-subtle); color: var(--muted); }
+.modal:has(.correction-section) .correction-fields { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.modal:has(.correction-section) #correctionValue { max-width: 240px; }
+.modal:has(.correction-section) #correctionValueLabel, .modal:has(.correction-section) .correction-fields label:has(#correctionReason) { display: block; }
+.modal:has(.correction-section) #correctionValue, .modal:has(.correction-section) #correctionReason { display: block; margin-top: 8px; }
 .correction-editor > summary span { margin-left: 10px; font-size: .85rem; font-weight: 400; }
 .correction-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; min-width: 0; margin: 20px 0; padding: 0; border: 0; }
 .correction-fields label { min-width: 0; }
@@ -248,7 +284,11 @@ tr.inactive { opacity: .5; }
 .correction-undo { margin-left: 12px; }
 .manual-grade-marker { display: block; margin-top: 3px; color: var(--muted); font-size: .75rem; font-weight: 500; }
 @media (max-width: 600px) {
+  .modal:has(.correction-section) .panel-header { flex-direction: column; }
+  .modal:has(.correction-section) .dimension-modal-score { text-align: left; }
+  .modal:has(.correction-section) .correction-mode { display: grid; gap: 2px; }
   .correction-fields { grid-template-columns: minmax(0, 1fr); }
+  .correction-criteria label { grid-template-columns: minmax(0, 1fr) 110px; gap: 10px; }
   .correction-editor > summary span { display: block; margin: 6px 0 0; }
 }
 .testing-panel { margin-top: 18px; border: 2px dashed #e6bd62; background: #fffaf0; }

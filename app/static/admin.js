@@ -1,6 +1,6 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
 import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
-import { correctionEditorHtml, bindCorrectionEditor } from '/static/management-corrections.js?v=20260928.3';
+import { bindCorrectionEditor, mountCorrections } from '/static/management-corrections.js?v=20260928.4';
 
 const state = {
   system: null,
@@ -1548,10 +1548,9 @@ function showActivityBreakdown(profile, code) {
   const activity = state.journey.activities.find((item) => item.code === code);
   const entries = profile.evaluations?.[code] || [];
   const result = profile.result?.activities?.[code] || { score: 0, rank: null, submitted: 0, expected: entries.length };
-  openModal(`<div><p class="eyebrow">Activity grading</p><div class="panel-header"><div><h2>${h(profile.recruit.name)} · ${h(activity?.name || statusLabel(code))}</h2><p class="muted">Every evaluator submission contributing to this activity grade.</p></div><div class="dimension-modal-score"><strong>${fmt(result.score)} /${activityScoreMaximum()}</strong><small>Rank ${result.rank ?? "—"} · ${result.submitted}/${result.expected} submitted</small></div></div><div class="dimension-breakdown-scroll">${entries.length ? entries.map((entry) => `<article class="dimension-criterion"><div class="panel-header"><div><strong>${h(entry.evaluatorName)}</strong> <span class="role-badge ${h(entry.evaluatorRole)}">${h(categoryName(entry.evaluatorRole))}</span><p class="muted">${entry.submission ? h(entry.submission.comments || "No comment") : "Evaluation not submitted"}</p></div><div class="criterion-evaluator-actions"><div class="criterion-grade"><strong>${entry.submission ? `${fmt(entry.submission.score)} /${activityScoreMaximum()}` : "Missing"}</strong><small>${entry.submission ? h(statusLabel(entry.submission.status)) : "No submission"}</small></div>${entry.submission ? `<button type="button" class="button secondary small edit-activity-submission" data-id="${entry.submission.id}">Edit evaluation</button>` : ""}</div></div></article>`).join("") : `<div class="empty-state"><p>No published evaluator assignments.</p></div>`}</div><div class="modal-actions"><button type="button" class="button primary" id="cancelModal">Close</button></div></div>`, { wide: true });
+  openModal(`<div><p class="eyebrow">Activity grading</p><div class="panel-header"><div><h2>${h(profile.recruit.name)} · ${h(activity?.name || statusLabel(code))}</h2><p class="muted">Original evaluations are preserved. When a management correction is active, it determines the effective grade.</p></div><div class="dimension-modal-score"><strong>${fmt(result.score)} /${activityScoreMaximum()}</strong><small>Rank ${result.rank ?? "—"} · ${result.submitted}/${result.expected} submitted</small></div></div><div class="dimension-breakdown-scroll">${entries.length ? entries.map((entry) => `<article class="dimension-criterion"><div class="panel-header"><div><strong>${h(entry.evaluatorName)}</strong> <span class="role-badge ${h(entry.evaluatorRole)}">${h(categoryName(entry.evaluatorRole))}</span><p class="muted">${entry.submission ? h(entry.submission.comments || "No comment") : "Evaluation not submitted"}</p></div><div class="criterion-evaluator-actions"><div class="criterion-grade"><strong>${entry.submission ? `${fmt(entry.submission.score)} /${activityScoreMaximum()}` : "Missing"}</strong><small>${entry.submission ? h(statusLabel(entry.submission.status)) : "No submission"}</small></div>${entry.submission ? `<button type="button" class="button secondary small edit-activity-submission" data-id="${entry.submission.id}">Edit evaluation</button>` : ""}</div></div></article>`).join("") : `<div class="empty-state"><p>No published evaluator assignments.</p></div>`}</div><div class="modal-actions"><button type="button" class="button primary" id="cancelModal">Close</button></div></div>`, { wide: true });
   $("#cancelModal").onclick = closeModal;
-  $(".modal-actions", modal).insertAdjacentHTML("afterbegin", `<button type="button" class="button primary" id="activityAdminEvaluation">${profile.adminEvaluations?.[code] ? "Edit official admin evaluation" : "Add official admin evaluation"}</button>`);
-  $("#activityAdminEvaluation").onclick = () => { closeModal(); showAdminEvaluationEditor(profile.recruit.id, code); };
+  mountCorrections(modal, profile, {level: 'activity', key: code});
   $$(".edit-activity-submission", modal).forEach((button) => button.onclick = () => { closeModal(); showSubmissionDetail(button.dataset.id); });
 }
 
@@ -1572,16 +1571,11 @@ function showDimensionBreakdown(profile, code) {
     </section>`).join("");
   openModal(`<div><p class="eyebrow">Dimension grading</p><div class="panel-header"><div><h2>${h(profile.recruit.name)} · ${h(breakdown.name)}</h2><p class="muted">Every submitted evaluator grade used to calculate this dimension.</p></div><div class="dimension-modal-score"><strong>${fmt(dimensionGrade(breakdown.score, code))} /${dimensionMaximums[code] || 5}</strong><small>Rank ${breakdown.rank ?? "—"} · ${breakdown.complete ? "Complete" : "Incomplete"}</small></div></div><div class="dimension-breakdown-scroll">${activitySections}</div><div class="modal-actions"><button type="button" class="button primary" id="cancelModal">Close</button></div></div>`, { wide: true });
   $("#cancelModal").onclick = closeModal;
-  breakdown.activities.forEach((activity, index) => {
-    const heading = $$(".dimension-activity-section .panel-header", modal)[index];
-    if (heading) heading.insertAdjacentHTML("beforeend", `<button type="button" class="button primary small dimension-admin-evaluation" data-code="${activity.code}">${profile.adminEvaluations?.[activity.code] ? "Edit official evaluation" : "Add official evaluation"}</button>`);
-  });
-  $$(".dimension-admin-evaluation", modal).forEach((button) => button.onclick = () => { closeModal(); showAdminEvaluationEditor(profile.recruit.id, button.dataset.code); });
+  mountCorrections(modal, profile, {level: 'dimension', key: code});
   $$(".edit-dimension-submission", modal).forEach((button) => button.onclick = () => { closeModal(); showSubmissionDetail(button.dataset.id); });
 }
 
 function wireProfile(profile) {
-  ($('.profile-sticky-panel', host) || host.lastElementChild).insertAdjacentHTML('afterend', correctionEditorHtml(profile));
   const header = $(".profile-header", host);
   if (header) {
     const meta = $("p.muted", header);
@@ -1643,7 +1637,8 @@ function wireProfile(profile) {
     profile, apiBase: `/api/admin/journeys/${state.journey.id}/recruits/${profile.recruit.id}/corrections`,
     request: (url, options) => api(url, mutation(options.method, options.body)),
     beforeChange: async () => { if (state.dirty) await save(); return !state.dirty && !saving && !conflict; },
-    reload: () => renderProfiles(),
+    reload: async () => { await renderProfiles(); closeModal(); },
+    openEditor: scope => { openModal('<div><h2>Color grade</h2><div class="modal-actions"><button class="button secondary" id="cancelModal">Close</button></div></div>', {wide: true}); mountCorrections(modal, profile, scope); $('#cancelModal').onclick = closeModal; },
   });
   window.addEventListener("online", () => { if (state.dirty && !conflict) save(); }, { once: true });
   $$(".dimension-card", host).forEach((button) => button.onclick = () => showDimensionBreakdown(profile, button.dataset.dimension));

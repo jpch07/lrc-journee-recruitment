@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .assessment_runtime import active_assessment_definition
 from .management_corrections import (build_override_map, correction_signature, correction_configuration, criterion_scale,
-                                     resolve_targets, validate_override_map)
+                                     resolve_targets, validate_override_map, raw_equivalent)
 from .models import ManagementCorrection, AuditEvent, utcnow
 from .utils import loads, dumps, audit
 
@@ -29,7 +29,7 @@ def read_corrections(db, journey, recruit) -> dict:
                             'name': f'{activity.name} — {criterion.name}', 'minimum': float(minimum), 'maximum': float(maximum)})
     targets.extend({'level': 'dimension', 'key': d.key, 'name': d.name, 'minimum': 0,
                     'maximum': float(d.displayMaximum)} for d in definition.dimensions)
-    return {
+    state = {
         'targets': targets,
         'bands': [{'key': b.key, 'name': b.name} for b in definition.scoring.bands],
         'revision': record.revision if record else 0,
@@ -45,6 +45,35 @@ def read_corrections(db, journey, recruit) -> dict:
                         AuditEvent.entity_id == recruit.id, AuditEvent.action == 'management.correction'
                     ).order_by(AuditEvent.created_at.desc()))],
     }
+    state['activities'] = {}
+    for activity in (a for a in definition.activities if a.enabled):
+        values = state['values'].get(activity.key, {})
+        history = [event for event in state['history'] if any(
+            item['activityKey'] == activity.key for item in event['after'].get('affectedCriteria', []))]
+        criteria = []
+        for criterion in activity.criteria:
+            minimum, maximum = criterion_scale(activity, criterion)
+            normalized = values.get(criterion.key)
+            raw = raw_equivalent(activity, criterion, normalized) if normalized is not None else None
+            raw_source = 'calculated'
+            # Preserve explicitly entered raw results while their corresponding
+            # correction is still current. Later overlapping edits take priority.
+            event = next((e for e in history if any(i['key'] == criterion.key and i['activityKey'] == activity.key
+                         for i in e['after'].get('affectedCriteria', []))), None)
+            if normalized is not None and event:
+                saved_raw = event['after'].get('activityRawValues', {}).get(activity.key, {})
+                if criterion.key in saved_raw:
+                    raw = saved_raw[criterion.key]
+                    if event['after'].get('operation', {}).get('rawValues') is not None:
+                        raw_source = 'entered'
+            criteria.append({'key': criterion.key, 'name': criterion.name, 'minimum': float(minimum),
+                             'maximum': float(maximum), 'inputType': criterion.inputType, 'unit': criterion.unit,
+                             'target': str(criterion.target) if criterion.target is not None else None,
+                             'rawValue': raw, 'rawSource': raw_source, 'adjusted': normalized is not None})
+        state['activities'][activity.key] = {'name': activity.name, 'converted': activity.scoring == 'target_average',
+            'criteria': criteria, 'history': history, 'author': history[0]['actorName'] if history and values else None,
+            'updatedAt': history[0]['createdAt'] if history and values else None}
+    return state
 
 
 def preview_correction(db, journey, recruit, operation) -> dict:
@@ -57,7 +86,13 @@ def preview_correction(db, journey, recruit, operation) -> dict:
         raise HTTPException(409, 'Saved corrections use a different scoring configuration. Restore that configuration for review.')
     changed = {'values': deepcopy(state['values']), 'color': state['color']}
     targets = []
+    activity_raw = {}
     try:
+        if operation.criterionValues is not None or operation.rawValues is not None:
+            if operation.action != 'set' or operation.level != 'activity' or operation.value is not None:
+                raise ValueError('A complete evaluation must target one activity, without a single target grade.')
+            if operation.criterionValues is not None and operation.rawValues is not None:
+                raise ValueError('Supply grades or raw results, not both.')
         if operation.action == 'undo':
             event = next((e for e in state['history'] if e['id'] == operation.eventId), None)
             if not event:
@@ -83,9 +118,28 @@ def preview_correction(db, journey, recruit, operation) -> dict:
                     changed['values'].get(code, {}).pop(key, None)
                 changed['values'] = {k: v for k, v in changed['values'].items() if v}
             else:
-                if operation.value is None:
+                if operation.criterionValues is not None or operation.rawValues is not None:
+                    activity = next(a for a in definition.activities if a.key == operation.key and a.enabled)
+                    required = {c.key for c in activity.criteria}
+                    supplied = operation.rawValues if operation.rawValues is not None else operation.criterionValues
+                    if set(supplied) != required:
+                        raise ValueError('Enter every criterion for this activity, and no extra criteria.')
+                    if operation.rawValues is not None:
+                        from .scoring import target_activity_score
+                        _, raw, grades = target_activity_score(activity.key, operation.rawValues)
+                        activity_raw[activity.key] = {k: str(v) for k, v in raw.items()}
+                    else:
+                        if activity.scoring == 'target_average':
+                            raise ValueError('Enter the raw results for this converted evaluation.')
+                        grades = operation.criterionValues
+                    targets = [(activity.key, c.key) for c in activity.criteria]
+                    for criterion in activity.criteria:
+                        changed['values'] = build_override_map(definition, changed['values'], 'criterion',
+                            criterion.key, grades[criterion.key], activity.key)
+                elif operation.value is None:
                     raise ValueError('Enter a target grade.')
-                changed['values'] = build_override_map(definition, changed['values'], operation.level,
+                else:
+                    changed['values'] = build_override_map(definition, changed['values'], operation.level,
                                                       operation.key, operation.value, operation.activityKey)
         validate_override_map(definition, changed['values'])
         if changed['color'] and changed['color'] not in {b.key for b in definition.scoring.bands}:
@@ -101,6 +155,12 @@ def preview_correction(db, journey, recruit, operation) -> dict:
                    if before['criteria'][a.key][c.key] != after['criteria'][a.key][c.key]]
     affected = [{'activityKey': code, 'key': key, 'before': before['criteria'][code][key],
                  'after': after['criteria'][code][key]} for code, key in targets]
+    for code, key in targets:
+        activity = next(a for a in definition.activities if a.key == code)
+        criterion = next(c for c in activity.criteria if c.key == key)
+        normalized = changed['values'].get(code, {}).get(key)
+        if activity.scoring == 'target_average' and normalized is not None:
+            activity_raw.setdefault(code, {}).setdefault(key, raw_equivalent(activity, criterion, normalized))
     warnings = []
     if any(c['before']['automaticAverage'] is None for c in affected):
         warnings.append('Some criteria have no automatic grade. This correction does not create evaluator submissions.')
@@ -110,7 +170,8 @@ def preview_correction(db, journey, recruit, operation) -> dict:
                                        'signature': state['configurationSignature']}).encode()).hexdigest()
     return {'before': before, 'after': after, 'affectedCriteria': affected, 'warnings': warnings,
             'inputFingerprint': fingerprint, 'revision': state['revision'],
-            'configurationSignature': state['configurationSignature'], 'changed': changed}
+            'configurationSignature': state['configurationSignature'], 'changed': changed,
+            'activityRawValues': activity_raw}
 
 
 def apply_correction(db, journey, recruit, operation, actor_name: str, actor_type: str) -> dict:
@@ -140,7 +201,8 @@ def apply_correction(db, journey, recruit, operation, actor_name: str, actor_typ
                       'overallScore': preview['before']['overallScore']},
               after={**changed, 'revision': fields['revision'], 'configurationSignature': state['configurationSignature'],
                      'overallScore': preview['after']['overallScore'], 'operation': operation.model_dump(mode='json'),
-                     'affectedCriteria': preview['affectedCriteria']}, reason=operation.reason.strip())
+                     'affectedCriteria': preview['affectedCriteria'],
+                     'activityRawValues': preview['activityRawValues']}, reason=operation.reason.strip())
         db.commit()
     except IntegrityError as exc:
         db.rollback()
