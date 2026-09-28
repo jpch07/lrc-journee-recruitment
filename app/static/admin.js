@@ -1,5 +1,6 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
 import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
+import { auditItem, mountWorkspaceAudit } from '/static/audit.js?v=20260928.5';
 import { bindCorrectionEditor, mountCorrections } from '/static/management-corrections.js?v=20260928.4';
 
 const state = {
@@ -137,6 +138,7 @@ async function initialize() {
     showApp();
     await loadLibrary();
     if (/\/admin\/access\/?$/.test(location.pathname) && state.isOwner) await openLibraryPermissions();
+    if (/\/admin\/audit\/?$/.test(location.pathname)) await openLibraryAudit();
   } catch {
     showLogin();
   }
@@ -170,6 +172,7 @@ $("#loginForm").addEventListener("submit", async (event) => {
     showApp();
     await loadLibrary();
     if (/\/admin\/access\/?$/.test(location.pathname) && state.isOwner) await openLibraryPermissions();
+    if (/\/admin\/audit\/?$/.test(location.pathname)) await openLibraryAudit();
   } catch (error) {
     $("#loginError").textContent = error.message;
   }
@@ -188,6 +191,29 @@ $("#menuButton").addEventListener("click", () => $("#sidebar").classList.toggle(
 $("#showArchived").addEventListener("change", loadLibrary);
 $("#createJourneyButton").addEventListener("click", createJourneyDialog);
 $("#libraryPermissionsButton").addEventListener("click", openLibraryPermissions);
+$("#libraryAuditButton").addEventListener("click", () => openLibraryAudit());
+
+async function openLibraryAudit(journeyId = '') {
+  if (!guardDirty()) return;
+  clearInterval(state.pollTimer);
+  state.journey = null;
+  state.section = 'audit';
+  document.body.classList.add('permissions-standalone');
+  $('#libraryView').classList.add('hidden');
+  $('#workspaceView').classList.remove('hidden');
+  $('#journeyCrumb').textContent = 'Workspace audit';
+  history.replaceState({}, '', state.workspaceSlug ? `/${encodeURIComponent(state.workspaceSlug)}/admin/audit` : '/admin/audit');
+  host.innerHTML = '<p class="muted" role="status">Loading audit history…</p>';
+  try {
+    const journeys = await api('/api/admin/journeys?include_archived=true');
+    if (state.section !== 'audit' || !/\/admin\/audit\/?$/.test(location.pathname)) return;
+    await mountWorkspaceAudit(host, {api, journeys, back: returnToLibrary, journeyId});
+  } catch (error) {
+    if (state.section !== 'audit' || !/\/admin\/audit\/?$/.test(location.pathname)) return;
+    host.innerHTML = `<p role="alert">${h(error.message)}</p><button id="retryAudit" class="button ghost">Retry</button>`;
+    $('#retryAudit').onclick = () => openLibraryAudit(journeyId);
+  }
+}
 
 async function loadLibrary() {
   clearInterval(state.pollTimer);
@@ -1646,16 +1672,6 @@ function wireProfile(profile) {
   $$(".submission-detail", host).forEach((button) => button.onclick = () => showSubmissionDetail(button.dataset.id));
 }
 
-function auditItem(item) {
-  const before = item.before && typeof item.before === "object" ? item.before : {};
-  const after = item.after && typeof item.after === "object" ? item.after : {};
-  const keys = [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]));
-  const value = (input) => typeof input === "object" ? JSON.stringify(input) : String(input ?? "—");
-  const changes = keys.slice(0, 8).map((key) => `<li><strong>${h(statusLabel(key))}:</strong> ${h(value(before[key]))} → ${h(value(after[key]))}</li>`).join("");
-  return `<div class="audit-item detailed"><small>${localDateTime(item.createdAt)}</small><span><strong>${h(item.actorName)}</strong> · ${h(item.actorType || "admin")}<br><small>${h(item.entityType || "record")}${item.entityId ? ` · ${h(item.entityId)}` : ""}</small></span><span><strong>${h(statusLabel(item.action))}</strong>${changes ? `<ul class="audit-changes">${changes}</ul>` : ""}${item.reason ? `<small class="muted">Reason: ${h(item.reason)}</small>` : ""}</span></div>`;
-  return `<div class="audit-item"><small>${localDateTime(item.createdAt)}</small><span><strong>${h(item.actorName)}</strong> · ${h(item.actorType || "admin")}</span><span>${h(statusLabel(item.action))}${item.reason ? `<br><small class="muted">Reason: ${h(item.reason)}</small>` : ""}</span></div>`;
-}
-
 async function showAdminEvaluationEditor(recruitId, activityCode) {
   try {
     const detail = await api(`/api/admin/journeys/${state.journey.id}/recruits/${recruitId}/admin-evaluations/${activityCode}`);
@@ -1993,7 +2009,7 @@ function bindProtectionControls(protection) {
 async function renderSettings() {
   await refreshJourney();
   const [auditEvents, protection] = await Promise.all([
-    api(`/api/admin/journeys/${state.journey.id}/audit?limit=500`),
+    api(`/api/admin/journeys/${state.journey.id}/audit?limit=50`),
     api(`/api/admin/journeys/${state.journey.id}/event-day-protection`),
   ]);
   state.lastProtectionPoll = Date.now();
@@ -2006,9 +2022,10 @@ async function renderSettings() {
     <div class="panel"><h2>Access links & QR codes</h2><div class="access-link-block"><h3>Evaluator link</h3><p class="muted">This permanent link automatically opens the single Journee whose status is Active.</p><input readonly value="${h(evalUrl)}" id="evalLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyLink">Copy evaluator link</button></div><img src="/api/admin/journeys/${state.journey.id}/evaluator-qr.png" alt="Permanent evaluator link QR code"></div><div class="access-link-block"><h3>Recruit attendance link</h3><p class="muted">Share only with the person recording recruit attendance. It permits recruit roster changes while this Journee is Draft, Ready, or Active, and closes automatically afterward.</p><input readonly value="${h(attendanceUrl)}" id="recruitAttendanceLink"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyRecruitAttendanceLink" ${attendanceUrl ? "" : "disabled"}>Copy attendance link</button><button class="button ghost" id="rotateRecruitAttendanceLink">Rotate link</button></div>${attendanceUrl ? `<img src="/api/admin/journeys/${state.journey.id}/recruit-attendance-qr.png" alt="Recruit attendance link QR code">` : `<div class="warning-box">Attendance access is not configured for this Journee.</div>`}</div></div></div>
     <div id="protectionPanel">${protectionPanel(protection)}</div>
     <div class="panel"><div class="panel-header"><div><h2>View-only reports</h2><p class="muted">Download the interactive three-sheet management report with attendance, rankings, and complete recruit profiles.</p></div></div><div class="inline-actions"><a class="button primary" href="/api/admin/journeys/${state.journey.id}/export.xlsx">Interactive management report</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/results.csv">Quick results CSV</a><a class="button ghost" href="/api/admin/journeys/${state.journey.id}/photos.zip">Photo ZIP</a><button class="button secondary" id="duplicateCurrent">Duplicate Journee</button></div></div>
-    <div class="panel"><div class="panel-header"><h2>Audit history</h2><span class="subtle">${auditEvents.length} most recent events</span></div>${auditEvents.length ? `<div class="audit-list">${auditEvents.map(auditItem).join("")}</div>` : `<p class="muted">No audit events.</p>`}</div>
+    <div class="panel"><div class="panel-header"><h2>Audit history</h2><button id="openFullAudit" class="button ghost small">Search full history</button></div><p class="muted">${auditEvents.length} most recent events</p>${auditEvents.length ? `<div class="audit-list">${auditEvents.map(auditItem).join("")}</div>` : `<p class="muted">No audit events.</p>`}</div>
     <div class="panel"><h2 class="danger-text">Archive or delete</h2><p class="muted">Archiving preserves the Journee. Permanent deletion removes its attendance, rooms, assignments, evaluations, photos, and audit history.</p><div class="inline-actions"><button class="button ghost" id="archiveCurrent">Archive Journee</button><button class="button danger" id="deleteCurrent">Permanently delete Journee</button></div></div>`;
   const form = $("#settingsForm");
+  $('#openFullAudit').onclick = () => openLibraryAudit(state.journey.id);
   const accessPanel = $$(".panel h2", host).find((item) => item.textContent === "Access links & QR codes")?.closest(".panel");
   if (accessPanel) accessPanel.insertAdjacentHTML("beforeend", `<div class="access-link-block"><h3>Read-only management link</h3><input readonly value="${h(viewUrl)}"><div class="inline-actions" style="margin:10px 0"><button class="button secondary" id="copyViewLink">Copy read-only link</button><a class="button ghost" href="${h(viewUrl)}" target="_blank" rel="noopener">Open</a></div></div>`);
   form.onsubmit = async (event) => {

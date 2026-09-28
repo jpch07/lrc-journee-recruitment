@@ -100,6 +100,33 @@ textarea { min-height: 105px; resize: vertical; }
 
 .workspace { display: grid; grid-template-columns: 235px minmax(0, 1fr); min-height: calc(100vh - 66px); }
 .permissions-standalone .workspace { grid-template-columns: minmax(0, 1fr); }
+.audit-feed { background: var(--surface, #fff); padding: 0 24px; }
+.audit-entry { padding: 24px 0; border-bottom: 1px solid #dce1e8; min-width: 0; overflow-wrap: anywhere; }
+.audit-entry:last-child { border-bottom: 0; }
+.audit-entry-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
+.audit-entry-heading h3 { margin: 3px 0 0; font-size: 1rem; font-weight: 500; }
+.audit-person { font-size: 1.1rem; }
+.audit-entry time, .audit-meta { color: #566174; font-size: .85rem; }
+.audit-entry time { flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.audit-meta { margin: 6px 0 12px; }
+.audit-change-list { max-width: 760px; }
+.audit-change { display: flex; justify-content: space-between; gap: 24px; padding: 7px 0; }
+.audit-change > span:first-child small { display: block; color: #566174; font-size: .75rem; }
+.audit-change-values { font-variant-numeric: tabular-nums; text-align: right; }
+.audit-reason { max-width: 75ch; white-space: pre-wrap; font-size: .9rem; margin: 12px 0; }
+.audit-details summary { cursor: pointer; color: #46536a; padding: 10px 0; font-size: .85rem; }
+.audit-details summary:focus-visible { outline: 2px solid var(--primary, #b20830); outline-offset: 4px; }
+.audit-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 16px; margin: 24px 0; }
+.audit-filters label { flex: 1 1 145px; min-width: 0; }
+.audit-filters label:first-child { flex-basis: 240px; }
+.audit-filters input, .audit-filters select { width: 100%; min-width: 0; }
+.audit-filter-actions { display: flex; gap: 8px; }
+@media (max-width: 640px) {
+  .audit-feed { padding: 0 16px; }
+  .audit-entry-heading { flex-direction: column; gap: 6px; }
+  .audit-change { gap: 12px; }
+  .audit-change-values { min-width: 92px; }
+}
 .permissions-standalone .sidebar { display: none; }
 .permissions-standalone #menuButton { display: none; }
 .sidebar { position: sticky; top: 66px; align-self: start; display: flex; flex-direction: column; justify-content: space-between; height: calc(100vh - 66px); padding: 24px 15px; border-right: 1px solid var(--line); background: #fff; }

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#4f46e5">
   <title>Assessment Workspace · Admin</title>
-  <link rel="stylesheet" href="/static/styles.css?v=20260928.4&theme=workspace-routing">
+  <link rel="stylesheet" href="/static/styles.css?v=20260928.5&theme=workspace-routing">
 </head>
 <body class="admin-body">
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -35,7 +35,7 @@
     <main id="libraryView" class="page-shell">
       <div class="page-heading">
         <div><p class="eyebrow">Workspace</p><h1>Journee library</h1><p class="muted">Every event is saved as an independent workspace.</p></div>
-        <div class="heading-actions"><label class="checkbox-inline"><input id="showArchived" type="checkbox"> Show archived</label><button id="libraryPermissionsButton" class="button ghost hidden">Access & permissions</button><a id="configureSystemButton" class="button ghost hidden" href="/configure">Configure assessment system</a><button id="createJourneyButton" class="button primary">+ New Journee</button></div>
+        <div class="heading-actions"><label class="checkbox-inline"><input id="showArchived" type="checkbox"> Show archived</label><button id="libraryAuditButton" class="button ghost">Workspace audit</button><button id="libraryPermissionsButton" class="button ghost hidden">Access & permissions</button><a id="configureSystemButton" class="button ghost hidden" href="/configure">Configure assessment system</a><button id="createJourneyButton" class="button primary">+ New Journee</button></div>
       </div>
       <div id="journeyGrid" class="journey-grid"></div>
     </main>
@@ -61,6 +61,6 @@
   <dialog id="modal" class="modal"><div id="modalBody"></div></dialog>
   <dialog id="photoViewer" class="photo-viewer"><button type="button" class="photo-viewer-close" aria-label="Close photo">×</button><img id="photoViewerImage" alt=""><p id="photoViewerCaption"></p></dialog>
   <input id="hiddenFile" type="file" class="hidden">
-  <script type="module" src="/static/admin.js?v=20260928.4"></script>
+  <script type="module" src="/static/admin.js?v=20260928.5"></script>
 </body>
 </html>

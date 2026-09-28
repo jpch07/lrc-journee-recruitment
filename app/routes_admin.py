@@ -3167,6 +3167,7 @@ def recruit_profile(
     from .correction_service import read_corrections
     breakdowns = _dimension_breakdowns(details, result_row)
     criteria = result_row.pop('criteria', {})
+    from .audit_presentation import present_events
     return {
         "corrections": read_corrections(db, journey, recruit),
         "criteria": criteria,
@@ -3188,17 +3189,8 @@ def recruit_profile(
         "evaluations": details,
         "rubrics": {code: public_rubric(code) for code in ACTIVITY_ORDER},
         "adminEvaluations": {item.activity_code: _admin_evaluation_payload(item) for item in admin_evaluations},
-        "history": [
-            {
-                "action": item.action,
-                "actorName": item.actor_name,
-                "reason": item.reason,
-                "before": loads(item.before_json, {}),
-                "after": loads(item.after_json, {}),
-                "createdAt": item.created_at.isoformat(),
-            }
-            for item in history
-        ],
+        "history": [{**entry, "before": loads(item.before_json, {}), "after": loads(item.after_json, {})}
+                    for entry, item in zip(present_events(db, history), history)],
     }
 
 
@@ -3594,8 +3586,11 @@ def audit_log(
             .limit(limit)
         )
     )
+    from .audit_presentation import present_events
+    presentation = {item["id"]: item for item in present_events(db, events)}
     return [
         {
+            **presentation[item.id],
             "id": item.id,
             "actorType": item.actor_type,
             "actorName": item.actor_name,
@@ -3609,6 +3604,61 @@ def audit_log(
         }
         for item in events
     ]
+
+
+@router.get("/audit")
+def workspace_audit(
+    limit: int = Query(default=50, ge=1, le=100),
+    cursor: str | None = Query(default=None, max_length=200),
+    journey_id: str | None = None,
+    search: str = Query(default="", max_length=200),
+    action: str = Query(default="", max_length=100),
+    start: date | None = None,
+    end: date | None = None,
+    context: AdminContext = Depends(require_admin),
+    db: Session = Depends(get_db),
+):
+    from datetime import timedelta
+    from sqlalchemy import or_, and_
+    from .tenant import current_system_id
+    from .audit_presentation import present_events
+    system_id = current_system_id()
+    if not system_id:
+        raise HTTPException(400, "Select a workspace first.")
+    if start and end and start > end:
+        raise HTTPException(422, "The end date must be on or after the start date.")
+    # Account security remains in the owner-only Access & permissions log.
+    query = select(AuditEvent).where(AuditEvent.system_id == system_id,
+        AuditEvent.entity_type.notin_(["account", "user_account", "user", "platform_account"]),
+        ~AuditEvent.action.like("account.%"))
+    if journey_id:
+        get_journey_or_404(db, journey_id)
+        query = query.where(AuditEvent.journey_id == journey_id)
+    if search.strip():
+        term = "%" + search.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+        people = select(Recruit.id).join(Journey, Journey.id == Recruit.journey_id).where(Journey.system_id == system_id, Recruit.name.ilike(term, escape="\\"))
+        evaluators = select(Evaluator.id).join(Journey, Journey.id == Evaluator.journey_id).where(Journey.system_id == system_id, Evaluator.name.ilike(term, escape="\\"))
+        query = query.where(or_(AuditEvent.actor_name.ilike(term, escape="\\"), AuditEvent.entity_id.in_(people),
+            AuditEvent.entity_id.in_(evaluators), AuditEvent.after_json.ilike(term, escape="\\"),
+            AuditEvent.before_json.ilike(term, escape="\\")))
+    if action:
+        query = query.where(AuditEvent.action.startswith(action, autoescape=True))
+    if start:
+        query = query.where(AuditEvent.created_at >= datetime.combine(start, datetime.min.time()))
+    if end:
+        query = query.where(AuditEvent.created_at < datetime.combine(end + timedelta(days=1), datetime.min.time()))
+    if cursor:
+        try:
+            stamp, identifier = cursor.rsplit("|", 1)
+            stamp = datetime.fromisoformat(stamp)
+        except ValueError:
+            raise HTTPException(422, "Invalid history cursor. Refresh the history.")
+        query = query.where(or_(AuditEvent.created_at < stamp, and_(AuditEvent.created_at == stamp, AuditEvent.id < identifier)))
+    events = list(db.scalars(query.order_by(AuditEvent.created_at.desc(), AuditEvent.id.desc()).limit(limit + 1)))
+    more = len(events) > limit
+    events = events[:limit]
+    return {"items": present_events(db, events), "nextCursor":
+        f"{events[-1].created_at.isoformat()}|{events[-1].id}" if more else None}
 
 
 @router.delete("/journeys/{journey_id}")

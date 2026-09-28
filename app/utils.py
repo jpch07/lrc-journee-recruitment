@@ -44,6 +44,26 @@ def audit(
     after: Any = None,
     reason: str = "",
 ) -> None:
+    # Keep human identity alongside future evidence, without changing scoring fields.
+    if isinstance(after, dict) or after is None:
+        from sqlalchemy import select
+        from .models import Journey, Recruit, Evaluator
+        context = {}
+        with db.no_autoflush:
+            for model, identifier, key in ((Journey, journey_id, "journeyName"),
+                ({"recruit": Recruit, "evaluator": Evaluator, "journey": Journey}.get(entity_type), entity_id, "entityName")):
+                if model is not None and identifier:
+                    pending = next((row for row in (*db.new, *db.identity_map.values())
+                                    if isinstance(row, model) and row.__dict__.get('id') == identifier
+                                    and 'name' in row.__dict__), None)
+                    query = select(model.name).where(model.id == identifier)
+                    if model is not Journey:
+                        query = query.join(Journey, Journey.id == model.journey_id)
+                    name = pending.name if pending else db.scalar(query)
+                    if name:
+                        context[key] = name
+        if context:
+            after = {**(after or {}), "_auditContext": context}
     db.add(
         AuditEvent(
             journey_id=journey_id,

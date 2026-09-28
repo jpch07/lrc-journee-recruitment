@@ -2,6 +2,7 @@ import { assessmentAutosave } from "/static/assessment-autosave.js?v=20260927.1"
 import { bindCorrectionEditor, mountCorrections } from '/static/management-corrections.js?v=20260928.4';
 import { api, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, wireAccountPicker, wireBoundedNumberInputs } from "/static/common.js?v=20260810.1";
 import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
+import { auditItem } from '/static/audit.js?v=20260928.5';
 
 let profileAutosave = null;
 let profileRenderSequence = 0;
@@ -189,10 +190,6 @@ function radar(result, items, maximum, viewBox = "0 0 360 320") {
   const itemMaximum = item => Number(item.maximum || maximum);
   const data = items.map((item, index) => point(index, Math.max(0, Math.min(itemMaximum(item), Number(item.score || 0))) / itemMaximum(item)));
   return `<svg class="activity-radar" viewBox="${viewBox}">${[.2,.4,.6,.8,1].map(level => `<polygon class="radar-grid" points="${polygon(level)}"></polygon>`).join("")}${items.map((_, index) => { const p = point(index, 1); return `<line class="radar-axis" x1="${cx}" y1="${cy}" x2="${p[0]}" y2="${p[1]}"></line>`; }).join("")}<polygon class="radar-data" points="${data.map(p => p.join(",")).join(" ")}"></polygon>${data.map(p => `<circle class="radar-dot" cx="${p[0]}" cy="${p[1]}" r="4"></circle>`).join("")}${items.map((item, index) => { const p = point(index, 1.24); return `<text class="radar-label" x="${p[0]}" y="${p[1]}" text-anchor="middle"><tspan x="${p[0]}">${h(item.name)}</tspan><tspan x="${p[0]}" dy="15">${fmt(item.score)}/${itemMaximum(item)}</tspan></text>`; }).join("")}</svg>`;
-}
-
-function auditItem(item) {
-  return `<article class="audit-item"><div><strong>${h(statusLabel(item.action))}</strong><p>${h(item.actorName || "System")}${item.reason ? ` · ${h(item.reason)}` : ""}</p></div><time>${h(localDateTime(item.createdAt))}</time></article>`;
 }
 
 function profileHtml(profile) {

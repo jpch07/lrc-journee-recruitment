@@ -1,5 +1,16 @@
 # Handoff to the next coding session / Codex
 
+## 2026-09-28 — Readable workspace audit
+
+- Approved bounded change: readable event history and standalone workspace audit from the library, including archived Journees. No infrastructure or scoring changes.
+- Shared audit presentation resolves recruit/evaluator/Journee names in bounded batch queries, formats human-facing changes, rounds display numbers and expands criterion details. Raw stored evidence is unchanged. Existing profile/per-Journee APIs retain their original before/after fields.
+- Future dict-shaped audit payloads receive additive `_auditContext` name snapshots; loaded entities are reused to avoid extra normal edit queries. No schema migration. Old records without a recoverable name clearly say the person is no longer available.
+- `/api/admin/audit` is admin-only, explicitly workspace-scoped, supports person/action/Journee/UTC-date filters and stable timestamp+ID cursor pagination. Account security events remain in the existing owner-only security log, not the shared feed. No photo columns loaded by name resolution.
+- Library has Workspace audit; standalone `/admin/audit` deep links, search, reset, older events, loading/error/empty states. Per-Journee Settings shows recent 50 and Search full history. Shared renderer is also used by admin/management profile history.
+- Validation: full non-browser run had 362 passes and one stale asset-version assertion (updated for both JS bundles); targeted reruns recorded below. Both browser flows exercised; audit flow passed search, expandable criterion details, deep-link reload, return navigation and mobile width. Desktop/mobile screenshots inspected in one batch; Impeccable audit-module detector returned no findings. Release evidence follows after deployment.
+- Scope limitations: already-deleted historical entities with no name snapshot cannot be reconstructed; no fabricated names. Permanent Journee deletion still has the pre-existing cascading audit policy; this task does not change deletion behavior. Workspace audit is admin-only, matching the existing audit permission.
+- Rollback target: `01d3961c650569b0c2e80f76e153d3ddcd73f712`; additive audit metadata is compatible. No production records changed by verification.
+
 ## 2026-09-28 — Activity-context correction redesign (current work)
 
 - User approved: results table shows only workspace-wide completed-Journee `Rank`; profile ranks unchanged. Corrections live inside activity View evaluations, not a profile-wide panel.

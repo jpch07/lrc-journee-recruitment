@@ -10,7 +10,7 @@ import pytest
 from playwright.sync_api import sync_playwright
 from test_sitewide_performance import seed
 from app.db import SessionLocal
-from app.models import AssignmentRound
+from app.models import AssignmentRound, AuditEvent, Recruit
 from sqlalchemy import select
 
 pytestmark = pytest.mark.browser
@@ -27,6 +27,16 @@ def test_sitewide_click_flows(client, tmp_path):
             AssignmentRound.status == "preview",
         )):
             db.delete(preview)
+        db.commit()
+        recruit = db.scalar(select(Recruit).where(Recruit.journey_id == j))
+        from app.utils import dumps
+        db.add(AuditEvent(journey_id=j, actor_type='admin', actor_name='Audit test manager',
+            action='management.correction', entity_type='recruit', entity_id=recruit.id,
+            before_json=dumps({'overallScore': 3.2512345}),
+            after_json=dumps({'overallScore': 4, 'operation': {'level': 'activity', 'key': 'skills', 'action': 'set'},
+                'affectedCriteria': [{'activityKey': 'skills', 'key': 'posture',
+                    'before': {'name': 'Posture and lifting technique', 'effectiveAverage': 3, 'maximum': 5},
+                    'after': {'name': 'Posture and lifting technique', 'effectiveAverage': 4, 'maximum': 5}}]})))
         db.commit()
     root = Path(os.getenv("LRC_BASELINE_APP_DIR", Path(__file__).parents[1]))
     baseline = bool(os.getenv("LRC_BASELINE_APP_DIR"))
@@ -174,6 +184,30 @@ def test_sitewide_click_flows(client, tmp_path):
             assert management.locator('#viewerJourney').input_value() == j
             assert 'Shared rankings across every completed Journee.' not in management.locator('#viewerHost').inner_text()
             management.close()
+            page.click('#libraryButton')
+            page.wait_for_selector('#libraryAuditButton')
+            page.click('#libraryAuditButton')
+            page.wait_for_selector('.audit-entry')
+            assert not page.locator('#sidebar').is_visible()
+            page.fill('#auditFilters input[name="search"]', 'Audit test manager')
+            page.click('#auditFilters button[type="submit"]')
+            page.wait_for_function("document.querySelector('#auditStatus')?.textContent.includes('1 event shown')")
+            assert page.locator('.audit-person').inner_text()
+            assert '3.25' in page.locator('#auditFeed').inner_text()
+            assert 'configurationSignature' not in page.locator('#auditFeed').inner_text()
+            page.click('.audit-details summary')
+            assert page.locator('.audit-details .audit-change').first.is_visible()
+            assert 'Posture and lifting technique' in page.locator('.audit-details').inner_text()
+            page.set_viewport_size({'width': 1440, 'height': 1000})
+            page.screenshot(path=str(tmp_path / 'audit-desktop.png'), full_page=True)
+            page.set_viewport_size({'width': 390, 'height': 844})
+            assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
+            page.screenshot(path=str(tmp_path / 'audit-mobile.png'), full_page=True)
+            print('AUDIT_SCREENSHOTS', tmp_path)
+            page.reload(wait_until='networkidle')
+            page.wait_for_selector('#auditFilters')
+            page.click('#auditBack')
+            page.wait_for_selector('#libraryAuditButton')
             assert not errors, errors
             print("BROWSER_FLOW", {"baseline":baseline,"simulated_exchange_ms":delay*1000,"open":opening,"initial_activity":initial_load,"activity_switch":loading,"click_to_editable":editing})
             browser.close()
