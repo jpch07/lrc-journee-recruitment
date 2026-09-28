@@ -62,5 +62,30 @@ an old full database over subsequent legitimate work.
 
 ## Final rollout evidence
 
-Not yet deployed at document creation; append exact release, CI, migration,
-health, asset and read-only authenticated verification evidence after completion.
+Completed release: `ae84923578a4194143438fc5257b73a9a687443e`.
+GitHub Actions `36400973117`: non-browser tests, both browser workflows and
+Docker build all successful. Final independent review cleared all three fixes.
+
+Final pre-cutover archive `production-final-before-corrections-20260928.zip`
+matched the rehearsed backup exactly (same 35 tables, 7,788 rows and data hash).
+Production migration ran once via TLS verify-full, one connection, an advisory
+transaction lock and bounded statement/lock timeouts. Existing table hashes
+before/after within that transaction were identical; new correction table empty.
+
+- Main: `dep-dat2sqbbc2fs73avdrig`, live before 09:08:37 UTC.
+- Oregon: `dep-dat2t5e0tbcc739lpugg`, live at 09:09:15 UTC.
+- Both liveness/readiness endpoints returned 200 (`ok` / `ready`).
+- viewer.js, admin.js, management-corrections.js and styles.css from both sites
+  matched the exact release Git blobs (not Windows CRLF working-tree bytes).
+- No error-level logs in the checked post-deployment intervals.
+- Authenticated Oregon results: all 51 rendered rows exactly matched the saved
+  pre-deployment rows. Profile editor loaded; a live read-only Sport preview
+  correctly mapped each contributing criterion to 4/5, then was cancelled.
+- Confirmed database schema 0019, zero saved management corrections and zero
+  correction audit events afterward: no real grades were changed as a test.
+- Main browser requested login; authenticated UI verification was performed on
+  Oregon. Main deployment, health and exact asset checks passed independently.
+
+The current main and Oregon share the production database and this release.
+The independent backup and legacy service were not deployed or reconfigured.
+Legacy schema-0018 code is not a compatible rollback once corrections are used.

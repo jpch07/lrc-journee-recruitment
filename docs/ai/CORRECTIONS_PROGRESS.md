@@ -62,3 +62,13 @@ repeatable-read snapshot with configuration reloaded inside it. SQLite upgrade
 conflicts and PostgreSQL serialization conflicts return 409 without retry.
 Added concurrent first/update saves, mid-calculation grading changes, tenant
 isolation and immutable submission/version tests. Re-running full verification.
+
+Task 4: complete. Final browser workflows 2/2 passed, including conflict and
+offline entry retention; final bounded desktop/mobile confirmation inspected.
+Task 5: complete. 355 non-browser tests passed; CI 36400973117 passed including
+Docker build. Fresh final backup matched rehearsal. Production 0019 migration
+preserved all35 original table hashes, then main and Oregon deployed reviewed
+ae84923 sequentially. Health/assets checked on both; authenticated Oregon
+51-row parity and no-write preview/cancel verified. Main browser requires login.
+No saved corrections/audit events were created by live verification. Full
+deployment IDs and rollback limits are in MANAGEMENT_CORRECTIONS_ROLLOUT.md.

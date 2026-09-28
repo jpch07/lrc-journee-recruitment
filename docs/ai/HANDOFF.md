@@ -278,5 +278,11 @@ All 355 non-browser tests and both browser workflows passed. Independent review
 findings fixed and cleared; see CORRECTIONS_PROGRESS.md and
 MANAGEMENT_CORRECTIONS_ROLLOUT.md for exact evidence/rollback limitations.
 Current rank-only release 6a27b15 is live on main and Oregon. Correction release
-is pending CI, additive production migration and sequential deployments. Fresh
-backup/restore and exact original-table, score, rank and export parity passed.
+was then deployed successfully as ae84923578a4194143438fc5257b73a9a687443e
+to main and Oregon after CI 36400973117 passed. Schema is now
+0019_management_corrections. Fresh backup/restore and exact original-table,
+score, rank and export parity passed. Both health/assets passed; authenticated
+Oregon 51-row parity and preview/cancel passed. Main browser requires login;
+no production grades were edited. See MANAGEMENT_CORRECTIONS_ROLLOUT.md for
+deployment IDs, evidence and rollback limitations. Older scoring code is not
+a safe score-equivalent rollback after corrections are used.

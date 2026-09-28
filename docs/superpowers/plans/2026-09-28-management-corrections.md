@@ -10,6 +10,13 @@
 
 **Spec:** `docs/ai/GRADE_ADJUSTMENT_DESIGN_DRAFT.md`, approved for implementation by the user's 2026-09-28 request. Uniform-target example explicitly approved: 2/5 and 4/5 become effective 4/5 and 4/5 when the activity is set to 4/5.
 
+**Execution status:** completed natively with an independent final reviewer.
+The checklist below is the original plan; actual test evidence, justified file/
+sequence substitutions and rollout outcomes are recorded in
+`docs/ai/CORRECTIONS_PROGRESS.md` and `docs/ai/MANAGEMENT_CORRECTIONS_ROLLOUT.md`.
+Release ae84923 is live on main and Oregon, schema 0019. No unrelated
+infrastructure or independent-backup changes were made.
+
 ## Global constraints
 
 - Keep original submissions, version histories, measured Sport counts/times, and existing AdminEvaluation records unchanged.
