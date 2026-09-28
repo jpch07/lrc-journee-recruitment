@@ -19,6 +19,7 @@ from .routes_evaluator import router as evaluator_router
 from .routes_attendance import router as attendance_router
 from .routes_auth import router as auth_router
 from .routes_viewer import router as viewer_router
+from .routes_corrections import admin_router as admin_corrections_router, viewer_router as viewer_corrections_router
 from .routes_configurator import router as configurator_router
 from .routes_platform import router as platform_router
 from .rubric import validate_rubrics
@@ -152,6 +153,8 @@ app.include_router(evaluator_router)
 app.include_router(attendance_router)
 app.include_router(auth_router)
 app.include_router(viewer_router)
+app.include_router(admin_corrections_router)
+app.include_router(viewer_corrections_router)
 app.include_router(configurator_router)
 app.include_router(platform_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

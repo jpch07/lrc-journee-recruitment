@@ -31,3 +31,11 @@ closed with a visible conflict if a correction signature disagrees after
 out-of-band configuration changes. Cost: results require correction review,
 never silent reinterpretation of grades.
 Task 3: in progress.
+
+Task 3: complete — API tests RED at missing routes, GREEN 6/6: preview with
+no writes, apply, stale revision, restore/undo, color-neutral scoring,
+invalid bands, changed automatic inputs, CSRF, login/recruit scope and
+injected audit failure rollback. CAS updates and unique initial insertion
+protect concurrent correction saves. Added dedicated routes_corrections.py
+to share admin/viewer contracts without duplicating route logic.
+Task 4: in progress. Browser workflow test extended first; execution pending.

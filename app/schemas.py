@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+class ManagementCorrectionRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    revision: int = Field(ge=0)
+    configurationSignature: str
+    action: Literal['set', 'restore', 'undo']
+    level: Literal['criterion', 'activity', 'dimension', 'color']
+    key: str = Field(max_length=40)
+    activityKey: str | None = Field(default=None, max_length=40)
+    value: Decimal | None = Field(default=None, allow_inf_nan=False)
+    reason: str = Field(default='', max_length=2000)
+    eventId: str | None = None
+    inputFingerprint: str | None = None
 
 
 class AdminLoginRequest(BaseModel):
