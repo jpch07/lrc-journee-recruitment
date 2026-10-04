@@ -22,6 +22,7 @@ from .routes_viewer import router as viewer_router
 from .routes_corrections import admin_router as admin_corrections_router, viewer_router as viewer_corrections_router
 from .routes_configurator import router as configurator_router
 from .routes_platform import router as platform_router
+from .routes_sheet_backup import router as sheet_backup_router
 from .rubric import validate_rubrics
 from .assessment_service import ensure_assessment_system
 from .assessment_runtime import active_assessment_definition, activate_assessment_definition, reset_assessment_definition
@@ -157,6 +158,7 @@ app.include_router(admin_corrections_router)
 app.include_router(viewer_corrections_router)
 app.include_router(configurator_router)
 app.include_router(platform_router)
+app.include_router(sheet_backup_router)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

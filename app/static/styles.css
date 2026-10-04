@@ -33,6 +33,13 @@ h3 { font-size: 1rem; margin-bottom: .35rem; }
 a { color: var(--red); }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
+.sheet-backup { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 18px 32px; padding-block: 8px 24px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+.sheet-backup-copy { flex: 1 1 360px; min-width: 0; max-width: 72ch; }
+.sheet-backup h2 { font-size: 1.15rem; margin: 0 0 8px; }
+.sheet-backup p { margin: 6px 0; overflow-wrap: anywhere; }
+.sheet-backup-privacy { font-size: .875rem; }
+.sheet-backup-actions { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 10px; flex: 0 1 350px; }
+.sheet-backup-actions [hidden] { display: none; }
 .eyebrow { margin-bottom: .35rem; color: var(--red); text-transform: uppercase; letter-spacing: .12em; font-size: .72rem; font-weight: 800; }
 .subtle { color: var(--muted); font-size: .86rem; }
 .danger-text { color: var(--red); }

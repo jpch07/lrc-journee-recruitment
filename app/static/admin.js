@@ -1,5 +1,6 @@
 import { api, durationPickerHtml, escapeHtml as h, fmt, localDateTime, selectedAccount, statusLabel, toast, uid, wireAccountPicker, wireBoundedNumberInputs, wireDurationPickers, wireRecruitDirectoryPicker } from "/static/common.js?v=20260810.1";
 import { initializeSystemUI } from "/static/system-ui.js?v=20260908.1";
+import { mountSheetBackup } from '/static/sheet-backup.js?v=20261004.1';
 import { auditItem, mountWorkspaceAudit } from '/static/audit.js?v=20260928.5';
 import { bindCorrectionEditor, mountCorrections } from '/static/management-corrections.js?v=20260928.4';
 
@@ -226,6 +227,8 @@ async function loadLibrary() {
   $("#permissionsNav").classList.add("hidden");
   $("#libraryPermissionsButton").classList.toggle("hidden", !state.isOwner);
   $("#configureSystemButton").classList.toggle("hidden", !state.isOwner);
+  $("#sheetBackupHost").classList.toggle("hidden", !state.isOwner);
+  if (state.isOwner) mountSheetBackup($("#sheetBackupHost"), {api, mutation});
   $("#configureSystemButton").href = state.workspaceSlug ? `/${encodeURIComponent(state.workspaceSlug)}/configure` : "/configure";
   $("#workspaceBrandName").textContent = state.workspaceName || state.system?.name || "Assessment Workspace";
   renderLibrary();
