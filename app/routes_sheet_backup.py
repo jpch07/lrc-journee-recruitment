@@ -67,11 +67,15 @@ def start(request: Request, context: UserContext = Depends(require_owner), db: S
 def advance(job_id: str, request: Request, context: UserContext = Depends(require_owner), db: Session = Depends(get_db)):
     require_csrf(request, context.csrf_token)
     db.close()
+    job, was_interrupted = None, False
     try:
         job = find_job(job_id, context.system_id, context.account_id)
         was_complete = job.state == 'complete'
+        was_interrupted = job.state == 'interrupted'
         result = advance_job(job, _receiver(context))
     except BackupError as exc:
+        if job and job.state == 'interrupted' and not was_interrupted:
+            _audit(context, 'workspace.backup_interrupted', job.public())
         raise HTTPException(502, str(exc)) from None
     except Exception:
         raise HTTPException(502, 'Backup upload was interrupted. Retry; the previous complete backup remains available.') from None

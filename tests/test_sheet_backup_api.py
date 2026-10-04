@@ -2,7 +2,7 @@ import pytest
 from sqlalchemy import select
 
 from app.db import SessionLocal
-from app.models import AssessmentSystem, UserAccount
+from app.models import AssessmentSystem, UserAccount, AuditEvent
 from app import sheet_backup_jobs as jobs
 from test_viewer_performance_c1 import _login
 
@@ -84,6 +84,8 @@ def test_transient_upload_failure_retains_operation_for_retry(client, connected,
         return original(self, action, payload)
     monkeypatch.setattr(FakeReceiver, 'call', fail)
     assert client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).status_code == 502
+    with SessionLocal() as db:
+        assert db.scalar(select(AuditEvent).where(AuditEvent.action == 'workspace.backup_interrupted')) is not None
     monkeypatch.setattr(FakeReceiver, 'call', original)
     assert client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).json()['progress'] == 1
     assert client.post(f'/api/admin/sheet-backup/{job}/cancel', headers=connected).json()['state'] == 'cancelled'

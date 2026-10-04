@@ -46,3 +46,20 @@ def test_rejects_redirect_and_masks_upstream_body():
 def test_bad_receiver_url(url):
     with pytest.raises(BackupError):
         Receiver(url, 's' * 40)
+
+
+def test_temporary_google_failure_retries_with_backoff_and_fresh_nonce(monkeypatch):
+    seen, delays = [], []
+    monkeypatch.setattr('app.sheet_backup_transport.time.sleep', delays.append)
+    def handler(request):
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            return httpx.Response(429)
+        if len(seen) == 2:
+            return httpx.Response(200, json={'ok': False, 'code': 'GOOGLE'})
+        return httpx.Response(200, json={'ok': True, 'result': {'state': 'ready'}})
+    receiver = Receiver('https://script.google.com/macros/s/example/exec', 's' * 40,
+                        transport=httpx.MockTransport(handler))
+    assert receiver.call('status', {})['state'] == 'ready'
+    assert delays == [1, 2]
+    assert len({item['nonce'] for item in seen}) == 3

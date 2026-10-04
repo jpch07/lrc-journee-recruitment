@@ -51,6 +51,7 @@ def test_backup_ui_states_and_responsive_layout(tmp_path):
             page.get_by_role('button', name='Retry upload').wait_for()
             page.get_by_role('button', name='Retry upload').click()
             page.get_by_text('Backup complete.', exact=True).wait_for()
+            assert page.get_by_text('No completed backup verified yet.', exact=True).count() == 0
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             screenshot = ROOT / '.impeccable/review' / f'sheet-backup-{name}.png'
             screenshot.parent.mkdir(parents=True,exist_ok=True)

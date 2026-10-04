@@ -2,13 +2,16 @@ from datetime import date
 from hashlib import sha256
 from io import BytesIO
 import json
+from pathlib import Path
+import subprocess
 
 import pytest
 from PIL import Image
 from sqlalchemy import select, text
 
 from app.db import SessionLocal, engine
-from app.models import AssessmentSystem, AuditEvent, GeneralAssessment, Recruit
+from app.models import (AssessmentSystem, AuditEvent, GeneralAssessment, Recruit,
+                        Journey, RoomPlan, RoomPlanRecruit, PlatformAccount, UserAccount)
 from app.services import create_journey
 from app.sheet_backup_export import build_export, encode_operations, reconstruct_records, BackupError, redact
 from test_viewer_performance_c1 import _login
@@ -32,6 +35,20 @@ def seed(client):
             action='account.updated', entity_type='account', after_json=json.dumps({'managedPassword': 'DO-NOT-EXPORT', 'name': 'Visible'})))
         other = AssessmentSystem(name='Unrelated PRIVATE', slug='unrelated', draft_json='{}')
         db.add(other)
+        db.flush()
+        other_day = Journey(system_id=other.id, name='PRIVATE day', event_date=date(2026, 9, 2), public_token='private-test-link')
+        db.add(other_day)
+        db.flush()
+        other_person = Recruit(journey_id=other_day.id, name='PRIVATE recruit')
+        other_plan = RoomPlan(journey_id=other_day.id, version=1, seed='PRIVATE seed', created_by='Other')
+        unrelated_account = PlatformAccount(username='PRIVATE account', password_hash='private-test-hash')
+        linked_account = PlatformAccount(username='Linked account', password_hash='linked-test-hash')
+        db.add_all([other_person, other_plan, unrelated_account, linked_account])
+        db.flush()
+        db.add_all([RoomPlanRecruit(plan_id=other_plan.id, recruit_id=other_person.id, room_number=1),
+                    GeneralAssessment(recruit_id=other_person.id, notes='PRIVATE assessment')])
+        account = db.scalar(select(UserAccount).where(UserAccount.system_id == system.id))
+        account.platform_account_id = linked_account.id
         db.commit()
         return system.id, recruit.id, photo
 
@@ -45,6 +62,9 @@ def test_complete_scoped_roundtrip(client):
     assert records['general_assessments'][0]['notes'].endswith('ع😀' * 20000)
     packed = json.dumps(export, ensure_ascii=False)
     assert 'Unrelated PRIVATE' not in packed
+    assert 'PRIVATE' not in packed
+    assert {r['username'] for r in records['platform_accounts']} == {'JP Chaaya', 'Linked account'}
+    assert records['room_plan_recruits'] == []
     assert 'DO-NOT-EXPORT' not in packed
     assert 'test-password' not in packed
     assert 'password_hash' not in records['user_accounts'][0]
@@ -57,6 +77,29 @@ def test_complete_scoped_roundtrip(client):
     operations = list(encode_operations(export))
     assert operations[-1]['kind'] == 'publish'
     assert all(len(json.dumps(op).encode()) < 1_500_000 for op in operations)
+
+
+def test_real_export_protocol_runs_through_google_simulator(client):
+    sid, _, _ = seed(client)
+    operations = list(encode_operations(build_export(engine, sid)))
+    script = r'''
+      const fs=require('node:fs'),assert=require('node:assert/strict');
+      const {fakeGoogle}=require('./tests/sheet_backup_receiver.test.cjs');
+      const receiver=require('./integrations/google-sheet-backup/Code.js');
+      const env=fakeGoogle(),runId='b'.repeat(32);
+      const operations=JSON.parse(fs.readFileSync(0,'utf8'));
+      receiver.dispatch({action:'begin',runId},env.props,1000);
+      let result;
+      operations.forEach((operation,sequence)=>{
+        result=receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000);
+      });
+      assert.equal(result.state,'complete');
+      assert.equal(env.ss.getSheetByName('Backup - Photos').images.length,1);
+      assert.ok(env.ss.getSheetByName('My own notes'));
+    '''
+    result = subprocess.run(['node', '-e', script], input=json.dumps(operations, ensure_ascii=False),
+        text=True, encoding='utf-8', capture_output=True, timeout=30, cwd=Path(__file__).parents[1])
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_unknown_schema_stops_export(client):
@@ -97,9 +140,83 @@ def test_nested_redaction_preserves_grades():
     assert 'password@' not in json.dumps(value)
 
 
+def test_export_cells_fit_google_limit_even_for_long_result_notes(client):
+    sid, _, _ = seed(client)
+    export = build_export(engine, sid)
+    for op in encode_operations(export):
+        if op['kind'] == 'rows':
+            assert all(len(cell.encode('utf-16-le')) // 2 < 49000 for row in op['rows'] for cell in row), op['tab']
+
+
+def test_credential_urls_and_nested_json_strings_are_redacted():
+    value = redact({'note': '{"managedPassword":"nested-secret","name":"Visible"}',
+                    'source': 'https://user:basic-secret@example.test/sheet',
+                    'public': 'https://evalday.example/j/session-secret',
+                    'relative': '/lrc/attendance/relative-secret',
+                    'encoded': 'https://example.test/photo?%74oken=encoded-secret',
+                    'signed': 'https://storage.example/photo?X-Goog-Signature=signature-secret'})
+    text = json.dumps(value)
+    for secret in ('nested-secret','basic-secret','session-secret','signature-secret','relative-secret','encoded-secret'):
+        assert secret not in text
+    assert 'Visible' in text
+
+
 def test_corrupt_technical_chunk_rejected(client):
     sid, _, _ = seed(client)
     export = build_export(engine, sid)
     export['technical_rows'][0][-1] += 'x'
     with pytest.raises(BackupError, match='checksum'):
         reconstruct_records(export['technical_rows'])
+
+
+def test_readable_audit_is_redacted_too(client):
+    sid, _, _ = seed(client)
+    with SessionLocal() as db:
+        event = db.scalar(select(AuditEvent).where(AuditEvent.action == 'account.updated'))
+        event.reason = 'Reference: https://example.test/evaluate/AUDIT-SECRET'
+        event.after_json = json.dumps({'comment':'https://example.test/evaluate/COMMENT-SECRET'})
+        db.commit()
+    export = build_export(engine, sid)
+    assert 'AUDIT-SECRET' not in json.dumps(export)
+    assert 'COMMENT-SECRET' not in json.dumps(export)
+
+
+def test_export_preserves_original_evaluations_history_and_effective_corrections(client):
+    from decimal import Decimal
+    from app.models import (Evaluator, AssignmentRound, Assignment, EvaluationSubmission, SubmissionVersion)
+    from test_management_correction_api import setup, operation
+    from scripts.database_transfer import decode
+    url, headers = setup(client)
+    with SessionLocal() as db:
+        day = db.scalar(select(Journey))
+        recruit = db.scalar(select(Recruit))
+        assessor = Evaluator(journey_id=day.id, name='Original evaluator')
+        round_ = AssignmentRound(journey_id=day.id, activity_code='sport', version=1, seed='test', created_by='Test')
+        db.add_all([assessor, round_])
+        db.flush()
+        task = Assignment(round_id=round_.id, evaluator_id=assessor.id, recruit_id=recruit.id)
+        db.add(task)
+        db.flush()
+        submission = EvaluationSubmission(assignment_id=task.id, journey_id=day.id, activity_code='sport',
+            evaluator_id=assessor.id, recruit_id=recruit.id, status='submitted', score=Decimal(3),
+            comments='Original evaluation', raw_payload_json='{"original":42}')
+        db.add(submission)
+        db.flush()
+        db.add(SubmissionVersion(submission_id=submission.id, version=1, payload_json='{"historical":true}',
+                                 score=Decimal(3), actor_type='evaluator', actor_name=assessor.name))
+        db.commit()
+        sid = day.system_id
+    request = operation(client, url)
+    request['inputFingerprint'] = client.post(url + '/preview', headers=headers, json=request).json()['inputFingerprint']
+    assert client.put(url, headers=headers, json=request).status_code == 200
+    export = build_export(engine, sid)
+    records = reconstruct_records(export['technical_rows'])
+    assert records == export['records']
+    assert decode(records['evaluation_submissions'][0]['score']) == Decimal(3)
+    assert records['evaluation_submissions'][0]['raw_payload_json'] == '{"original":42}'
+    assert records['submission_versions'][0]['payload_json'] == '{"historical":true}'
+    assert len(records['management_corrections']) == 1
+    assert any(row['action'] == 'management.correction' for row in records['audit_events'])
+    sport = records['_results'][0]['rows'][0]['activities']['sport']
+    assert sport['score'] == 4 and sport['automaticScore'] == 2
+    assert all(decode(row['score']) == Decimal(2) for row in records['admin_evaluations'])

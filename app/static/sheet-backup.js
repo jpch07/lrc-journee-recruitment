@@ -83,8 +83,13 @@ export function mountSheetBackup(host, {api, mutation}) {
       }
       status.textContent = job.message;
       if (job.state === 'complete') {
-        const info = await api('/api/admin/sheet-backup');
-        if (info.lastComplete?.snapshotAt) last.textContent = `Last complete snapshot: ${new Date(info.lastComplete.snapshotAt).toLocaleString()}`;
+        last.textContent = '';
+        try {
+          const info = await api('/api/admin/sheet-backup');
+          if (info.lastComplete?.snapshotAt) last.textContent = `Last complete snapshot: ${new Date(info.lastComplete.snapshotAt).toLocaleString()}`;
+        } catch (_) {
+          last.textContent = 'Backup completed. Open the spreadsheet to check its snapshot time.';
+        }
       }
     } catch (err) {
       error(`${err.message} ${job ? 'Use Retry upload, or cancel this run and start again.' : 'Check the connection before trying again.'}`);

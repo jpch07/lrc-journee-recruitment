@@ -88,7 +88,7 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert 'id="photoViewer"' in admin
     assert 'id="photoViewer"' in evaluator
     assert "viewport-fit=cover" in evaluator
-    assert "admin.js?v=20260928.5" in admin
+    assert "admin.js?v=20261004.1" in admin
     assert "evaluator.js?v=20260908.1" in evaluator
     assert "eval-task-switcher" in evaluator_js
     assert "openPairDialog" in admin_js

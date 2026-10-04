@@ -140,7 +140,19 @@ function applyOperation(op, state, ss) {
   if (!op || typeof op.kind !== 'string') fail('SEQUENCE');
   if (op.kind === 'prepare') {
     if (state.tabs.length) fail('SEQUENCE');
-    validateTabs(op.tabs, ss.getSheets().reduce((n,s) => n+s.getMaxRows()*s.getMaxColumns(),0));
+    // A Google batch may have committed before state persistence failed. Reuse
+    // only our exact deterministic staging allocation, rather than counting it twice.
+    validateTabs(op.tabs, 0);
+    const base = parseInt(state.runId.slice(0,7),16)*4;
+    const reused = new Set();
+    op.tabs.forEach((t,index) => {
+      const sheet = ss.getSheetById(base+index);
+      if (!sheet) return;
+      if (!meta(sheet,OWNED_KEY) || meta(sheet,OWNED_KEY).getValue() !== state.runId ||
+          sheet.getName() !== stageTitle(state,t.name) || sheet.getMaxRows() !== t.rows || sheet.getMaxColumns() !== t.cols) fail('COLLISION');
+      reused.add(base+index);
+    });
+    validateTabs(op.tabs, ss.getSheets().reduce((n,s) => n+(reused.has(s.getSheetId()) ? 0 : s.getMaxRows()*s.getMaxColumns()),0));
     const current = published(ss);
     op.tabs.forEach(t => {
       const collision = ss.getSheetByName(`Backup - ${t.name}`);
@@ -148,7 +160,6 @@ function applyOperation(op, state, ss) {
     });
     const existingIds = new Set(ss.getSheets().map(s=>s.getSheetId()));
     // Deterministic IDs make a retried prepare safe after a lost response.
-    const base = parseInt(state.runId.slice(0,7),16)*4;
     const requests = [];
     state.tabs = op.tabs.map((t,index) => {
       const id = base+index;
@@ -157,17 +168,23 @@ function applyOperation(op, state, ss) {
         if (!meta(sheet,OWNED_KEY) || meta(sheet,OWNED_KEY).getValue() !== state.runId) fail('COLLISION');
       } else {
         requests.push({addSheet:{properties:{sheetId:id,title:stageTitle(state,t.name),hidden:true,
-          gridProperties:{rowCount:t.rows,columnCount:t.cols,frozenRowCount:1}}}});
+          gridProperties:{rowCount:t.rows,columnCount:t.cols,frozenRowCount:t.rows>1 ? 1 : 0}}}});
         requests.push({createDeveloperMetadata:{developerMetadata:{metadataKey:OWNED_KEY,metadataValue:state.runId,
           location:{sheetId:id},visibility:'DOCUMENT'}}});
-        requests.push({addProtectedRange:{protectedRange:{range:{sheetId:id},description:'Incomplete backup; only the script owner may edit.',warningOnly:false}}});
+        requests.push({addProtectedRange:{protectedRange:{range:{sheetId:id},description:'Backup data managed by the private backup script.',warningOnly:false,
+          editors:{users:[],groups:[],domainUsersCanEdit:false}}}});
       }
-      return {name:t.name,rows:t.rows,cols:t.cols,hidden:!!t.hidden,id,written:0};
+      return {name:t.name,rows:t.rows,cols:t.cols,hidden:!!t.hidden,id,written:0,verified:0};
     });
     state.snapshotAt = op.manifest.snapshotAt;
     state.workspaceName = op.manifest.workspaceName;
     state.photoCount = op.manifest.photoCount;
     state.recordsSha256 = op.manifest.recordsSha256;
+    state.expectedRecordChain = op.manifest.recordChain;
+    state.expectedRecords = op.manifest.recordCount;
+    state.recordChain = '';
+    state.verifiedRecords = 0;
+    state.verifiedRecordRows = 0;
     if (requests.length) Sheets.Spreadsheets.batchUpdate({requests}, BACKUP_SHEET);
     return;
   }
@@ -180,6 +197,38 @@ function applyOperation(op, state, ss) {
     Sheets.Spreadsheets.Values.update({values:op.rows}, BACKUP_SHEET, `'${sheet.getName()}'!A${op.start}`, {valueInputOption:'RAW'});
     verifyRows(op.rows,sheet.getRange(op.start,1,op.rows.length,t.cols).getValues());
     t.written += op.rows.length;
+    return;
+  }
+  if (op.kind === 'verifyCells') {
+    const t = state.tabs.find(t=>t.name===op.tab);
+    if (!t || t.written!==t.rows || op.start!==t.verified+1 || !Number.isInteger(op.count) ||
+        op.count<1 || op.start+op.count-1>t.rows) fail('SEQUENCE');
+    const rows = stage(ss,state,op.tab).getRange(op.start,1,op.count,t.cols).getValues().map(r=>r.map(String));
+    if (hash(JSON.stringify(rows))!==op.sha256) fail('VERIFY');
+    t.verified += op.count;
+    return;
+  }
+  if (op.kind === 'verifyRecords') {
+    const t = state.tabs.find(t=>t.name==='_Records');
+    if (!t || t.verified!==t.rows || op.start!==state.verifiedRecordRows+2 ||
+        !Array.isArray(op.records) || !op.records.length || op.records.length>40) fail('SEQUENCE');
+    let cursor = op.start;
+    const sheet = stage(ss,state,'_Records');
+    op.records.forEach(item => {
+      const [table,index,count,digest] = item;
+      const n = Number(count);
+      if (!Number.isInteger(n) || n<1 || cursor+n-1>t.rows) fail('VERIFY');
+      const rows = sheet.getRange(cursor,1,n,6).getValues();
+      if (rows.some((r,i)=>r[0]!==table || String(r[1])!==index || String(r[2])!==String(i) ||
+          String(r[3])!==count || r[4]!==digest)) fail('VERIFY');
+      const content = rows.map(r=>r[5]).join('');
+      if (hash(content)!==digest) fail('VERIFY');
+      try { JSON.parse(content); } catch (_) { fail('VERIFY'); }
+      state.recordChain = hash(state.recordChain+hash(JSON.stringify(item)));
+      state.verifiedRecords++;
+      state.verifiedRecordRows += n;
+      cursor += n;
+    });
     return;
   }
   if (op.kind === 'image') {
@@ -203,9 +252,16 @@ function applyOperation(op, state, ss) {
     return;
   }
   if (op.kind !== 'publish') fail('SEQUENCE');
-  if (state.tabs.some(t=>t.written!==t.rows) || state.images!==state.photoCount || state.verifiedPhotos!==state.photoCount) fail('INCOMPLETE');
+  const records = state.tabs.find(t=>t.name==='_Records');
+  if (state.tabs.some(t=>t.written!==t.rows || t.verified!==t.rows) || state.images!==state.photoCount || state.verifiedPhotos!==state.photoCount ||
+      !records || state.verifiedRecordRows!==records.rows-1 || state.verifiedRecords!==state.expectedRecords ||
+      state.recordChain!==state.expectedRecordChain) fail('INCOMPLETE');
   const current = published(ss);
   const requests = [];
+  // Keep a visible sheet throughout even when the user removed the original Sheet1.
+  const visible = state.tabs.find(t=>!t.hidden);
+  if (!visible) fail('TABS');
+  requests.push({updateSheetProperties:{properties:{sheetId:visible.id,hidden:false},fields:'hidden'}});
   // Deleting the old owned version and exposing the new one are ONE atomic batch.
   ss.getSheets().forEach(sheet => {
     const tag = meta(sheet,OWNED_KEY);

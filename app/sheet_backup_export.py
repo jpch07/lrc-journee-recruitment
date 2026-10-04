@@ -13,6 +13,8 @@ from io import BytesIO
 import json
 from pathlib import Path
 import re
+from urllib.parse import unquote, urlsplit, parse_qsl
+from types import SimpleNamespace
 
 from PIL import Image, ImageOps
 from sqlalchemy import select
@@ -37,9 +39,22 @@ EXCLUDED = {
     'recruit_attendance_sessions', 'recruit_attendance_access', 'idempotency_records',
 }
 SECRET = re.compile(r'password|secret|token|credential|authorization|apikey|accesskey', re.I)
-URL_SECRET = re.compile(
-    r'(?:postgres(?:ql)?|cockroachdb)://\S+|https?://[^\s"<>]*'
-    r'(?:[?&](?:key|token|secret|password|signature|x-amz-[^=]*)=|/(?:e|evaluate|attendance|recruit-attendance)/)[^\s"<>]*', re.I)
+URL = re.compile(r'(?:[a-z][a-z0-9+.-]*://|/)[^\s"<>]+', re.I)
+
+
+def redact_url(match):
+    original = match.group(0)
+    decoded = unquote(original)
+    try:
+        parsed = urlsplit(decoded)
+        sensitive = (parsed.scheme.lower() in ('postgres', 'postgresql', 'cockroachdb')
+            or parsed.username is not None or parsed.password is not None
+            or re.search(r'/(?:j|e|evaluate|attendance|recruit-attendance)/[^/]+', parsed.path, re.I)
+            or any(SECRET.search(re.sub(r'[^a-z]', '', key.lower())) or key.lower() in ('key', 'signature')
+                   or key.lower().startswith(('x-amz-', 'x-goog-')) for key, _ in parse_qsl(parsed.query)))
+    except ValueError:
+        sensitive = True
+    return '[credential-bearing URL excluded]' if sensitive else original
 TITLES = {
     'assessment_systems': 'Workspace', 'assessment_system_versions': 'Configuration history',
     'journeys': 'Journees', 'activity_states': 'Activity status', 'rubric_snapshots': 'Rubric history',
@@ -68,7 +83,15 @@ def redact(value):
     if isinstance(value, list):
         return [redact(item) for item in value]
     if isinstance(value, str):
-        return URL_SECRET.sub('[credential-bearing URL excluded]', value)
+        # Audit payloads sometimes contain another serialized object as a string.
+        if value.lstrip().startswith(('{', '[')):
+            try:
+                nested = json.loads(value)
+                if isinstance(nested, (dict, list)):
+                    return json_text(redact(nested))
+            except (ValueError, RecursionError):
+                pass
+        return URL.sub(redact_url, value)
     return value
 
 
@@ -145,6 +168,7 @@ def build_export(engine, system_id):
     definition_token = None
     try:
         with read_snapshot(engine) as connection:
+            captured_at = datetime.now(timezone.utc).isoformat()
             # sqlite3's legacy transaction mode does not BEGIN for SELECT.
             if connection.dialect.name == 'sqlite':
                 connection.exec_driver_sql('BEGIN')
@@ -162,13 +186,21 @@ def build_export(engine, system_id):
                 completed = _aggregate_results([(j, s) for j, s in snapshots if j.status == 'completed'])
                 results = [{**s, 'journeyId': j.id, 'journeyName': j.name} for j, s in snapshots]
                 events = list(db.scalars(select(models.AuditEvent).where(models.AuditEvent.system_id == system_id).order_by(models.AuditEvent.created_at)))
-                readable_audit = present_events(db, events)
+                safe_events = []
+                for event in events:
+                    fields = {c.name: getattr(event, c.name) for c in models.AuditEvent.__table__.columns}
+                    for key in ('before_json', 'after_json'):
+                        fields[key] = json_text(redact(json.loads(fields[key] or '{}')))
+                    safe_events.append(SimpleNamespace(**fields))
+                readable_audit = redact(present_events(db, safe_events))
         records = {name: [clean_record(row) for row in rows] for name, rows in raw.items()}
         # Technical computed results preserve the actual application output too.
         records['_results'] = redact(results)
         records['_completed_results'] = [redact(completed)]
         photos = []
         total_bytes = len(json_text(records).encode('utf-8'))
+        if total_bytes > MAX_EXPORT_BYTES:
+            raise BackupError('Workspace exceeds the safe export size; nothing was truncated.')
         for recruit in raw['recruits']:
             data = recruit['photo_data']
             if recruit['photo_object_key']:
@@ -207,7 +239,7 @@ def build_export(engine, system_id):
                 for part, chunk in enumerate(parts):
                     technical.append([table, str(index), str(part), str(len(parts)), digest, chunk])
         manifest = {'format': 'evalday-sheet-v1', 'schemaRevision': '0019_management_corrections',
-            'workspaceId': system_id, 'workspaceName': system['name'], 'snapshotAt': datetime.now(timezone.utc).isoformat(),
+            'workspaceId': system_id, 'workspaceName': system['name'], 'snapshotAt': captured_at,
             'counts': {name: len(rows) for name, rows in records.items()}, 'photoCount': len(photos),
             'recordsSha256': sha256(json_text(records).encode('utf-8')).hexdigest(),
             'excludedTables': sorted(EXCLUDED), 'excludedFields': ['passwords and hashes', 'authentication tokens and credential-bearing URLs'],
@@ -291,7 +323,9 @@ def readable_tabs(records, readable_audit, photos, manifest):
                 _value(ranked.get('overallRank')), _value(row.get('journeyRank', row.get('overallRank'))),
                 _value(row.get('colorGrade', row.get('color'))), row['recruitId']])
             for field, scalar in _leaves(row):
-                details.append(['Calculated results', snapshot['journeyName'], row['name'], '', row['recruitId'], field, '1', scalar])
+                for offset in range(0, max(1, len(scalar)), CHUNK_SIZE):
+                    details.append(['Calculated results', snapshot['journeyName'], row['name'], '', row['recruitId'],
+                                    field, str(offset // CHUNK_SIZE + 1), scalar[offset:offset + CHUNK_SIZE]])
     tabs.append({'name': 'Results', 'rows': result_rows})
     audit_rows = [['Time (UTC)', 'Journee', 'Person', 'Account', 'Action', 'Field', 'Before', 'After', 'Reason', 'Event ID']]
     for event in readable_audit:
@@ -325,6 +359,9 @@ def reconstruct_records(rows):
 
 
 def encode_operations(export):
+    # Verify local reconstruction before constructing the upload protocol.
+    if reconstruct_records(export['technical_rows']) != export['records']:
+        raise BackupError('Technical reconstruction differs from the source snapshot.')
     tabs = list(export['tabs']) + [{'name': '_Records', 'hidden': True,
         'rows': [['Table', 'Record', 'Part', 'Parts', 'SHA-256', 'JSON chunk']] + export['technical_rows']}]
     photo_rows = [['Recruit ID', 'Part', 'Parts', 'SHA-256', 'Content type', 'Base64 chunk']]
@@ -333,7 +370,16 @@ def encode_operations(export):
         photo_rows.extend([[photo['recruitId'], str(i), str(len(parts)), photo['sha256'], photo['contentType'], part] for i, part in enumerate(parts)])
     tabs.append({'name': '_Photo bytes', 'hidden': True, 'rows': photo_rows})
     descriptors = [{'name': t['name'], 'rows': len(t['rows']), 'cols': len(t['rows'][0]), 'hidden': t.get('hidden', False)} for t in tabs]
-    yield {'kind': 'prepare', 'tabs': descriptors, 'manifest': export['manifest']}
+    record_checks, chain, cursor = [], '', 0
+    while cursor < len(export['technical_rows']):
+        table, index, _, count, digest, _ = export['technical_rows'][cursor]
+        item = [table, index, count, digest]
+        chain = sha256((chain + sha256(json_text(item).encode('utf-8')).hexdigest()).encode('ascii')).hexdigest()
+        record_checks.append(item)
+        cursor += int(count)
+    yield {'kind': 'prepare', 'tabs': descriptors, 'manifest': {**export['manifest'],
+           'recordChain': chain, 'recordCount': len(record_checks)}}
+    verifications = []
     for tab in tabs:
         start, batch, size = 1, [], 0
         for row in tab['rows']:
@@ -341,15 +387,33 @@ def encode_operations(export):
             n = len(json_text(row).encode('utf-8'))
             if batch and (size + n > 180_000 or len(batch) >= 150):
                 yield {'kind': 'rows', 'tab': tab['name'], 'start': start, 'rows': batch}
+                verifications.append({'kind': 'verifyCells', 'tab': tab['name'], 'start': start,
+                    'count': len(batch), 'sha256': sha256(json_text(batch).encode('utf-8')).hexdigest()})
                 start += len(batch)
                 batch, size = [], 0
             batch.append(row)
             size += n
         if batch:
             yield {'kind': 'rows', 'tab': tab['name'], 'start': start, 'rows': batch}
+            verifications.append({'kind': 'verifyCells', 'tab': tab['name'], 'start': start,
+                'count': len(batch), 'sha256': sha256(json_text(batch).encode('utf-8')).hexdigest()})
     for index, photo in enumerate(export['photos']):
         yield {'kind': 'image', 'row': index + 2, 'data': photo['preview'], 'sha256': sha256(base64.b64decode(photo['preview'])).hexdigest()}
     # Reconstruct and hash original binary, independently of display previews.
     for photo in export['photos']:
         yield {'kind': 'verifyPhoto', 'recruitId': photo['recruitId'], 'sha256': photo['sha256']}
+    # Second read after all uploads: do not trust write-time acknowledgements.
+    yield from verifications
+    start = 2
+    batch, size = [], 0
+    for item in record_checks:
+        count = int(item[2])
+        if batch and (len(batch) >= 40 or size + count > 150):
+            yield {'kind': 'verifyRecords', 'start': start, 'records': batch}
+            start += size
+            batch, size = [], 0
+        batch.append(item)
+        size += count
+    if batch:
+        yield {'kind': 'verifyRecords', 'start': start, 'records': batch}
     yield {'kind': 'publish'}

@@ -31,6 +31,10 @@ ERRORS = {
 }
 
 
+class TemporaryGoogleError(BackupError):
+    """Retryable transport/provider failure; message is safe for the UI."""
+
+
 class Receiver:
     def __init__(self, url, secret, *, workspace_id='', transport=None):
         if not re.fullmatch(r'https://script\.google\.com/macros/s/[A-Za-z0-9_-]+/exec', url or '') or len(secret or '') < 32:
@@ -38,6 +42,16 @@ class Receiver:
         self.url, self.secret, self.workspace_id, self.transport = url, secret, workspace_id, transport
 
     def call(self, action, payload):
+        for attempt in range(3):
+            try:
+                return self._call_once(action, payload)
+            except TemporaryGoogleError:
+                if attempt == 2:
+                    raise
+                time.sleep(2 ** attempt)
+
+    def _call_once(self, action, payload):
+        # A retry keeps the operation sequence but must use a new signed nonce.
         body = base64.b64encode(json_text({'action': action, 'spreadsheetId': SPREADSHEET_ID,
             'workspaceId': self.workspace_id, **payload}).encode()).decode('ascii')
         timestamp, nonce = int(time.time()), secrets.token_hex(16)
@@ -45,7 +59,7 @@ class Receiver:
         envelope = {'timestamp': timestamp, 'nonce': nonce, 'payload': body,
             'signature': hmac.new(self.secret.encode(), signed.encode(), hashlib.sha256).hexdigest()}
         try:
-            with httpx.Client(timeout=45, follow_redirects=False, transport=self.transport) as client:
+            with httpx.Client(timeout=25, follow_redirects=False, transport=self.transport) as client:
                 response = client.post(self.url, json=envelope)
                 if response.status_code in (301, 302, 303):
                     location = response.headers.get('location', '')
@@ -53,12 +67,18 @@ class Receiver:
                     if target.scheme != 'https' or target.hostname != 'script.googleusercontent.com' or target.port not in (None, 443) or target.username:
                         raise BackupError('Google returned an unexpected redirect; no backup credentials were forwarded.')
                     response = client.get(location)  # ContentService redirect: GET, never resend the signed body.
+                if response.status_code in (429, 500, 502, 503, 504):
+                    raise TemporaryGoogleError(ERRORS['GOOGLE'])
                 if response.status_code != 200 or len(response.content) > 100_000:
                     raise BackupError(ERRORS['GOOGLE'])
                 result = response.json()
-        except (httpx.HTTPError, ValueError):
+        except httpx.HTTPError:
+            raise TemporaryGoogleError('Google backup could not be reached. Retry the operation; no partial backup is published.') from None
+        except ValueError:
             raise BackupError('Google backup could not be reached. Retry the operation; no partial backup is published.') from None
         if not isinstance(result, dict) or not result.get('ok'):
+            if isinstance(result, dict) and result.get('code') == 'GOOGLE':
+                raise TemporaryGoogleError(ERRORS['GOOGLE'])
             raise BackupError(ERRORS.get(result.get('code') if isinstance(result, dict) else None, ERRORS['GOOGLE']))
         if not isinstance(result.get('result'), dict):
             raise BackupError(ERRORS['GOOGLE'])

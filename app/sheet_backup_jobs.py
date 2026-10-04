@@ -137,6 +137,7 @@ def advance_job(job, receiver):
         job.message = {
             'prepare': 'Preparing spreadsheet tabs…', 'rows': f"Backing up {op.get('tab', 'records')}…",
             'image': 'Embedding photo previews…', 'verifyPhoto': 'Verifying original photo bytes…',
+            'verifyCells': 'Checking the stored spreadsheet data…', 'verifyRecords': 'Verifying complete record reconstruction…',
             'publish': 'Backup complete. Google read-back verification passed.',
         }.get(op['kind'], 'Backing up…')
         if job.state == 'complete':
