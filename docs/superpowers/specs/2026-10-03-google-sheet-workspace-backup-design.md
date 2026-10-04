@@ -4,7 +4,7 @@
 
 The workspace owner presses **Back up workspace to Google Sheets** in the Journee library. The application exports the entire selected workspace, including every retained Journee, to the existing spreadsheet:
 
-https://docs.google.com/spreadsheets/d/1_3ZdE8kEZBJMKXmQH05m6PqX9hUitI8uAc213BXHeog/edit
+https://docs.google.com/spreadsheets/d/11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0/edit
 
 There is no schedule, Drive folder, separate photo file, or synchronization back into the application. The spreadsheet holds the latest complete backup. Editing its cells does not change website data. The initial destination is for the LRC recruitment 2026 workspace; scoring and export logic remain workspace-configurable.
 
@@ -63,4 +63,4 @@ Live completion requires the one-time Google authorization plus a successful man
 
 ## Review status
 
-Conversational scope approved on 3 October 2026. This written specification is ready for user review before the implementation plan. Self-review checked scope, security exclusions, data completeness, photo independence and failure semantics; no product code or external Google resources have been changed at this stage.
+Specification approved; on 4 October 2026 the user supplied the replacement spreadsheet above, accepted owner-account authorization, and explicitly requested implementation without further questions. Preserve that instruction during execution.
