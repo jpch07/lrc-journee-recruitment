@@ -24,6 +24,7 @@ from . import models, object_storage
 from .assessment_config import load_stored_definition
 from .assessment_runtime import activate_assessment_definition, reset_assessment_definition
 from .audit_presentation import present_events
+from .management_report_payload import build_management_report_payload, load_management_report_source
 from .tenant import select_system, reset_system
 from scripts.database_transfer import encode, read_snapshot, assert_schema, TransferError
 
@@ -179,12 +180,10 @@ def build_export(engine, system_id):
                 version = next((v for v in raw['assessment_system_versions'] if v['version'] == system['published_version']), None)
                 definition_token = activate_assessment_definition(load_stored_definition(
                     json.loads(version['definition_json'] if version else system['draft_json'])))
-                from .services import result_snapshot
-                from .routes_viewer import _aggregate_results
-                journeys = list(db.scalars(select(models.Journey).where(models.Journey.system_id == system_id)))
-                snapshots = [(j, result_snapshot(db, j, include_criteria=True)) for j in journeys]
-                completed = _aggregate_results([(j, s) for j, s in snapshots if j.status == 'completed'])
-                results = [{**s, 'journeyId': j.id, 'journeyName': j.name} for j, s in snapshots]
+                management_source = load_management_report_source(db, include_criteria=True)
+                presentation_payload = redact(build_management_report_payload(management_source))
+                results = redact(list(management_source.result_snapshots))
+                completed = redact(management_source.combined_results)
                 events = list(db.scalars(select(models.AuditEvent).where(models.AuditEvent.system_id == system_id).order_by(models.AuditEvent.created_at)))
                 safe_events = []
                 for event in events:
@@ -195,8 +194,8 @@ def build_export(engine, system_id):
                 readable_audit = redact(present_events(db, safe_events))
         records = {name: [clean_record(row) for row in rows] for name, rows in raw.items()}
         # Technical computed results preserve the actual application output too.
-        records['_results'] = redact(results)
-        records['_completed_results'] = [redact(completed)]
+        records['_results'] = results
+        records['_completed_results'] = [completed]
         photos = []
         total_bytes = len(json_text(records).encode('utf-8'))
         if total_bytes > MAX_EXPORT_BYTES:
@@ -244,7 +243,8 @@ def build_export(engine, system_id):
             'recordsSha256': sha256(json_text(records).encode('utf-8')).hexdigest(),
             'excludedTables': sorted(EXCLUDED), 'excludedFields': ['passwords and hashes', 'authentication tokens and credential-bearing URLs'],
             'restoration': 'Account identities and permissions included. Set new passwords and access links after restoration.'}
-        export = {'manifest': manifest, 'records': records, 'technical_rows': technical, 'photos': photos}
+        export = {'manifest': manifest, 'records': records, 'technical_rows': technical, 'photos': photos,
+                  'presentation_payload': presentation_payload}
         export['tabs'] = readable_tabs(records, readable_audit, photos, manifest)
         if len(json_text(export).encode('utf-8')) > MAX_EXPORT_BYTES:
             raise BackupError('Workspace exceeds the safe export size; previous backup is unchanged.')
