@@ -387,7 +387,10 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
         seen_keys.add(profile_key)
         photo = photo_by_key.get(profile_key)
         raw = _preview_png(photo["preview"]) if photo else placeholder
-        encoded = base64.b64encode(raw).decode("ascii")
+        # URL-safe base64 cannot contain ``/`` and therefore cannot be
+        # mistaken for a credential-bearing route by the presentation's
+        # user-text redactor when the helper grid is made literal.
+        encoded = base64.urlsafe_b64encode(raw).decode("ascii")
         parts = [encoded[index:index + CHUNK_SIZE] for index in range(0, len(encoded), CHUNK_SIZE)]
         digest = sha256(raw).hexdigest()
         preview_rows.extend([

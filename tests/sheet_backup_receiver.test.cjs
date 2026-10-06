@@ -89,6 +89,34 @@ test('row writes verify through Sheets when SpreadsheetApp still serves a stale 
   assert.deepEqual(env.ss.getSheetByName('_stage_dddddddddddd_Example').data,rows);
 });
 
+test('preview decoder accepts canonical padded legacy and URL-safe base64 alphabets', () => {
+  fakeGoogle();
+  const png=Buffer.from('89504e470d0a1a0a00000fbf','hex');
+  const legacy=png.toString('base64');
+  const webSafe=legacy.replace(/\+/g,'-').replace(/\//g,'_');
+  assert.ok(legacy.includes('+') && legacy.includes('/'));
+  assert.deepEqual(Buffer.from(receiver.decodePreviewBase64_(legacy)),png);
+  assert.deepEqual(Buffer.from(receiver.decodePreviewBase64_(webSafe)),png);
+});
+
+test('preview decoder rejects malformed, mixed-alphabet, and provider-rejected base64 as VERIFY', () => {
+  fakeGoogle();
+  for (const value of [
+    'iVBORw0KGgoAAA-',
+    'iVBORw0KGgoAAA+_',
+    'iVBORw0KGgoAA=+/',
+    'AB==',
+    'iVBORw0KGgoA[credential-bearing URL excluded]',
+  ]) assert.throws(()=>receiver.decodePreviewBase64_(value),/VERIFY/);
+  const original=Utilities.base64Decode;
+  Utilities.base64Decode=()=>{throw new Error('Could not decode string')};
+  try {
+    assert.throws(()=>receiver.decodePreviewBase64_('iVBORw0KGgoAAA+/'),/VERIFY/);
+  } finally {
+    Utilities.base64Decode=original;
+  }
+});
+
 function fakeGoogle() {
   const sheets = new Map();
   let documentMetadata = [];
@@ -163,9 +191,16 @@ function fakeGoogle() {
     const state={handler,sourceId:null};const builder={forSpreadsheet:id=>{state.sourceId=id;return builder},onEdit:()=>builder,
       create:()=>{const trigger={getHandlerFunction:()=>state.handler,getTriggerSourceId:()=>state.sourceId};triggers.push(trigger);return trigger}};return builder;
   }};
+  const strictBase64Decode=value=>{
+    if(typeof value!=='string'||value.length%4!==0||!/^[A-Za-z0-9+/]*={0,2}$/.test(value)) throw new Error('Could not decode string');
+    const bytes=Buffer.from(value,'base64');
+    if(bytes.toString('base64')!==value) throw new Error('Could not decode string');
+    return [...bytes];
+  };
   global.Utilities = {Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},
     computeDigest:(_,value)=>[...crypto.createHash('sha256').update(Array.isArray(value)?Buffer.from(value):value).digest()],
-    base64Decode:value=>[...Buffer.from(value,'base64')],
+    base64Decode:strictBase64Decode,
+    base64Encode:value=>Buffer.from(value).toString('base64'),
     newBlob:value=>({getBytes:()=>[...Buffer.from(value)]})};
   global.Sheets = {Spreadsheets:{
     get:()=>({sheets:[...sheets.values()].map(sheet=>({
@@ -376,8 +411,9 @@ function profilePresentation() {
   set(1,90,['Recruit options','Profile key']);set(2,90,['Alex','j:r']);set(3,90,['Alex — Other · 2','j2:r2']);
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
   const secondPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlB8AAAAASUVORK5CYII=','base64');
-  set(1,92,['Profile key','Part','Parts','SHA-256','PNG chunk']);set(2,92,['j:r','0','1',digest(png),png.toString('base64')]);
-  set(3,92,['j2:r2','0','1',digest(secondPng),secondPng.toString('base64')]);
+  const webSafe=value=>value.toString('base64').replace(/\+/g,'-').replace(/\//g,'_');
+  set(1,92,['Profile key','Part','Parts','SHA-256','PNG chunk']);set(2,92,['j:r','0','1',digest(png),webSafe(png)]);
+  set(3,92,['j2:r2','0','1',digest(secondPng),webSafe(secondPng)]);
   const block=(start,end,width)=>({startRow:1,endRow:2,startCol:start,endCol:start+width-1});
   const layout={selectorCells:['B3','E3'],profileKeyCell:'H3',imageAnchor:'J3',frozenRows:7,helperStartCol:27,tabColor:'YELLOW',
     columnWidths:[165,125,24,145,125,24,120,125,90,75,75,75],expectedPreviewCount:2,dimensionCount:1,activityCount:1,
@@ -424,6 +460,29 @@ test('profile layout and verification bypass a stale SpreadsheetApp value cache'
   assert.doesNotThrow(()=>receiver.applyPresentationLayout(op,state,env.ss));
   assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
   assert.equal(env.ss.getSheetById(state.tabs[0].id).getImages().length,1);
+});
+
+test('legacy standard-base64 profile stores survive layout publication and selector refresh', () => {
+  const env=fakeGoogle(),fixture=profilePresentation(),runId='b'.repeat(32);
+  const preview=fixture.layout.blocks.previews;
+  for(let row=preview.startRow+1;row<=preview.endRow;row++) {
+    const index=preview.endCol-1;
+    fixture.rows[row-1][index]=fixture.rows[row-1][index].replace(/-/g,'+').replace(/_/g,'/');
+  }
+  const encoded=fixture.rows.slice(preview.startRow,preview.endRow).map(row=>row[preview.endCol-1]).join('');
+  assert.ok(encoded.includes('+') && encoded.includes('/'));
+  const descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation:'recruit-profiles-v1',version:1,
+    rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,runId);
+  const layout={kind:'layout',version:1,tab:'Recruit Profiles',presentation:'recruit-profiles-v1',layout:fixture.layout};
+  assert.doesNotThrow(()=>receiver.applyPresentationLayout(layout,state,env.ss));
+  assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...layout,kind:'verifyLayout'},state,env.ss));
+  const sheet=env.ss.getSheetById(state.tabs[0].id);
+  sheet.title='Recruit Profiles';
+  env.publish(runId);
+  sheet.getRange('E3').setValue('Alex — Other · 2');
+  assert.doesNotThrow(()=>receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')}));
+  assert.equal(digest(Buffer.from(sheet.getImages()[0].blob.getBytes())),fixture.secondDigest);
 });
 
 test('layout verification rejects changed or missing prescribed formulas', () => {

@@ -428,12 +428,23 @@ function profileFormulaRanges(layout) {
 function applyProfileFormulas(sheet, layout) {
   applyFormulaRanges(sheet,profileFormulaRanges(layout));
 }
+function decodePreviewBase64_(encoded) {
+  if (typeof encoded!=='string' || !encoded.length || encoded.length%4!==0) fail('VERIFY');
+  const standard=/^[A-Za-z0-9+/]+={0,2}$/.test(encoded);
+  const webSafe=/^[A-Za-z0-9_-]+={0,2}$/.test(encoded);
+  if (!standard && !webSafe) fail('VERIFY');
+  const normalized=encoded.replace(/-/g,'+').replace(/_/g,'/');
+  let bytes;
+  try { bytes=Utilities.base64Decode(normalized); } catch (_) { fail('VERIFY'); }
+  if (Utilities.base64Encode(bytes)!==normalized) fail('VERIFY');
+  return bytes;
+}
 function decodePreviewRows(rows) {
   rows.sort((a,b)=>Number(a[1])-Number(b[1]));
   if (!rows.length || rows.length!==Number(rows[0][2]) || rows.length>64 ||
       rows.some((row,index)=>Number(row[1])!==index||Number(row[2])!==rows.length||row[3]!==rows[0][3]||
         typeof row[4]!=='string'||!row[4].length||row[4].length>12000)) fail('VERIFY');
-  const bytes=Utilities.base64Decode(rows.map(row=>row[4]).join(''));
+  const bytes=decodePreviewBase64_(rows.map(row=>row[4]).join(''));
   const signature=[137,80,78,71,13,10,26,10];
   if (!bytes.length || bytes.length>524288 || signature.some((value,index)=>((bytes[index]+256)%256)!==value) || hashBytes(bytes)!==rows[0][3]) fail('VERIFY');
   return bytes;
@@ -822,4 +833,4 @@ function authorizeBackup() {
   installInteractiveProfileTrigger();
 }
 
-if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout,profileSelectionChanged,refreshProfilePhoto_,installInteractiveProfileTrigger};
+if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,decodePreviewBase64_,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout,profileSelectionChanged,refreshProfilePhoto_,installInteractiveProfileTrigger};

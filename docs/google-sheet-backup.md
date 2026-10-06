@@ -6,6 +6,8 @@ https://docs.google.com/spreadsheets/d/11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8G
 
 It runs only when the workspace owner presses **Back up workspace** in the Journee library. Keep that browser tab open until completion. There is no schedule, extra database, Drive folder or external photo file.
 
+Keep the destination spreadsheet's **General access** set to **Restricted** and grant access only to intended backup administrators. The receiver web app may be available to **Anyone** because every request is signed, but the spreadsheet itself contains sensitive backup data and must not be public or published to the web. Hidden tabs are not an access-control boundary.
+
 ## One-time Google setup
 
 Use the Google account that owns the spreadsheet. Do not attach a script to the spreadsheet itself: people with edit access could read an attached script. This receiver must be a separate **private standalone** project.

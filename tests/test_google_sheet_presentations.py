@@ -6,10 +6,12 @@ from datetime import date
 from hashlib import sha256
 from io import BytesIO
 import json
+import re
 
 import pytest
 from PIL import Image
 
+from app import google_sheet_presentations
 from app.db import SessionLocal
 from app.google_sheet_presentations import build_presentation_tabs, layout_operation
 from app.management_report_payload import build_management_report_payload, load_management_report_source
@@ -96,10 +98,31 @@ def test_profile_preview_store_covers_every_option_and_verifies_sha(sample_paylo
         chunks.sort()
         assert [item[0] for item in chunks] == list(range(len(chunks)))
         assert all(item[1] == len(chunks) for item in chunks)
-        png = base64.b64decode("".join(item[3] for item in chunks))
+        png = base64.urlsafe_b64decode("".join(item[3] for item in chunks))
         assert all(item[2] == sha256(png).hexdigest() for item in chunks)
         with Image.open(BytesIO(png)) as image:
             assert image.format == "PNG"
+
+
+def test_profile_preview_chunks_cannot_be_redacted_as_credential_urls(
+    sample_payload, sample_photos, monkeypatch,
+):
+    raw = base64.b64decode("iVBORw0KGgoA/e/AAAAA")
+    monkeypatch.setattr(google_sheet_presentations, "_preview_png", lambda _: raw)
+
+    profile_tab = build_presentation_tabs(sample_payload, sample_photos)[1]
+    preview_rows = _block_rows(profile_tab, profile_tab["layout"]["blocks"]["previews"])[1:]
+    profile_key = f'{sample_photos[0]["journeyId"]}:{sample_photos[0]["recruitId"]}'
+    chunks = sorted(
+        (row for row in preview_rows if row[0] == profile_key),
+        key=lambda row: int(row[1]),
+    )
+    encoded = "".join(row[4] for row in chunks)
+
+    assert "[credential-bearing URL excluded]" not in encoded
+    assert re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", encoded)
+    assert "+" not in encoded and "/" not in encoded
+    assert base64.urlsafe_b64decode(encoded) == raw
 
 
 def test_duplicate_display_labels_keep_distinct_stable_profile_keys(sample_payload, sample_photos):
