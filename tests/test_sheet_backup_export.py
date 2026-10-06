@@ -2,6 +2,7 @@ from datetime import date
 from hashlib import sha256
 from io import BytesIO
 import json
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 
@@ -13,6 +14,8 @@ from app.db import SessionLocal, engine
 from app.models import (AssessmentSystem, AuditEvent, GeneralAssessment, Recruit,
                         Journey, RoomPlan, RoomPlanRecruit, PlatformAccount, UserAccount)
 from app.services import create_journey
+from app.google_sheet_presentations import build_presentation_tabs
+from app.tenant import select_system, reset_system
 from app.sheet_backup_export import build_export, encode_operations, reconstruct_records, BackupError, redact, json_text
 from test_viewer_performance_c1 import _login
 
@@ -99,6 +102,52 @@ def test_complete_scoped_roundtrip(client):
     assert all('Same Name' not in json.dumps(op) for op in flattened_operations if op['kind'] == 'layout')
 
 
+def test_technical_results_keep_every_journee_and_full_completed_aggregate(client):
+    sid, _, _ = seed(client)
+    token = select_system(sid)
+    try:
+        with SessionLocal() as db:
+            active = create_journey(db, 'Active technical day', date(2026, 9, 3), 1, 'Example')
+            active.status = 'active'
+            db.add(Recruit(journey_id=active.id, name='Active technical recruit', present=True))
+            db.commit()
+    finally:
+        reset_system(token)
+    export = build_export(engine, sid)
+    assert {row['journeyName'] for row in export['records']['_results']} == {
+        'Completed day', 'Active technical day',
+    }
+    completed = export['records']['_completed_results'][0]
+    assert {'formula', 'scoreMaximum', 'dimensionNames', 'performanceBands',
+            'dimensionAverages', 'activityAverages', 'rows'} <= set(completed)
+    assert 'Active technical day' not in export['presentation_payload']['results']['scopes']
+
+
+def test_post_snapshot_photo_lookup_cannot_change_presentation_or_technical_results(client, monkeypatch):
+    sid, rid, photo = seed(client)
+    with SessionLocal() as db:
+        recruit = db.get(Recruit, rid)
+        recruit.photo_object_key = 'snapshot-photo.webp'
+        db.commit()
+
+    def mutate_after_snapshot(_key):
+        with SessionLocal() as db:
+            recruit = db.get(Recruit, rid)
+            recruit.name = 'Mutated after snapshot'
+            assessment = db.get(GeneralAssessment, rid)
+            assessment.values_json = json.dumps({'punctuality': 1, 'respect': 1, 'seriousness': 1})
+            db.commit()
+        return photo
+
+    monkeypatch.setattr('app.object_storage.get_photo', mutate_after_snapshot)
+    export = build_export(engine, sid)
+    technical_row = export['records']['_results'][0]['rows'][0]
+    profile_rows = export['presentation_payload']['profiles']['summaries']
+    assert technical_row['name'] == '=Example شخص'
+    assert {row['name'] for row in profile_rows} == {'=Example شخص'}
+    assert {row['overallScore'] for row in profile_rows} == {technical_row['overallScore']}
+
+
 def test_real_export_protocol_runs_through_google_simulator(client):
     sid, _, _ = seed(client)
     operations = list(encode_operations(build_export(engine, sid)))
@@ -129,6 +178,55 @@ def test_real_export_protocol_runs_through_google_simulator(client):
       assert.ok(env.ss.getSheetByName('Backup - Backup summary'));
       assert.equal(env.ss.getSheetByName('Backup - Photos').images.length,1);
       assert.ok(env.ss.getSheetByName('My own notes'));
+    '''
+    result = subprocess.run(['node', '-e', script], input=json.dumps(operations, ensure_ascii=False),
+        text=True, encoding='utf-8', capture_output=True, timeout=30, cwd=Path(__file__).parents[1])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_empty_completed_profile_export_runs_through_google_simulator(client):
+    _login(client)
+    with SessionLocal() as db:
+        sid = db.scalar(select(AssessmentSystem)).id
+    operations = list(encode_operations(build_export(engine, sid)))
+    script = r'''
+      const fs=require('node:fs'),assert=require('node:assert/strict');
+      const {fakeGoogle}=require('./tests/sheet_backup_receiver.test.cjs');
+      const receiver=require('./integrations/google-sheet-backup/Code.js');
+      const env=fakeGoogle(),runId='b'.repeat(32),operations=JSON.parse(fs.readFileSync(0,'utf8'));
+      receiver.dispatch({action:'begin',runId},env.props,1000);
+      let result;
+      operations.forEach((operation,sequence)=>result=receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000));
+      assert.equal(result.state,'complete');
+      const profiles=env.ss.getSheetByName('Recruit Profiles');
+      assert.equal(profiles.getRange('E3').getValue(),'');
+      assert.equal(profiles.getRange('E3').getDataValidation(),null);
+      assert.equal(profiles.getImages().length,0);
+    '''
+    result = subprocess.run(['node', '-e', script], input=json.dumps(operations, ensure_ascii=False),
+        text=True, encoding='utf-8', capture_output=True, timeout=30, cwd=Path(__file__).parents[1])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('factor_count', [0, 2, 3])
+def test_python_generated_dynamic_factor_layout_runs_through_google_simulator(client, factor_count):
+    sid, _, _ = seed(client)
+    export = build_export(engine, sid)
+    payload = deepcopy(export['presentation_payload'])
+    factors = payload['profiles']['generalFactors'][:factor_count]
+    payload['profiles']['generalFactors'] = factors
+    payload['definition']['generalFactors'] = deepcopy(factors)
+    export['tabs'][:2] = build_presentation_tabs(payload, export['photos'])
+    operations = list(encode_operations(export))
+    script = r'''
+      const fs=require('node:fs'),assert=require('node:assert/strict');
+      const {fakeGoogle}=require('./tests/sheet_backup_receiver.test.cjs');
+      const receiver=require('./integrations/google-sheet-backup/Code.js');
+      const env=fakeGoogle(),runId='a'.repeat(32),operations=JSON.parse(fs.readFileSync(0,'utf8'));
+      receiver.dispatch({action:'begin',runId},env.props,1000);
+      let result;
+      operations.forEach((operation,sequence)=>result=receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000));
+      assert.equal(result.state,'complete');
     '''
     result = subprocess.run(['node', '-e', script], input=json.dumps(operations, ensure_ascii=False),
         text=True, encoding='utf-8', capture_output=True, timeout=30, cwd=Path(__file__).parents[1])

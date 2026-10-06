@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 from datetime import date
 from hashlib import sha256
 from io import BytesIO
@@ -25,7 +26,8 @@ def sample_payload():
         first_recruit = Recruit(journey_id=first.id, name="Same Name", present=True)
         second_recruit = Recruit(journey_id=second.id, name="Same Name", present=True)
         absent = Recruit(journey_id=second.id, name="Absent", present=False)
-        db.add_all([first_recruit, second_recruit, absent])
+        formula_name = Recruit(journey_id=first.id, name="=Formula Name", present=True)
+        db.add_all([first_recruit, second_recruit, absent, formula_name])
         db.flush()
         db.add(GeneralAssessment(
             recruit_id=first_recruit.id,
@@ -116,3 +118,54 @@ def test_layout_operation_contains_only_bounded_template_parameters(sample_paylo
         assert operation["version"] == 1
         assert "Same Name" not in encoded
         assert "IMPORTDATA" not in encoded
+
+
+def test_formula_like_selector_labels_use_the_same_literal_lookup_key(sample_payload, sample_photos):
+    profile_tab = build_presentation_tabs(sample_payload, sample_photos)[1]
+    blocks = profile_tab["layout"]["blocks"]
+    option_rows = _block_rows(profile_tab, blocks["profileOptions"])[1:]
+    summary_rows = _block_rows(profile_tab, blocks["summaries"])[1:]
+    formula_option = next(row for row in option_rows if row[1].endswith("=Formula Name"))
+    scope, label, profile_key = formula_option
+    assert any(
+        row[0] == f"{scope}|{label}" and row[1] == profile_key
+        for row in summary_rows
+    )
+
+    payload = deepcopy(sample_payload)
+    old_scope = payload["results"]["scopes"][0]
+    payload["results"]["scopes"][0] = "=Completed scope"
+    for row in payload["results"]["rows"]:
+        if row["scope"] == old_scope:
+            row["scope"] = "=Completed scope"
+    results_tab = build_presentation_tabs(payload, sample_photos)[0]
+    results_block = _block_rows(results_tab, results_tab["layout"]["blocks"]["results"])[1:]
+    guarded_scope = results_tab["rows"][2][1]
+    selected_view = results_tab["rows"][2][4]
+    assert guarded_scope.endswith("=Completed scope")
+    assert any(row[12] == f"{guarded_scope}|{selected_view}|1" for row in results_block)
+
+
+@pytest.mark.parametrize("factor_count", [0, 2, 3])
+def test_profile_summary_width_tracks_dynamic_factor_count(sample_payload, sample_photos, factor_count):
+    payload = deepcopy(sample_payload)
+    factors = payload["profiles"]["generalFactors"][:factor_count]
+    payload["profiles"]["generalFactors"] = factors
+    payload["definition"]["generalFactors"] = deepcopy(factors)
+    profile_tab = build_presentation_tabs(payload, sample_photos)[1]
+    summary = profile_tab["layout"]["blocks"]["summaries"]
+    assert summary["endCol"] - summary["startCol"] + 1 == 21 + factor_count
+
+
+def test_layout_carries_bounded_configured_performance_band_styles(sample_payload, sample_photos):
+    payload = deepcopy(sample_payload)
+    payload["definition"]["bands"] = [
+        {"key": "needs_review", "name": "Needs review", "minimum": 0, "color": "#dc2626"},
+        {"key": "strong", "name": "Strong", "minimum": 80, "color": "#16a34a"},
+    ]
+    tabs = build_presentation_tabs(payload, sample_photos)
+    for tab in tabs:
+        assert tab["layout"]["bandStyles"] == [
+            {"label": "Needs review", "background": "#DC2626", "font": "#FFFFFF"},
+            {"label": "Strong", "background": "#16A34A", "font": "#FFFFFF"},
+        ]

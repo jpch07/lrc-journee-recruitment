@@ -4,6 +4,8 @@ import json
 from datetime import date
 
 from app.db import SessionLocal
+from app.assessment_config import blank_assessment_definition, lrc_assessment_definition
+from app.assessment_runtime import activate_assessment_definition, reset_assessment_definition
 from app.models import Journey, Recruit
 from app.services import create_journey
 from app.management_report_payload import (
@@ -101,3 +103,27 @@ def test_excel_renderer_consumes_detached_payload():
     assert "XLOOKUP" in workbook["Recruit Profiles"]["H3"].value
     assert len(workbook["Recruit Profiles"]._charts) == 2
     workbook.close()
+
+
+def test_payload_builder_uses_only_the_captured_custom_definition():
+    token = activate_assessment_definition(blank_assessment_definition())
+    try:
+        with SessionLocal() as db:
+            journey = create_journey(db, "Custom completed", date(2026, 8, 4), 1, "Test")
+            journey.status = "completed"
+            db.add(Recruit(journey_id=journey.id, name="Custom participant", present=True))
+            db.commit()
+            source = load_management_report_source(db)
+    finally:
+        reset_assessment_definition(token)
+
+    replacement = activate_assessment_definition(lrc_assessment_definition())
+    try:
+        payload = build_management_report_payload(source)
+    finally:
+        reset_assessment_definition(replacement)
+
+    assert payload["results"]["views"] == ["Overall ranking", "Performance", "Evaluation"]
+    assert payload["profiles"]["dimensionDefinitions"][0]["key"] == "performance"
+    assert payload["profiles"]["activityDefinitions"][0]["key"] == "evaluation"
+    assert {row["color"] for row in payload["results"]["rows"] if row["view"] == "Overall ranking"} == {"Needs review"}

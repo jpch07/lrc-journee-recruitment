@@ -15,8 +15,10 @@ from PIL import Image, ImageDraw
 CHUNK_SIZE = 12_000
 MAX_PREVIEW_BYTES = 512 * 1024
 MAX_PRESENTATION_COLUMNS = 128
+FORMULA_GUARD = "\u200b"
 SECRET = re.compile(r"password|secret|token|credential|authorization|apikey|accesskey", re.I)
 URL = re.compile(r"(?:[a-z][a-z0-9+.-]*://|/)[^\s\"<>]+", re.I)
+HEX_COLOR = re.compile(r"^#[0-9a-f]{6}$", re.I)
 
 
 class PresentationError(ValueError):
@@ -91,10 +93,34 @@ def _literal(value) -> str:
             chars.append(char)
             used += units
         text = "".join(chars) + suffix
-    # RAW writes already prevent formula execution.  The leading apostrophe is
-    # an additional invariant for receivers/tests that inspect the matrix before
-    # it reaches Sheets.
-    return "'" + text if text.startswith("=") else text
+    # RAW writes already prevent formula execution.  A zero-width guard also
+    # keeps later Apps Script setValue() calls literal without changing what a
+    # person sees in a selector.
+    return FORMULA_GUARD + text if text.startswith("=") else text
+
+
+def _selection_key(scope: object, label: object) -> str:
+    """Match the exact literal strings written into both selector cells."""
+    return f"{_literal(scope)}|{_literal(label)}"
+
+
+def _band_styles(definition: dict[str, object]) -> list[dict[str, str]]:
+    bands = definition.get("bands", [])
+    if not isinstance(bands, list) or not 1 <= len(bands) <= 10:
+        raise PresentationError("Performance-band styles are outside the bounded contract.")
+    output: list[dict[str, str]] = []
+    labels: set[str] = set()
+    for band in bands:
+        label = _literal(band.get("name", ""))
+        color = str(band.get("color", "")).upper()
+        if (not label or label in labels or len(label) > 80 or any(ord(char) < 32 for char in label)
+                or not HEX_COLOR.fullmatch(color)):
+            raise PresentationError("Performance-band styles are outside the bounded contract.")
+        labels.add(label)
+        red, green, blue = (int(color[index:index + 2], 16) for index in (1, 3, 5))
+        font = "#223449" if (red * 299 + green * 587 + blue * 114) / 1000 >= 160 else "#FFFFFF"
+        output.append({"label": label, "background": color, "font": font})
+    return output
 
 
 class _Grid:
@@ -165,10 +191,11 @@ def _result_tab(payload: dict[str, object]) -> dict[str, object]:
     for row in results["rows"]:
         group = (str(row["scope"]), str(row["view"]))
         counters[group] += 1
+        safe_scope, safe_view = _literal(group[0]), _literal(group[1])
         helper_rows.append([
-            row["scope"], row["view"], row["rank"], row["name"], row["journeyName"], row["score"],
+            safe_scope, safe_view, row["rank"], row["name"], row["journeyName"], row["score"],
             row["scale"], row["details"], row["status"], row["color"], row["generalComment"],
-            row["notes"], f"{group[0]}|{group[1]}|{counters[group]}",
+            row["notes"], f"{safe_scope}|{safe_view}|{counters[group]}",
         ])
     blocks = {"results": grid.block(1, 13, helper_rows)}
     blocks["scopeOptions"] = grid.block(1, 26, [["Scope options"], *[[value] for value in results["scopes"]]])
@@ -187,6 +214,7 @@ def _result_tab(payload: dict[str, object]) -> dict[str, object]:
             "frozenRows": 5,
             "helperStartCol": 13,
             "tabColor": "GREEN",
+            "bandStyles": _band_styles(payload["definition"]),
             "columnWidths": [70, 210, 185, 95, 65, 155, 100, 90, 265, 265],
             "blocks": blocks,
         },
@@ -306,10 +334,14 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
         "Overall population", "Journee rank", "Journee population", "Color", "Missing",
         *[item["name"] for item in factors], "General average", "General comment", "Notes",
     ]
+    safe_selection_keys = {
+        str(row["selectionKey"]): _selection_key(row["scope"], row["label"])
+        for row in profiles["summaries"]
+    }
     summary_rows = [summary_headers]
     for row in profiles["summaries"]:
         summary_rows.append([
-            row["selectionKey"], row["profileKey"], row["journeyName"], row["journeyDate"], row["name"],
+            safe_selection_keys[str(row["selectionKey"])], row["profileKey"], row["journeyName"], row["journeyDate"], row["name"],
             row["phoneNumber"], row["dateOfBirth"], row["attendance"], row["arrivalTime"],
             row["attendanceComment"], row["overallScore"], row["displayRank"], row["overallRank"],
             row["overallPopulation"], row["journeyRank"], row["journeyPopulation"], row["color"],
@@ -318,11 +350,11 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
             row["generalAverage"], row["generalComment"], row["notes"],
         ])
     dimension_rows = [["Selection", "Dimension", "Score", "Rank", "Status", "Coverage"], *[
-        [row["selectionKey"], row["name"], row["score"], row["rank"], row["status"], row["coverage"]]
+        [safe_selection_keys[str(row["selectionKey"])], row["name"], row["score"], row["rank"], row["status"], row["coverage"]]
         for row in profiles["dimensions"]
     ]]
     activity_rows = [["Selection", "Activity", "Score", "Rank", "Submissions", "Status"], *[
-        [row["selectionKey"], row["name"], row["score"], row["rank"], row["submissions"], row["status"]]
+        [safe_selection_keys[str(row["selectionKey"])], row["name"], row["score"], row["rank"], row["submissions"], row["status"]]
         for row in profiles["activities"]
     ]]
     evaluator_rows = [["Profile key", terms["stage"], terms["assessor"], "Category", "Score", "Status", "Comment"], *[
@@ -388,6 +420,7 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
             "frozenRows": 7,
             "helperStartCol": 27,
             "tabColor": "YELLOW",
+            "bandStyles": _band_styles(definition),
             "columnWidths": [165, 125, 24, 145, 125, 24, 120, 125, 90, 75, 75, 75],
             "expectedPreviewCount": len(seen_keys),
             "dimensionCount": len(dimensions),

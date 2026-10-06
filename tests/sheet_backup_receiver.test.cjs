@@ -137,9 +137,9 @@ function fakeGoogle() {
   add(1,'My own notes');
   const ss = {getId:()=> '11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0',getSheets:()=>[...sheets.values()], getSheetById:id=>sheets.get(id),
     getSheetByName:name=>[...sheets.values()].find(s=>s.title===name), getDeveloperMetadata:()=>documentMetadata};
-  const validationBuilder=()=>{const rule={range:null,allowInvalid:true};const builder={requireValueInRange:range=>{rule.range=range.getA1Notation();return builder},setAllowInvalid:value=>{rule.allowInvalid=value;return builder},setHelpText:()=>builder,build:()=>({...rule})};return builder};
+  const validationBuilder=()=>{const rule={range:null,rangeObject:null,allowInvalid:true};const builder={requireValueInRange:range=>{rule.range=range.getA1Notation();rule.rangeObject=range;return builder},setAllowInvalid:value=>{rule.allowInvalid=value;return builder},setHelpText:()=>builder,build:()=>({...rule,getCriteriaType:()=> 'VALUE_IN_RANGE',getCriteriaValues:()=>[rule.rangeObject,true],getAllowInvalid:()=>rule.allowInvalid})};return builder};
   const conditionalBuilder=()=>{const rule={text:null,ranges:[]};const builder={whenTextEqualTo:value=>{rule.text=value;return builder},setBackground:()=>builder,setFontColor:()=>builder,setBold:()=>builder,setRanges:ranges=>{rule.ranges=ranges.map(item=>item.getA1Notation());return builder},build:()=>({...rule})};return builder};
-  global.SpreadsheetApp = {openById:()=>ss,flush:()=>{},ProtectionType:{SHEET:'SHEET'},newDataValidation:validationBuilder,newConditionalFormatRule:conditionalBuilder};
+  global.SpreadsheetApp = {openById:()=>ss,flush:()=>{},ProtectionType:{SHEET:'SHEET'},DataValidationCriteria:{VALUE_IN_RANGE:'VALUE_IN_RANGE'},newDataValidation:validationBuilder,newConditionalFormatRule:conditionalBuilder};
   global.Charts={ChartType:{RADAR:'RADAR'}};
   let triggers=[];
   global.ScriptApp={getProjectTriggers:()=>[...triggers],deleteTrigger:trigger=>{triggers=triggers.filter(item=>item!==trigger)},newTrigger:handler=>{
@@ -291,6 +291,7 @@ function resultsPresentation() {
   rows[1].splice(12,13,'All completed Journees','Overall ranking','1','Alex','Day','10','/20','Complete','Complete','Green','','','All completed Journees|Overall ranking|1');
   rows[0][25]='Scope options'; rows[1][25]='All completed Journees'; rows[0][26]='View options'; rows[1][26]='Overall ranking';
   const layout={selectorCells:['B3','E3'],headerRow:5,visibleStartRow:6,visibleCapacity:1,frozenRows:5,helperStartCol:13,
+    bandStyles:[{label:'Green',background:'#16834B',font:'#FFFFFF'},{label:'Yellow',background:'#E3AD22',font:'#223449'},{label:'Red',background:'#C8102E',font:'#FFFFFF'}],
     tabColor:'GREEN',columnWidths:[70,210,185,95,65,155,100,90,265,265],blocks:{
       results:{startRow:1,endRow:2,startCol:13,endCol:25},scopeOptions:{startRow:1,endRow:2,startCol:26,endCol:26},viewOptions:{startRow:1,endRow:2,startCol:27,endCol:27}}};
   return {rows,layout};
@@ -309,7 +310,7 @@ function profilePresentation() {
   set(1,63,['Profile key','Activity','Evaluator','Category','Score','Status','Comment']);set(2,63,['j:r','Activity','Eva','Overall','4','Complete','']);
   set(1,70,['Profile key','Activity','Dimension','Criterion','Explanation','Evaluator','Grade','Raw result','Status']);set(2,70,['j:r','Activity','Dimension','Criterion','Why','Eva','4','','Complete']);
   set(1,79,['Profile key','Date','Username','Action','Reason','Before','After']);set(2,79,['j:r','2026-10-06','Admin','Updated','','','']);
-  set(1,86,['Scope options']);set(2,86,['All completed Journees']);set(3,86,['Day']);
+  set(1,86,['Scope options']);set(2,86,['All completed Journees']);set(3,86,['Day']);set(4,86,['Empty']);
   set(1,87,['Scope','Label','Profile key']);set(2,87,['All completed Journees','Alex','j:r']);
   set(3,87,['All completed Journees','Alex — Other · 2','j2:r2']);set(4,87,['Day','Day Alex','j:r']);
   set(1,90,['Recruit options','Profile key']);set(2,90,['Alex','j:r']);set(3,90,['Alex — Other · 2','j2:r2']);
@@ -320,12 +321,13 @@ function profilePresentation() {
   const block=(start,end,width)=>({startRow:1,endRow:2,startCol:start,endCol:start+width-1});
   const layout={selectorCells:['B3','E3'],profileKeyCell:'H3',imageAnchor:'J3',frozenRows:7,helperStartCol:27,tabColor:'YELLOW',
     columnWidths:[165,125,24,145,125,24,120,125,90,75,75,75],expectedPreviewCount:2,dimensionCount:1,activityCount:1,
-    factorCount:3,evaluatorCapacity:1,criterionCapacity:1,auditCapacity:1,sectionRows:{dimension:8,dimensionHeader:9,dimensionStart:10,
+    factorCount:3,evaluatorCapacity:1,criterionCapacity:1,auditCapacity:1,
+    bandStyles:[{label:'Green',background:'#16834B',font:'#FFFFFF'},{label:'Yellow',background:'#E3AD22',font:'#223449'},{label:'Red',background:'#C8102E',font:'#FFFFFF'}],sectionRows:{dimension:8,dimensionHeader:9,dimensionStart:10,
       activity:26,activityHeader:27,activityStart:28,general:44,generalStart:45,evaluator:55,evaluatorHeader:56,evaluatorStart:57,
       criterion:79,criterionHeader:80,criterionStart:81,audit:200,auditHeader:201,auditStart:202},
     charts:[{startRow:10,endRow:10,labelCol:1,valueCol:2,anchor:'G8',maximum:5},{startRow:28,endRow:28,labelCol:1,valueCol:2,anchor:'G26',maximum:5}],
     blocks:{summaries:{startRow:1,endRow:4,startCol:27,endCol:50},dimensions:block(51,56,6),activities:block(57,62,6),evaluators:block(63,69,7),criteria:block(70,78,9),
-      audit:block(79,85,7),scopeOptions:{startRow:1,endRow:3,startCol:86,endCol:86},profileOptions:{startRow:1,endRow:4,startCol:87,endCol:89},
+      audit:block(79,85,7),scopeOptions:{startRow:1,endRow:4,startCol:86,endCol:86},profileOptions:{startRow:1,endRow:4,startCol:87,endCol:89},
       dependentOptions:{startRow:1,endRow:3,startCol:90,endCol:91},previews:{startRow:1,endRow:3,startCol:92,endCol:96}}};
   return {rows,layout,secondDigest:digest(secondPng)};
 }
@@ -350,6 +352,48 @@ test('trusted layouts replay without duplicate owned objects and keep only selec
     assert.equal(sheet.effectiveEditable('A1'),false);
     assert.doesNotThrow(()=>receiver.verifyPresentationLayout({kind:'verifyLayout',version:1,tab:name,presentation,layout:fixture.layout},state,env.ss));
   }
+});
+
+test('layout verification rejects changed or missing prescribed formulas', () => {
+  const env=fakeGoogle(),fixture=resultsPresentation();
+  const descriptor={name:'Results',finalTitle:'Results',presentation:'results-v1',version:1,rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,'1'.repeat(32));
+  const op={kind:'layout',version:1,tab:'Results',presentation:'results-v1',layout:fixture.layout};
+  receiver.applyPresentationLayout(op,state,env.ss);
+  const sheet=env.ss.getSheetById(state.tabs[0].id);
+  sheet.getRange('A6').setFormula('=12345');
+  assert.throws(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss),/VERIFY/);
+  receiver.applyPresentationLayout(op,state,env.ss);
+  sheet.getRange('J6').clearContent();
+  assert.throws(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss),/VERIFY/);
+});
+
+test('profile layout verification checks every preview and uses numeric chart formulas', () => {
+  const env=fakeGoogle(),fixture=profilePresentation();
+  const descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation:'recruit-profiles-v1',version:1,rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,'2'.repeat(32));
+  const op={kind:'layout',version:1,tab:'Recruit Profiles',presentation:'recruit-profiles-v1',layout:fixture.layout};
+  receiver.applyPresentationLayout(op,state,env.ss);
+  const sheet=env.ss.getSheetById(state.tabs[0].id);
+  assert.match(sheet.getRange('B10').getFormula(),/VALUE\(/);
+  assert.match(sheet.getRange('B28').getFormula(),/VALUE\(/);
+  sheet.getRange(3,96).setValue('corrupt-base64');
+  assert.throws(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss),/VERIFY/);
+});
+
+test('configured performance bands produce the exact trusted conditional rules', () => {
+  const env=fakeGoogle(),fixture=resultsPresentation();
+  fixture.layout.bandStyles=[
+    {label:'Needs review',background:'#DC2626',font:'#FFFFFF'},
+    {label:'Strong',background:'#16A34A',font:'#FFFFFF'},
+  ];
+  const descriptor={name:'Results',finalTitle:'Results',presentation:'results-v1',version:1,rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,'3'.repeat(32));
+  const op={kind:'layout',version:1,tab:'Results',presentation:'results-v1',layout:fixture.layout};
+  receiver.applyPresentationLayout(op,state,env.ss);
+  const rules=env.ss.getSheetById(state.tabs[0].id).getConditionalFormatRules();
+  assert.deepEqual(rules.map(rule=>rule.text),['Complete','Incomplete','Needs review','Strong']);
+  assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
 });
 
 function managedProfileEnvironment() {
@@ -396,6 +440,16 @@ test('scope edits reset the recruit before refreshing and stable keys select dup
   assert.throws(()=>receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')}),/VERIFY/);
   assert.equal(sheet.getImages()[0],lastGood);
   env.publish(runId);
+});
+
+test('switching to an empty profile scope clears validation, selection, and the previous image', () => {
+  const {env,sheet}=managedProfileEnvironment();
+  assert.equal(sheet.getImages().length,1);
+  sheet.getRange('B3').setValue('Empty');
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  assert.equal(sheet.getRange('E3').getValue(),'');
+  assert.equal(sheet.getRange('E3').getDataValidation(),null);
+  assert.equal(sheet.getImages().length,0);
 });
 
 test('interactive profile trigger installation is idempotent and scoped to the fixed spreadsheet', () => {

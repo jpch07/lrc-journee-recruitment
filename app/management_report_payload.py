@@ -12,7 +12,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select
@@ -31,7 +31,6 @@ from .models import (
     Journey,
     Recruit,
 )
-from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 from .scoring import configured_ranks
 from .services import result_snapshot
 from .utils import loads
@@ -81,6 +80,7 @@ class ManagementReportSource:
 
 def _definition_payload() -> dict[str, object]:
     definition = active_assessment_definition()
+    dimension_names = {item.key: item.name for item in definition.dimensions}
     return _primitive({
         "name": definition.name,
         "terminology": definition.terminology.model_dump(mode="json"),
@@ -102,7 +102,7 @@ def _definition_payload() -> dict[str, object]:
                     {
                         "key": criterion.key,
                         "dimension": criterion.dimensionName
-                        or DIMENSION_NAMES.get(criterion.dimensionKey, criterion.dimensionKey),
+                        or dimension_names.get(criterion.dimensionKey, criterion.dimensionKey),
                         "name": criterion.name,
                         "explanation": criterion.explanation,
                         "unit": criterion.unit,
@@ -117,7 +117,12 @@ def _definition_payload() -> dict[str, object]:
     })
 
 
-def _combined_results(snapshots: list[tuple[dict[str, object], dict[str, object]]]) -> dict[str, object]:
+def _combined_results(
+    snapshots: list[tuple[dict[str, object], dict[str, object]]],
+    definition: dict[str, object],
+) -> dict[str, object]:
+    dimension_keys = [str(item["key"]) for item in definition["dimensions"]]
+    activity_keys = [str(item["key"]) for item in definition["activities"]]
     rows: list[dict[str, object]] = []
     for journey, snapshot in snapshots:
         source_rows = snapshot.get("rows", [])
@@ -141,22 +146,22 @@ def _combined_results(snapshots: list[tuple[dict[str, object], dict[str, object]
             (str(row["profileKey"]), Decimal(str(row["dimensions"][code].get("score", 0))))
             for row in rows
         ])
-        for code in DIMENSION_ORDER
+        for code in dimension_keys
     }
     activity_ranks = {
         code: configured_ranks([
             (str(row["profileKey"]), Decimal(str(row["activities"][code].get("score", 0))))
             for row in rows
         ])
-        for code in ACTIVITY_ORDER
+        for code in activity_keys
     }
     for row in rows:
         key = str(row["profileKey"])
         row["overallRank"] = overall.get(key)
         row["overallPopulation"] = len(rows)
-        for code in DIMENSION_ORDER:
+        for code in dimension_keys:
             row["dimensions"][code]["rank"] = dimension_ranks[code].get(key)
-        for code in ACTIVITY_ORDER:
+        for code in activity_keys:
             row["activities"][code]["rank"] = activity_ranks[code].get(key)
     rows.sort(key=lambda row: (
         row.get("overallRank") in (None, ""),
@@ -168,7 +173,14 @@ def _combined_results(snapshots: list[tuple[dict[str, object], dict[str, object]
     return {"rows": rows}
 
 
-def _load_journey(db: Session, journey: Journey, *, include_criteria: bool) -> tuple[dict[str, object], dict[str, object]]:
+def _load_journey(
+    db: Session,
+    journey: Journey,
+    *,
+    include_criteria: bool,
+    definition: dict[str, object],
+    known_snapshot: dict[str, object] | None = None,
+) -> tuple[dict[str, object], dict[str, object]]:
     recruits = list(db.scalars(
         select(Recruit)
         .where(Recruit.journey_id == journey.id, Recruit.active.is_(True))
@@ -200,7 +212,11 @@ def _load_journey(db: Session, journey: Journey, *, include_criteria: bool) -> t
         .where(AuditEvent.journey_id == journey.id, AuditEvent.entity_id.in_(recruit_ids))
         .order_by(AuditEvent.created_at.desc(), AuditEvent.id)
     )) if recruit_ids else []
-    snapshot = _primitive(result_snapshot(db, journey, include_criteria=include_criteria))
+    snapshot = _primitive(
+        known_snapshot if known_snapshot is not None
+        else result_snapshot(db, journey, include_criteria=include_criteria)
+    )
+    factor_keys = [str(item["storageKey"]) for item in definition["generalFactors"]]
     journey_row = {
         "id": journey.id,
         "name": journey.name,
@@ -258,7 +274,7 @@ def _load_journey(db: Session, journey: Journey, *, include_criteria: bool) -> t
         "assessments": {
             item.recruit_id: {
                 "values": _primitive(configured_general_assessment_values(
-                    item, (factor.storageKey for factor in active_assessment_definition().generalFactors)
+                    item, factor_keys
                 )),
                 "comment": item.comment or "",
                 "notes": item.notes or "",
@@ -286,22 +302,33 @@ def load_management_report_source(
     db: Session,
     *,
     include_criteria: bool = True,
+    known_snapshots: Mapping[str, dict[str, object]] | None = None,
 ) -> ManagementReportSource:
+    definition = _definition_payload()
     journeys = list(db.scalars(
         select(Journey)
         .where(Journey.status == "completed")
         .order_by(Journey.event_date.desc(), func.lower(Journey.name), Journey.id)
     ))
-    loaded = [_load_journey(db, journey, include_criteria=include_criteria) for journey in journeys]
+    loaded = [
+        _load_journey(
+            db,
+            journey,
+            include_criteria=include_criteria,
+            definition=definition,
+            known_snapshot=(known_snapshots or {}).get(journey.id),
+        )
+        for journey in journeys
+    ]
     journey_rows = tuple(item[0] for item in loaded)
     snapshots = tuple({
         **deepcopy(item[1]),
         "journeyId": item[0]["id"],
         "journeyName": item[0]["name"],
     } for item in loaded)
-    combined = _combined_results([(item[0], item[1]) for item in loaded])
+    combined = _combined_results([(item[0], item[1]) for item in loaded], definition)
     return ManagementReportSource(
-        definition=_definition_payload(),
+        definition=definition,
         journeys=journey_rows,
         result_snapshots=snapshots,
         combined_results=_primitive(combined),
@@ -347,6 +374,12 @@ def _rank_key(row: dict[str, object]) -> tuple[object, ...]:
     )
 
 
+def _band_label(definition: dict[str, object], value: object) -> str:
+    text = str(value or "")
+    labels = {str(item["key"]): str(item["name"]) for item in definition["bands"]}
+    return labels.get(text, text.replace("_", " ").title())
+
+
 def _results_payload(source: ManagementReportSource) -> dict[str, object]:
     definition = source.definition
     terms = definition["terminology"]
@@ -375,10 +408,10 @@ def _results_payload(source: ManagementReportSource) -> dict[str, object]:
                 "score": item.get("overallScore", 0), "scale": f"/{official_maximum:g}",
                 "details": f"{item.get('missingCount', 0)} missing",
                 "status": "Complete" if item.get("complete") else "Incomplete",
-                "color": str(item.get("colorGrade", item.get("color", ""))).title(),
+                "color": _band_label(definition, item.get("colorGrade", item.get("color", ""))),
                 "generalComment": item.get("generalComment", ""), "notes": item.get("notes", ""),
             })
-            for code in DIMENSION_ORDER:
+            for code in dimension_by_key:
                 value = item["dimensions"][code]
                 config = dimension_by_key[code]
                 maximum = float(config["displayMaximum"])
@@ -390,7 +423,7 @@ def _results_payload(source: ManagementReportSource) -> dict[str, object]:
                     "status": "Complete" if value.get("complete") else "Incomplete",
                     "color": "", "generalComment": "", "notes": "",
                 })
-            for code in ACTIVITY_ORDER:
+            for code in activity_by_key:
                 value = item["activities"][code]
                 rows.append({
                     "scope": scope, "view": activity_by_key[code]["name"], "rank": value.get("rank"),
@@ -489,7 +522,7 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                     "overallPopulation": combined_result.get("overallPopulation", len(source.combined_results["rows"])),
                     "journeyRank": journey_result.get("journeyRank", journey_result.get("overallRank")),
                     "journeyPopulation": journey_population,
-                    "color": str(displayed_result.get("colorGrade", displayed_result.get("color", ""))).title(),
+                    "color": _band_label(definition, displayed_result.get("colorGrade", displayed_result.get("color", ""))),
                     "missingComponents": ", ".join(displayed_result.get("missingComponents", [])) or "Complete",
                     "generalValues": {
                         item["storageKey"]: assessment["values"].get(item["storageKey"])
@@ -501,7 +534,7 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                     "photoAvailable": recruit["photoAvailable"],
                 }
                 summaries.append(summary)
-                for code in DIMENSION_ORDER:
+                for code in dimension_config:
                     value = displayed_result["dimensions"][code]
                     maximum = float(dimension_config[code]["displayMaximum"])
                     dimensions.append({
@@ -512,7 +545,7 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                         "status": "Complete" if value.get("complete") else "Incomplete",
                         "coverage": f"{round(float(value.get('availableWeight', 0)) * 100)}%",
                     })
-                for code in ACTIVITY_ORDER:
+                for code in activity_config:
                     value = displayed_result["activities"][code]
                     activities.append({
                         "selectionKey": selection_key, "profileKey": profile_key,
@@ -526,50 +559,50 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                 if assignment["recruitId"] != recruit_id:
                     continue
                 code = str(assignment["activityCode"])
-                rubric = RUBRICS.get(code)
+                activity = activity_config.get(code)
                 evaluator = evaluator_by_id.get(str(assignment["evaluatorId"]))
                 submission = submission_by_assignment.get(str(assignment["id"]))
                 evaluators.append({
                     "profileKey": profile_key,
-                    "activity": rubric.name if rubric else code,
+                    "activity": activity["name"] if activity else code,
                     "evaluator": evaluator["name"] if evaluator else "Unknown",
                     "category": str(evaluator["role"]).title() if evaluator else "",
                     "score": submission["score"] if submission else "",
                     "status": _label(submission["status"]) if submission else "Missing",
                     "comment": submission["comments"] if submission else "",
                 })
-                if include := (rubric and submission):
-                    for criterion in rubric.criteria:
-                        raw_value = submission["raw"].get(criterion.key, "")
+                if activity and submission:
+                    for criterion in activity["criteria"]:
+                        raw_value = submission["raw"].get(criterion["key"], "")
                         criteria.append({
-                            "profileKey": profile_key, "activity": rubric.name,
-                            "dimension": criterion.dimension, "criterion": criterion.name,
-                            "explanation": criterion.explanation,
+                            "profileKey": profile_key, "activity": activity["name"],
+                            "dimension": criterion["dimension"], "criterion": criterion["name"],
+                            "explanation": criterion["explanation"],
                             "evaluator": evaluator["name"] if evaluator else "Unknown",
-                            "grade": submission["responses"].get(criterion.key, ""),
-                            "rawResult": f"{raw_value} {criterion.unit}".strip() if raw_value != "" else "",
+                            "grade": submission["responses"].get(criterion["key"], ""),
+                            "rawResult": f"{raw_value} {criterion['unit']}".strip() if raw_value != "" else "",
                             "status": _label(submission["status"]),
                         })
             for evaluation in journey["adminEvaluations"]:
                 if evaluation["recruitId"] != recruit_id:
                     continue
                 code = str(evaluation["activityCode"])
-                rubric = RUBRICS.get(code)
+                activity = activity_config.get(code)
                 evaluators.append({
-                    "profileKey": profile_key, "activity": rubric.name if rubric else code,
+                    "profileKey": profile_key, "activity": activity["name"] if activity else code,
                     "evaluator": f"Admin: {evaluation['updatedBy']}", "category": "Admin",
                     "score": evaluation["score"], "status": "Official", "comment": evaluation["comments"],
                 })
-                if rubric:
-                    for criterion in rubric.criteria:
-                        raw_value = evaluation["raw"].get(criterion.key, "")
+                if activity:
+                    for criterion in activity["criteria"]:
+                        raw_value = evaluation["raw"].get(criterion["key"], "")
                         criteria.append({
-                            "profileKey": profile_key, "activity": rubric.name,
-                            "dimension": criterion.dimension, "criterion": criterion.name,
-                            "explanation": criterion.explanation,
+                            "profileKey": profile_key, "activity": activity["name"],
+                            "dimension": criterion["dimension"], "criterion": criterion["name"],
+                            "explanation": criterion["explanation"],
                             "evaluator": f"Admin: {evaluation['updatedBy']}",
-                            "grade": evaluation["responses"].get(criterion.key, ""),
-                            "rawResult": f"{raw_value} {criterion.unit}".strip() if raw_value != "" else "",
+                            "grade": evaluation["responses"].get(criterion["key"], ""),
+                            "rawResult": f"{raw_value} {criterion['unit']}".strip() if raw_value != "" else "",
                             "status": "Official admin evaluation",
                         })
         audit.extend(deepcopy(journey["audit"]))

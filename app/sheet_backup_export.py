@@ -181,10 +181,31 @@ def build_export(engine, system_id):
                 version = next((v for v in raw['assessment_system_versions'] if v['version'] == system['published_version']), None)
                 definition_token = activate_assessment_definition(load_stored_definition(
                     json.loads(version['definition_json'] if version else system['draft_json'])))
-                management_source = load_management_report_source(db, include_criteria=True)
+                from .services import result_snapshot
+                from .routes_viewer import _aggregate_results
+                technical_journeys = list(db.scalars(
+                    select(models.Journey).where(models.Journey.system_id == system_id)
+                ))
+                technical_snapshots = [
+                    (journey, result_snapshot(db, journey, include_criteria=True))
+                    for journey in technical_journeys
+                ]
+                snapshots_by_id = {journey.id: snapshot for journey, snapshot in technical_snapshots}
+                management_source = load_management_report_source(
+                    db,
+                    include_criteria=True,
+                    known_snapshots=snapshots_by_id,
+                )
                 presentation_payload = redact(build_management_report_payload(management_source))
-                results = redact(list(management_source.result_snapshots))
-                completed = redact(management_source.combined_results)
+                results = redact([
+                    {**snapshot, 'journeyId': journey.id, 'journeyName': journey.name}
+                    for journey, snapshot in technical_snapshots
+                ])
+                completed = redact(_aggregate_results([
+                    (journey, snapshot)
+                    for journey, snapshot in technical_snapshots
+                    if journey.status == 'completed'
+                ]))
                 events = list(db.scalars(select(models.AuditEvent).where(models.AuditEvent.system_id == system_id).order_by(models.AuditEvent.created_at)))
                 safe_events = []
                 for event in events:
