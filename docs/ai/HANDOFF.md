@@ -327,3 +327,12 @@ Oregon 51-row parity and preview/cancel passed. Main browser requires login;
 no production grades were edited. See MANAGEMENT_CORRECTIONS_ROLLOUT.md for
 deployment IDs, evidence and rollback limitations. Older scoring code is not
 a safe score-equivalent rollback after corrections are used.
+
+## Interactive Google Sheet management views — 2026-10-06
+
+- Every verified manual backup now publishes **Results** first and **Recruit Profiles** second, both scoped to completed Journees. **Backup - Backup summary** is third; the remaining readable and technical backup tabs retain their relative order and restoration semantics.
+- The Excel and Google presentations consume one primitive management payload captured inside the same database snapshot as `_results` and `_completed_results`. Duplicate recruit labels remain deterministic and lookups use `journeyId:recruitId`.
+- Presentation rows are literal `RAW` data. The signed protocol adds allowlisted `results-v1` and `recruit-profiles-v1` descriptors plus `layout`/`verifyLayout` operations at version 1. The receiver alone constructs fixed formulas, validations, conditional formatting, radar charts, selector-only protection and the initial verified profile image.
+- The private standalone Apps Script owns one installable `profileSelectionChanged` edit trigger. `authorizeBackup` now installs it idempotently and requires the `script.scriptapp` scope. It reacts only to the published owned **Recruit Profiles** sheet at `B3`/`E3`, resets stale recruit selections, and verifies bounded PNG chunks before replacing the managed image.
+- Replay after a lost acknowledgement replaces, rather than appends, managed charts, rules, protection and the profile image. Publication still requires complete literal, record, photo and presentation-layout verification.
+- Deployment acceptance must use the exact tested commit on both Virginia and Oregon. Oregon is the primary live surface: update the existing Apps Script deployment, reauthorize once, confirm exactly one edit trigger, run the Oregon manual backup through the read-back-success message, then verify selectors, charts, photos, protection and tab order in the live spreadsheet.

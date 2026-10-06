@@ -89,3 +89,40 @@ def test_transient_upload_failure_retains_operation_for_retry(client, connected,
     monkeypatch.setattr(FakeReceiver, 'call', original)
     assert client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).json()['progress'] == 1
     assert client.post(f'/api/admin/sheet-backup/{job}/cancel', headers=connected).json()['state'] == 'cancelled'
+
+
+def test_interactive_layout_progress_copy_and_retry_resume_exact_step(client, connected, monkeypatch):
+    operations = [
+        {'kind': 'prepare'},
+        {'kind': 'layout', 'tab': 'Results'},
+        {'kind': 'verifyLayout', 'tab': 'Results'},
+        {'kind': 'publish'},
+    ]
+    monkeypatch.setattr(jobs, 'encode_operations', lambda export: iter(operations))
+    job = client.post('/api/admin/sheet-backup/start', headers=connected).json()['jobId']
+    assert client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).json()['message'] == 'Preparing spreadsheet tabs…'
+
+    original = FakeReceiver.call
+    failed = False
+    attempted = []
+    def fail_layout_once(self, action, payload):
+        nonlocal failed
+        if action == 'apply':
+            attempted.append(payload.get('operation', {}).get('kind'))
+        if action == 'apply' and payload.get('operation', {}).get('kind') == 'layout' and not failed:
+            failed = True
+            raise RuntimeError('temporary layout acknowledgement loss')
+        return original(self, action, payload)
+    monkeypatch.setattr(FakeReceiver, 'call', fail_layout_once)
+    assert client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).status_code == 502
+    monkeypatch.setattr(FakeReceiver, 'call', original)
+    layout = client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).json()
+    assert layout['progress'] == 2
+    assert layout['message'] == 'Building interactive management views…'
+    verified = client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).json()
+    assert verified['message'] == 'Verifying interactive management views…'
+    complete = client.post(f'/api/admin/sheet-backup/{job}/advance', headers=connected).json()
+    assert complete['message'] == 'Backup complete. Google read-back verification passed.'
+    assert attempted == ['layout']
+    applied = [payload['operation']['kind'] for action, payload in FakeReceiver.calls if action == 'apply']
+    assert applied == ['prepare', 'layout', 'verifyLayout', 'publish']

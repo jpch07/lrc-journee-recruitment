@@ -38,7 +38,7 @@ def test_backup_ui_states_and_responsive_layout(tmp_path):
                 if(url.endsWith('/start')) return {jobId:'example',state:'running',progress:0,total:2};
                 if(url.endsWith('/advance')) {
                   if(failOnce) {failOnce=false; throw new Error('Connection interrupted. Retry safely.');}
-                  steps++; return {jobId:'example',state:steps===2?'complete':'running',progress:steps,total:2,message:steps===2?'Backup complete.':'Uploading…'};
+                  steps++; return {jobId:'example',state:steps===2?'complete':'running',progress:steps,total:2,message:steps===2?'Backup complete. Google read-back verification passed.':'Building interactive management views…'};
                 }
                 return {configured:true,connected:true,state:'ready',lastComplete:null};
               };
@@ -50,7 +50,7 @@ def test_backup_ui_states_and_responsive_layout(tmp_path):
             button.click()
             page.get_by_role('button', name='Retry upload').wait_for()
             page.get_by_role('button', name='Retry upload').click()
-            page.get_by_text('Backup complete.', exact=True).wait_for()
+            page.get_by_text('Backup complete. Google read-back verification passed.', exact=True).wait_for()
             assert page.get_by_text('No completed backup verified yet.', exact=True).count() == 0
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             screenshot = ROOT / '.impeccable/review' / f'sheet-backup-{name}.png'

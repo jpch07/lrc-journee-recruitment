@@ -114,11 +114,68 @@ def test_real_export_protocol_runs_through_google_simulator(client):
         result=receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000);
       });
       assert.equal(result.state,'complete');
+      const state=JSON.parse(env.props.getProperty('RUN'));
+      assert.deepEqual(state.tabs.slice(0,3).map(tab=>tab.name),['Results','Recruit Profiles','Backup summary']);
+      const results=env.ss.getSheetByName('Results'),profiles=env.ss.getSheetByName('Recruit Profiles');
+      assert.ok(results.getRange('A6').getFormula());
+      assert.ok(results.getRange('B3').getDataValidation());
+      assert.ok(results.getRange('E3').getDataValidation());
+      assert.equal(results.getCharts().length,0);
+      assert.equal(results.getProtections()[0].getDescription(),'Evalday interactive presentation selectors');
+      assert.deepEqual(results.getProtections()[0].unprotected.sort(),['B3','E3']);
+      assert.equal(profiles.getCharts().length,2);
+      assert.equal(profiles.getImages().length,1);
+      assert.equal(profiles.getProtections()[0].getDescription(),'Evalday interactive presentation selectors');
+      assert.ok(env.ss.getSheetByName('Backup - Backup summary'));
       assert.equal(env.ss.getSheetByName('Backup - Photos').images.length,1);
       assert.ok(env.ss.getSheetByName('My own notes'));
     '''
     result = subprocess.run(['node', '-e', script], input=json.dumps(operations, ensure_ascii=False),
         text=True, encoding='utf-8', capture_output=True, timeout=30, cwd=Path(__file__).parents[1])
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_real_export_retries_same_failed_profile_layout_without_replacing_previous_backup(client):
+    sid, _, _ = seed(client)
+    operations = list(encode_operations(build_export(engine, sid)))
+    script = r'''
+      const fs=require('node:fs'),assert=require('node:assert/strict');
+      const {fakeGoogle}=require('./tests/sheet_backup_receiver.test.cjs');
+      const receiver=require('./integrations/google-sheet-backup/Code.js');
+      const env=fakeGoogle(),operations=JSON.parse(fs.readFileSync(0,'utf8'));
+      function run(runId,injectFailure=false) {
+        receiver.dispatch({action:'begin',runId},env.props,1000);
+        let failed=false;
+        for(let sequence=0;sequence<operations.length;sequence++) {
+          const operation=operations[sequence];
+          if(injectFailure && !failed && operation.kind==='layout' && operation.presentation==='recruit-profiles-v1') {
+            const state=JSON.parse(env.props.getProperty('RUN'));
+            const tab=state.tabs.find(item=>item.name==='Recruit Profiles');
+            const staged=env.ss.getSheetById(tab.id),original=staged.newChart;
+            staged.newChart=()=>{throw new Error('injected layout failure')};
+            assert.throws(()=>receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000),/injected layout failure/);
+            staged.newChart=original;
+            assert.ok(env.ss.getSheetByName('Results'));
+            assert.equal(JSON.parse(env.ss.getDeveloperMetadata().find(item=>item.getKey()==='evalday_backup_published').getValue()).runId,'1'.repeat(32));
+            receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000);
+            failed=true;
+          } else receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000);
+        }
+        return failed;
+      }
+      assert.equal(run('1'.repeat(32)),false);
+      const oldResults=env.ss.getSheetByName('Results').getSheetId();
+      assert.equal(run('2'.repeat(32),true),true);
+      assert.notEqual(env.ss.getSheetByName('Results').getSheetId(),oldResults);
+      const profiles=env.ss.getSheetByName('Recruit Profiles');
+      assert.equal(profiles.getCharts().length,2);
+      assert.equal(profiles.getImages().length,1);
+      assert.equal(profiles.getProtections().filter(item=>item.getDescription()==='Evalday interactive presentation selectors').length,1);
+      assert.equal(JSON.parse(env.ss.getDeveloperMetadata().find(item=>item.getKey()==='evalday_backup_published').getValue()).runId,'2'.repeat(32));
+      assert.ok(env.ss.getSheetByName('My own notes'));
+    '''
+    result = subprocess.run(['node', '-e', script], input=json.dumps(operations, ensure_ascii=False),
+        text=True, encoding='utf-8', capture_output=True, timeout=45, cwd=Path(__file__).parents[1])
     assert result.returncode == 0, result.stdout + result.stderr
 
 
