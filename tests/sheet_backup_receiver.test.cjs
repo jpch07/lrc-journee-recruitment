@@ -81,6 +81,8 @@ function fakeGoogle() {
   const sheets = new Map();
   let documentMetadata = [];
   let failPublish = false;
+  let rejectPerSheetMetadata = false;
+  let rejectSheetList = false;
   const tag = (key,value,id=1,onRemove=()=>{}) => ({getKey:()=>key,getValue:()=>value,getId:()=>id,remove:onRemove});
   const colNumber=value=>[...value.toUpperCase()].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
   const parseA1=value=>{
@@ -93,7 +95,7 @@ function fakeGoogle() {
     const s = {id,title,rows,cols,data:[],formulas:new Map(),validations:new Map(),metadata:owner?[tag('evalday_backup_run',owner)]:[],hidden:false,images:[],
       charts:[],conditionalRules:[],protections:[],merges:[],hiddenColumns:new Set(),frozenRows:0,hiddenGridlines:false,tabColor:null,
       getSheetId(){return this.id}, getName(){return this.title}, getMaxRows(){return this.rows}, getMaxColumns(){return this.cols},
-      getDeveloperMetadata(){return this.metadata},
+      getDeveloperMetadata(){if(rejectPerSheetMetadata)throw new Error('per-sheet metadata lookup rejected');return this.metadata},
       addDeveloperMetadata(key,value){const item=tag(key,value,this.metadata.length+10,()=>{this.metadata=this.metadata.filter(entry=>entry!==item)});this.metadata.push(item);return item},
       getRange(start,col,n,width){
         const bounds=typeof start==='string'?parseA1(start):{row:start,col,rows:n||1,cols:width||1,a1:null};
@@ -135,7 +137,7 @@ function fakeGoogle() {
     sheets.set(id,s); return s;
   };
   add(1,'My own notes');
-  const ss = {getId:()=> '11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0',getSheets:()=>[...sheets.values()], getSheetById:id=>sheets.get(id),
+  const ss = {getId:()=> '11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0',getSheets:()=>{if(rejectSheetList)throw new Error('sheet list lookup rejected');return [...sheets.values()]}, getSheetById:id=>sheets.get(id),
     getSheetByName:name=>[...sheets.values()].find(s=>s.title===name), getDeveloperMetadata:()=>documentMetadata};
   const validationBuilder=()=>{const rule={range:null,rangeObject:null,allowInvalid:true};const builder={requireValueInRange:range=>{rule.range=range.getA1Notation();rule.rangeObject=range;return builder},setAllowInvalid:value=>{rule.allowInvalid=value;return builder},setHelpText:()=>builder,build:()=>({...rule,getCriteriaType:()=> 'VALUE_IN_RANGE',getCriteriaValues:()=>[rule.rangeObject,true],getAllowInvalid:()=>rule.allowInvalid})};return builder};
   const conditionalBuilder=()=>{const rule={text:null,ranges:[]};const builder={whenTextEqualTo:value=>{rule.text=value;return builder},setBackground:()=>builder,setFontColor:()=>builder,setBold:()=>builder,setRanges:ranges=>{rule.ranges=ranges.map(item=>item.getA1Notation());return builder},build:()=>({...rule})};return builder};
@@ -151,6 +153,10 @@ function fakeGoogle() {
     base64Decode:value=>[...Buffer.from(value,'base64')],
     newBlob:value=>({getBytes:()=>[...Buffer.from(value)]})};
   global.Sheets = {Spreadsheets:{
+    get:()=>({sheets:[...sheets.values()].map(sheet=>({
+      properties:{sheetId:sheet.id,title:sheet.title,gridProperties:{rowCount:sheet.rows,columnCount:sheet.cols}},
+      developerMetadata:sheet.metadata.map(item=>({metadataKey:item.getKey(),metadataValue:item.getValue()})),
+    }))}),
     Values:{update:(body,id,range,options)=>{
       assert.equal(options.valueInputOption,'RAW');
       const [,name,row] = range.match(/^'(.+)'!A(\d+)$/);
@@ -176,7 +182,7 @@ function fakeGoogle() {
   const values = {};
   const props = {getProperty:key=>values[key]||null,setProperty:(key,value)=>{values[key]=value},deleteProperty:key=>{delete values[key]}};
   return {ss,props,add,publish:runId=>{documentMetadata=[tag('evalday_backup_published',JSON.stringify({runId}),99)]},triggers:()=>[...triggers],
-    failPublish:value=>{failPublish=value},remove:id=>sheets.delete(id)};
+    failPublish:value=>{failPublish=value},rejectPerSheetMetadata:value=>{rejectPerSheetMetadata=value},rejectSheetList:value=>{rejectSheetList=value},remove:id=>sheets.delete(id)};
 }
 
 const digest = value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -254,6 +260,22 @@ test('lost prepare state retries within capacity without allocating twice', () =
   env.props.setProperty('RUN',before); // Google committed, script state write was lost.
   assert.equal(apply().next,1);
   assert.equal(env.ss.getSheets().length,2);
+});
+
+test('lost prepare response reconciles staging from one inventory without per-sheet metadata calls', () => {
+  const env=fakeGoogle(),runId='a6'.repeat(16);
+  receiver.dispatch({action:'begin',runId},env.props,1000);
+  const before=env.props.getProperty('RUN');
+  const tabs=Array.from({length:37},(_,index)=>({name:`Tab ${index}`,rows:2,cols:2}));
+  const operation={kind:'prepare',tabs,manifest:{photoCount:0,snapshotAt:'2026-10-06T00:00:00Z',workspaceName:'Test',recordsSha256:'x',recordChain:'',recordCount:0}};
+  const apply=()=>receiver.dispatch({action:'apply',runId,sequence:0,operation},env.props,1000);
+  assert.equal(apply().next,1);
+  env.props.setProperty('RUN',before); // Google committed, but the receiver response/state acknowledgement was lost.
+  env.rejectPerSheetMetadata(true);
+  env.rejectSheetList(true);
+  assert.equal(apply().next,1);
+  env.rejectSheetList(false);
+  assert.equal(env.ss.getSheets().length,38);
 });
 
 test('publishing works when only the old backup has a visible tab', () => {

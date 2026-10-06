@@ -98,6 +98,23 @@ function doPost(event) {
 }
 
 function meta(sheet, key) { return sheet.getDeveloperMetadata().find(m => m.getKey() === key); }
+function sheetInventory() {
+  const response = Sheets.Spreadsheets.get(BACKUP_SHEET, {fields:'sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),developerMetadata(metadataKey,metadataValue))'});
+  const sheets = Array.isArray(response.sheets) ? response.sheets : [];
+  if (!sheets.length) fail('VERIFY');
+  const inventory = new Map();
+  sheets.forEach(item => {
+    const properties = item.properties || {}, grid = properties.gridProperties || {};
+    const owners = (item.developerMetadata || []).filter(entry => entry.metadataKey === OWNED_KEY);
+    const id=Number(properties.sheetId), title=String(properties.title || ''), rows=Number(grid.rowCount), cols=Number(grid.columnCount);
+    if (!Number.isInteger(id) || id<0 || inventory.has(id) || !title || !Number.isInteger(rows) || rows<1 || !Number.isInteger(cols) || cols<1) fail('VERIFY');
+    inventory.set(id, {
+      title, rows, cols,
+      owner:owners.length === 1 ? owners[0].metadataValue : null,
+    });
+  });
+  return inventory;
+}
 function published(ss) {
   const marker = ss.getDeveloperMetadata().find(m => m.getKey() === PUBLISHED_KEY);
   return marker ? JSON.parse(marker.getValue()) : null;
@@ -542,28 +559,28 @@ function applyOperation(op, state, ss) {
     // only our exact deterministic staging allocation, rather than counting it twice.
     validateTabs(op.tabs, 0);
     const base = parseInt(state.runId.slice(0,7),16)*4;
+    const inventory = sheetInventory();
     const reused = new Set();
     op.tabs.forEach((t,index) => {
-      const sheet = ss.getSheetById(base+index);
+      const id = base+index, sheet = inventory.get(id);
       if (!sheet) return;
-      if (!meta(sheet,OWNED_KEY) || meta(sheet,OWNED_KEY).getValue() !== state.runId ||
-          sheet.getName() !== stageTitle(state,t.name) || sheet.getMaxRows() !== t.rows || sheet.getMaxColumns() !== t.cols) fail('COLLISION');
-      reused.add(base+index);
+      if (sheet.owner !== state.runId || sheet.title !== stageTitle(state,t.name) || sheet.rows !== t.rows || sheet.cols !== t.cols) fail('COLLISION');
+      reused.add(id);
     });
-    validateTabs(op.tabs, ss.getSheets().reduce((n,s) => n+(reused.has(s.getSheetId()) ? 0 : s.getMaxRows()*s.getMaxColumns()),0));
+    validateTabs(op.tabs, [...inventory].reduce((n,[id,s]) => n+(reused.has(id) ? 0 : s.rows*s.cols),0));
     const current = published(ss);
+    const byTitle = new Map([...inventory.values()].map(sheet => [sheet.title,sheet]));
     op.tabs.forEach(t => {
-      const collision = ss.getSheetByName(finalTitle(t));
-      if (collision && (!meta(collision,OWNED_KEY) || meta(collision,OWNED_KEY).getValue() !== (current || {}).runId)) fail('COLLISION');
+      const collision = byTitle.get(finalTitle(t));
+      if (collision && collision.owner !== (current || {}).runId) fail('COLLISION');
     });
-    const existingIds = new Set(ss.getSheets().map(s=>s.getSheetId()));
+    const existingIds = new Set(inventory.keys());
     // Deterministic IDs make a retried prepare safe after a lost response.
     const requests = [];
     state.tabs = op.tabs.map((t,index) => {
       const id = base+index;
       if (existingIds.has(id)) {
-        const sheet = ss.getSheetById(id);
-        if (!meta(sheet,OWNED_KEY) || meta(sheet,OWNED_KEY).getValue() !== state.runId) fail('COLLISION');
+        if (inventory.get(id).owner !== state.runId) fail('COLLISION');
       } else {
         requests.push({addSheet:{properties:{sheetId:id,title:stageTitle(state,t.name),hidden:true,
           gridProperties:{rowCount:t.rows,columnCount:t.cols,frozenRowCount:t.rows>1 ? 1 : 0}}}});
