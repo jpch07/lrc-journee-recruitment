@@ -77,6 +77,18 @@ test('literal data verifies without evaluating formulas or discarding blank cell
   assert.throws(() => receiver.verifyRows([['kept']], [['changed']]), /VERIFY/);
 });
 
+test('row writes verify through Sheets when SpreadsheetApp still serves a stale cache', () => {
+  const env=fakeGoogle(),runId='d'.repeat(32),rows=[['Selection','',''],['All completed Journees|Alex','=IMPORTXML("bad")','']];
+  receiver.dispatch({action:'begin',runId},env.props,1000);
+  receiver.dispatch({action:'apply',runId,sequence:0,operation:{kind:'prepare',tabs:[{name:'Example',rows:2,cols:3}],manifest:{}}},env.props,1000);
+  env.staleSpreadsheetReads(true);
+  const result=receiver.dispatch({action:'apply',runId,sequence:1,operation:{kind:'rows',tab:'Example',start:1,rows}},env.props,1000);
+  assert.equal(result.next,2);
+  const verified=receiver.dispatch({action:'apply',runId,sequence:2,operation:{kind:'verifyCells',tab:'Example',start:1,count:2,sha256:digest(JSON.stringify(rows))}},env.props,1000);
+  assert.equal(verified.next,3);
+  assert.deepEqual(env.ss.getSheetByName('_stage_dddddddddddd_Example').data,rows);
+});
+
 function fakeGoogle() {
   const sheets = new Map();
   let documentMetadata = [];
@@ -84,6 +96,7 @@ function fakeGoogle() {
   let rejectPerSheetMetadata = false;
   let rejectSheetList = false;
   let omitDefaultSheetId = false;
+  let staleSpreadsheetReads = false;
   const tag = (key,value,id=1,onRemove=()=>{}) => ({getKey:()=>key,getValue:()=>value,getId:()=>id,remove:onRemove});
   const colNumber=value=>[...value.toUpperCase()].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
   const parseA1=value=>{
@@ -105,7 +118,8 @@ function fakeGoogle() {
           sheet:this,bounds,getSheet:()=>this,
           getRow:()=>bounds.row,getColumn:()=>bounds.col,getNumRows:()=>bounds.rows,getNumColumns:()=>bounds.cols,
           getA1Notation:()=>bounds.a1||`${bounds.row}:${bounds.col}:${bounds.rows}:${bounds.cols}`,
-          getValues:()=>Array.from({length:bounds.rows},(_,i)=>Array.from({length:bounds.cols},(_,j)=>this.data[bounds.row+i-1]?.[bounds.col+j-1]??'')),
+          getValues:()=>Array.from({length:bounds.rows},(_,i)=>Array.from({length:bounds.cols},(_,j)=>
+            staleSpreadsheetReads ? '' : this.data[bounds.row+i-1]?.[bounds.col+j-1]??'')),
           getValue:()=>this.data[bounds.row-1]?.[bounds.col-1]??'',
           setValues:values=>{values.forEach((row,i)=>row.forEach((value,j)=>{this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]=value;this.formulas.delete(key(bounds.row+i,bounds.col+j));}));return range},
           setValue:value=>range.setValues([[value]]),
@@ -158,12 +172,24 @@ function fakeGoogle() {
       properties:{...(omitDefaultSheetId && sheet.id===0 ? {} : {sheetId:sheet.id}),title:sheet.title,gridProperties:{rowCount:sheet.rows,columnCount:sheet.cols}},
       developerMetadata:sheet.metadata.map(item=>({metadataKey:item.getKey(),metadataValue:item.getValue()})),
     }))}),
-    Values:{update:(body,id,range,options)=>{
-      assert.equal(options.valueInputOption,'RAW');
-      const [,name,row] = range.match(/^'(.+)'!A(\d+)$/);
-      const s=ss.getSheetByName(name);
-      body.values.forEach((r,i)=>s.data[Number(row)-1+i]=r);
-    }},
+    Values:{
+      update:(body,id,range,options)=>{
+        assert.equal(options.valueInputOption,'RAW');
+        const [,name,row] = range.match(/^'(.+)'!A(\d+)(?::[A-Z]+\d+)?$/);
+        const s=ss.getSheetByName(name.replace(/''/g,"'"));
+        body.values.forEach((r,i)=>s.data[Number(row)-1+i]=r);
+      },
+      get:(id,range,options)=>{
+        assert.equal(options.valueRenderOption,'UNFORMATTED_VALUE');
+        assert.equal(options.dateTimeRenderOption,'SERIAL_NUMBER');
+        const [,name,startRow,endCol,endRow] = range.match(/^'(.+)'!A(\d+):([A-Z]+)(\d+)$/);
+        const s=ss.getSheetByName(name.replace(/''/g,"'")), width=colNumber(endCol);
+        const values=Array.from({length:Number(endRow)-Number(startRow)+1},(_,i)=>(s.data[Number(startRow)-1+i]||[]).slice(0,width));
+        values.forEach(row=>{while(row.length && (row.at(-1)===null || row.at(-1)===''))row.pop()});
+        while(values.length && !values.at(-1).length)values.pop();
+        return {values};
+      },
+    },
     batchUpdate:({requests})=>{
       if(failPublish && requests.some(r=>r.createDeveloperMetadata?.developerMetadata?.metadataKey==='evalday_backup_published')) throw new Error('provider failure');
       requests.forEach(r=>{
@@ -184,7 +210,7 @@ function fakeGoogle() {
   const props = {getProperty:key=>values[key]||null,setProperty:(key,value)=>{values[key]=value},deleteProperty:key=>{delete values[key]}};
   return {ss,props,add,publish:runId=>{documentMetadata=[tag('evalday_backup_published',JSON.stringify({runId}),99)]},triggers:()=>[...triggers],
     failPublish:value=>{failPublish=value},rejectPerSheetMetadata:value=>{rejectPerSheetMetadata=value},rejectSheetList:value=>{rejectSheetList=value},
-    omitDefaultSheetId:value=>{omitDefaultSheetId=value},remove:id=>sheets.delete(id)};
+    omitDefaultSheetId:value=>{omitDefaultSheetId=value},staleSpreadsheetReads:value=>{staleSpreadsheetReads=value},remove:id=>sheets.delete(id)};
 }
 
 const digest = value=>crypto.createHash('sha256').update(value).digest('hex');

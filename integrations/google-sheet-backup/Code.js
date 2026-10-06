@@ -177,6 +177,16 @@ function columnLetter(column) {
   while (column > 0) { column--; value = String.fromCharCode(65 + column % 26) + value; column = Math.floor(column / 26); }
   return value;
 }
+function valueRange(sheet, start, rows, cols) {
+  const title=sheet.getName().replace(/'/g,"''");
+  return `'${title}'!A${start}:${columnLetter(cols)}${start+rows-1}`;
+}
+function readValueRows(range, rows, cols) {
+  const response=Sheets.Spreadsheets.Values.get(BACKUP_SHEET,range,{valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'});
+  const values=Array.isArray(response.values) ? response.values : [];
+  return Array.from({length:rows},(_,r)=>Array.from({length:cols},(_,c)=>
+    Array.isArray(values[r]) && values[r][c] != null ? values[r][c] : ''));
+}
 function exactKeys(value, allowed) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).some(key=>!allowed.includes(key)) || allowed.some(key=>!(key in value))) fail('TABS');
@@ -613,8 +623,9 @@ function applyOperation(op, state, ss) {
     if (!t || op.start !== t.written+1 || !Array.isArray(op.rows) || !op.rows.length || op.start+op.rows.length-1>t.rows ||
         op.rows.some(r=>r.length!==t.cols || r.some(c=>typeof c!=='string' || c.length>49000))) fail('SEQUENCE');
     const sheet = stage(ss,state,op.tab);
-    Sheets.Spreadsheets.Values.update({values:op.rows}, BACKUP_SHEET, `'${sheet.getName()}'!A${op.start}`, {valueInputOption:'RAW'});
-    verifyRows(op.rows,sheet.getRange(op.start,1,op.rows.length,t.cols).getValues());
+    const range=valueRange(sheet,op.start,op.rows.length,t.cols);
+    Sheets.Spreadsheets.Values.update({values:op.rows}, BACKUP_SHEET, range, {valueInputOption:'RAW'});
+    verifyRows(op.rows,readValueRows(range,op.rows.length,t.cols));
     t.written += op.rows.length;
     return;
   }
@@ -622,7 +633,8 @@ function applyOperation(op, state, ss) {
     const t = state.tabs.find(t=>t.name===op.tab);
     if (!t || t.written!==t.rows || op.start!==t.verified+1 || !Number.isInteger(op.count) ||
         op.count<1 || op.start+op.count-1>t.rows) fail('SEQUENCE');
-    const rows = stage(ss,state,op.tab).getRange(op.start,1,op.count,t.cols).getValues().map(r=>r.map(String));
+    const sheet=stage(ss,state,op.tab), range=valueRange(sheet,op.start,op.count,t.cols);
+    const rows = readValueRows(range,op.count,t.cols).map(r=>r.map(String));
     if (hash(JSON.stringify(rows))!==op.sha256) fail('VERIFY');
     t.verified += op.count;
     return;
