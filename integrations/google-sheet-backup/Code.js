@@ -138,6 +138,15 @@ function stage(ss, state, name) {
 }
 function applyOperation(op, state, ss) {
   if (!op || typeof op.kind !== 'string') fail('SEQUENCE');
+  if (op.kind === 'batch') {
+    if (!Array.isArray(op.operations) || !op.operations.length || op.operations.length>8 ||
+        op.operations.some(item=>!item || item.kind==='batch' || item.kind==='prepare' || item.kind==='publish')) fail('SEQUENCE');
+    // Each child is independently idempotent. If an invocation stops before
+    // state persistence, replay overwrites the same rows and replaces images
+    // at the same anchors before the sequence advances.
+    op.operations.forEach(item=>applyOperation(item,state,ss));
+    return;
+  }
   if (op.kind === 'prepare') {
     if (state.tabs.length) fail('SEQUENCE');
     // A Google batch may have committed before state persistence failed. Reuse
@@ -211,14 +220,21 @@ function applyOperation(op, state, ss) {
   if (op.kind === 'verifyRecords') {
     const t = state.tabs.find(t=>t.name==='_Records');
     if (!t || t.verified!==t.rows || op.start!==state.verifiedRecordRows+2 ||
-        !Array.isArray(op.records) || !op.records.length || op.records.length>40) fail('SEQUENCE');
-    let cursor = op.start;
+        !Array.isArray(op.records) || !op.records.length || op.records.length>200) fail('SEQUENCE');
+    let totalRows = 0;
+    op.records.forEach(item => {
+      const n = Number(item[2]);
+      if (!Number.isInteger(n) || n<1) fail('VERIFY');
+      totalRows += n;
+    });
+    if (totalRows>1000 || op.start+totalRows-1>t.rows) fail('VERIFY');
     const sheet = stage(ss,state,'_Records');
+    const allRows = sheet.getRange(op.start,1,totalRows,6).getValues();
+    let offset = 0;
     op.records.forEach(item => {
       const [table,index,count,digest] = item;
       const n = Number(count);
-      if (!Number.isInteger(n) || n<1 || cursor+n-1>t.rows) fail('VERIFY');
-      const rows = sheet.getRange(cursor,1,n,6).getValues();
+      const rows = allRows.slice(offset,offset+n);
       if (rows.some((r,i)=>r[0]!==table || String(r[1])!==index || String(r[2])!==String(i) ||
           String(r[3])!==count || r[4]!==digest)) fail('VERIFY');
       const content = rows.map(r=>r[5]).join('');
@@ -227,7 +243,7 @@ function applyOperation(op, state, ss) {
       state.recordChain = hash(state.recordChain+hash(JSON.stringify(item)));
       state.verifiedRecords++;
       state.verifiedRecordRows += n;
-      cursor += n;
+      offset += n;
     });
     return;
   }

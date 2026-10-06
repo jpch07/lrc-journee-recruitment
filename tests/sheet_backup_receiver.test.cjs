@@ -27,6 +27,21 @@ test('lease and sequence guards fence old jobs and make retries idempotent', () 
   assert.equal(receiver.checkSequence(active, 2, 'next'), 'next');
 });
 
+test('batched operations replay safely after state persistence is lost', () => {
+  const env=fakeGoogle(),runId='a'.repeat(32),ops=operations();
+  const apply=(sequence,operation)=>receiver.dispatch({action:'apply',runId,sequence,operation},env.props,1000);
+  receiver.dispatch({action:'begin',runId},env.props,1000);
+  apply(0,ops[0]);
+  const beforeBatch=env.props.getProperty('RUN');
+  const batch={kind:'batch',operations:ops.slice(1,-1)};
+  assert.equal(apply(1,batch).next,2);
+  env.props.setProperty('RUN',beforeBatch);
+  assert.equal(apply(1,batch).next,2);
+  assert.throws(()=>apply(2,{kind:'batch',operations:[{kind:'publish'}]}),/SEQUENCE/);
+  assert.equal(apply(2,ops.at(-1)).state,'complete');
+  assert.equal(env.ss.getSheetByName('Backup - Example').data[1][1],'Original');
+});
+
 test('preflight retains old data and rejects oversize or ambiguous tabs', () => {
   assert.throws(() => receiver.validateTabs([{name:'One',rows:5e6,cols:5}], 10), /CAPACITY/);
   assert.throws(() => receiver.validateTabs([{name:'One',rows:1,cols:1},{name:'One',rows:1,cols:1}], 0), /TABS/);

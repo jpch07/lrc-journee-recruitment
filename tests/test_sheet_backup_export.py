@@ -13,7 +13,7 @@ from app.db import SessionLocal, engine
 from app.models import (AssessmentSystem, AuditEvent, GeneralAssessment, Recruit,
                         Journey, RoomPlan, RoomPlanRecruit, PlatformAccount, UserAccount)
 from app.services import create_journey
-from app.sheet_backup_export import build_export, encode_operations, reconstruct_records, BackupError, redact
+from app.sheet_backup_export import build_export, encode_operations, reconstruct_records, BackupError, redact, json_text
 from test_viewer_performance_c1 import _login
 
 
@@ -53,6 +53,11 @@ def seed(client):
         return system.id, recruit.id, photo
 
 
+def flattened(operations):
+    for operation in operations:
+        yield from operation.get('operations', [operation])
+
+
 def test_complete_scoped_roundtrip(client):
     sid, rid, photo = seed(client)
     export = build_export(engine, sid)
@@ -76,7 +81,10 @@ def test_complete_scoped_roundtrip(client):
     assert any(t['name'] == 'Results' for t in export['tabs'])
     operations = list(encode_operations(export))
     assert operations[-1]['kind'] == 'publish'
-    assert all(len(json.dumps(op).encode()) < 1_500_000 for op in operations)
+    assert all(len(json_text(op).encode()) < 1_300_000 for op in operations)
+    assert all(len(op.get('operations', [])) <= 8 for op in operations)
+    assert all(op['kind'] != 'batch' or all(child['kind'] not in ('prepare', 'publish', 'batch')
+               for child in op['operations']) for op in operations)
 
 
 def test_real_export_protocol_runs_through_google_simulator(client):
@@ -143,7 +151,7 @@ def test_nested_redaction_preserves_grades():
 def test_export_cells_fit_google_limit_even_for_long_result_notes(client):
     sid, _, _ = seed(client)
     export = build_export(engine, sid)
-    for op in encode_operations(export):
+    for op in flattened(encode_operations(export)):
         if op['kind'] == 'rows':
             assert all(len(cell.encode('utf-16-le')) // 2 < 49000 for row in op['rows'] for cell in row), op['tab']
 

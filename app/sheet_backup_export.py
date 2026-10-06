@@ -358,7 +358,7 @@ def reconstruct_records(rows):
     return restored
 
 
-def encode_operations(export):
+def _encode_operations(export):
     # Verify local reconstruction before constructing the upload protocol.
     if reconstruct_records(export['technical_rows']) != export['records']:
         raise BackupError('Technical reconstruction differs from the source snapshot.')
@@ -385,7 +385,7 @@ def encode_operations(export):
         for row in tab['rows']:
             row = [str(c) for c in row]
             n = len(json_text(row).encode('utf-8'))
-            if batch and (size + n > 180_000 or len(batch) >= 150):
+            if batch and (size + n > 180_000 or len(batch) >= 1000):
                 yield {'kind': 'rows', 'tab': tab['name'], 'start': start, 'rows': batch}
                 verifications.append({'kind': 'verifyCells', 'tab': tab['name'], 'start': start,
                     'count': len(batch), 'sha256': sha256(json_text(batch).encode('utf-8')).hexdigest()})
@@ -408,7 +408,7 @@ def encode_operations(export):
     batch, size = [], 0
     for item in record_checks:
         count = int(item[2])
-        if batch and (len(batch) >= 40 or size + count > 150):
+        if batch and (len(batch) >= 200 or size + count > 1000):
             yield {'kind': 'verifyRecords', 'start': start, 'records': batch}
             start += size
             batch, size = [], 0
@@ -417,3 +417,29 @@ def encode_operations(export):
     if batch:
         yield {'kind': 'verifyRecords', 'start': start, 'records': batch}
     yield {'kind': 'publish'}
+
+
+def encode_operations(export):
+    """Group retry-safe operations to avoid one Apps Script startup per small batch."""
+    pending = []
+
+    def grouped(operations):
+        return operations[0] if len(operations) == 1 else {'kind': 'batch', 'operations': operations}
+
+    for operation in _encode_operations(export):
+        if operation['kind'] in ('prepare', 'publish'):
+            if pending:
+                yield grouped(pending)
+                pending = []
+            yield operation
+            continue
+        candidate = {'kind': 'batch', 'operations': [*pending, operation]}
+        # The signed request is base64 encoded. Keep ample room below the
+        # receiver's two-million-character envelope ceiling.
+        if pending and (len(pending) >= 8 or len(json_text(candidate).encode('utf-8')) > 1_250_000):
+            yield grouped(pending)
+            pending = [operation]
+        else:
+            pending.append(operation)
+    if pending:
+        yield grouped(pending)

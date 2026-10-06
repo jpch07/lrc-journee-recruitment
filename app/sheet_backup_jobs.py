@@ -134,12 +134,13 @@ def advance_job(job, receiver):
             raise BackupError('Google acknowledged an unexpected backup sequence.')
         job.progress += 1
         job.state = 'complete' if op['kind'] == 'publish' else 'running'
+        display_op = op['operations'][-1] if op['kind'] == 'batch' else op
         job.message = {
-            'prepare': 'Preparing spreadsheet tabs…', 'rows': f"Backing up {op.get('tab', 'records')}…",
+            'prepare': 'Preparing spreadsheet tabs…', 'rows': f"Backing up {display_op.get('tab', 'records')}…",
             'image': 'Embedding photo previews…', 'verifyPhoto': 'Verifying original photo bytes…',
             'verifyCells': 'Checking the stored spreadsheet data…', 'verifyRecords': 'Verifying complete record reconstruction…',
             'publish': 'Backup complete. Google read-back verification passed.',
-        }.get(op['kind'], 'Backing up…')
+        }.get(display_op['kind'], 'Backing up…')
         if job.state == 'complete':
             job.close()
         return job.public()
