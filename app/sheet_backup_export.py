@@ -420,7 +420,8 @@ def _encode_operations(export):
     for tab in tabs:
         if tab.get('presentation'):
             yield layout_operation(tab)
-            yield {'kind': 'verifyLayout', 'version': 1, 'tab': tab['name'], 'presentation': tab['presentation']}
+            yield {'kind': 'verifyLayout', 'version': 1, 'tab': tab['name'], 'presentation': tab['presentation'],
+                   'layout': tab['layout']}
     yield {'kind': 'publish'}
 
 

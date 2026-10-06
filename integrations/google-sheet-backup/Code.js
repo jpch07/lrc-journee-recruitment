@@ -6,6 +6,11 @@ const BACKUP_SHEET = '11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0';
 const LEASE_SECONDS = 900;
 const OWNED_KEY = 'evalday_backup_run';
 const PUBLISHED_KEY = 'evalday_backup_published';
+const LAYOUT_PROTECTION = 'Evalday interactive presentation selectors';
+const PRESENTATIONS = {
+  'results-v1': {name:'Results', finalTitle:'Results'},
+  'recruit-profiles-v1': {name:'Recruit Profiles', finalTitle:'Recruit Profiles'},
+};
 
 function fail(code) { throw new Error(code); }
 function hex(bytes) { return bytes.map(b => ((b + 256) % 256).toString(16).padStart(2, '0')).join(''); }
@@ -34,13 +39,24 @@ function checkSequence(state, sequence, digest) {
   if (sequence !== state.next) fail('SEQUENCE');
   return 'next';
 }
+function finalTitle(descriptor) {
+  if (!descriptor || typeof descriptor.name !== 'string') fail('TABS');
+  if (!descriptor.presentation) return `Backup - ${descriptor.name}`;
+  const expected = PRESENTATIONS[descriptor.presentation];
+  if (!expected || descriptor.version !== 1 || descriptor.name !== expected.name ||
+      descriptor.finalTitle !== expected.finalTitle || descriptor.hidden) fail('TABS');
+  return expected.finalTitle;
+}
 function validateTabs(tabs, existingCells) {
   if (!Array.isArray(tabs) || !tabs.length || tabs.length > 60) fail('TABS');
   const names = new Set();
   let cells = 0;
   tabs.forEach(t => {
+    const presentation = !!t.presentation;
+    const maximumColumns = presentation ? 128 : 60;
     if (typeof t.name !== 'string' || !/^[A-Za-z0-9 _-]{1,60}$/.test(t.name) || names.has(t.name) ||
-        !Number.isInteger(t.rows) || t.rows < 1 || !Number.isInteger(t.cols) || t.cols < 1 || t.cols > 60) fail('TABS');
+        !Number.isInteger(t.rows) || t.rows < 1 || !Number.isInteger(t.cols) || t.cols < 1 || t.cols > maximumColumns) fail('TABS');
+    finalTitle(t);
     names.add(t.name); cells += t.rows*t.cols;
   });
   // Conservative ceiling; never depend on a newly increased account limit.
@@ -136,11 +152,260 @@ function stage(ss, state, name) {
   if (!sheet || !meta(sheet, OWNED_KEY) || meta(sheet, OWNED_KEY).getValue() !== state.runId) fail('VERIFY');
   return sheet;
 }
+function columnLetter(column) {
+  let value = '';
+  while (column > 0) { column--; value = String.fromCharCode(65 + column % 26) + value; column = Math.floor(column / 26); }
+  return value;
+}
+function exactKeys(value, allowed) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).some(key=>!allowed.includes(key)) || allowed.some(key=>!(key in value))) fail('TABS');
+}
+function boundedInteger(value, minimum, maximum) {
+  if (!Number.isInteger(value) || value < minimum || value > maximum) fail('TABS');
+  return value;
+}
+function boundedBlock(block, tab) {
+  exactKeys(block,['startRow','endRow','startCol','endCol']);
+  boundedInteger(block.startRow,1,tab.rows); boundedInteger(block.endRow,block.startRow,tab.rows);
+  boundedInteger(block.startCol,1,tab.cols); boundedInteger(block.endCol,block.startCol,tab.cols);
+  return block;
+}
+function validateLayout(op, tab) {
+  if (!op || op.version !== 1 || op.tab !== tab.name || op.presentation !== tab.presentation || !op.layout) fail('TABS');
+  const l = op.layout;
+  if (tab.presentation === 'results-v1') {
+    exactKeys(l,['selectorCells','headerRow','visibleStartRow','visibleCapacity','frozenRows','helperStartCol','tabColor','columnWidths','blocks']);
+    if (JSON.stringify(l.selectorCells)!==JSON.stringify(['B3','E3']) || l.headerRow!==5 || l.visibleStartRow!==6 ||
+        l.frozenRows!==5 || l.helperStartCol!==13 || l.tabColor!=='GREEN') fail('TABS');
+    boundedInteger(l.visibleCapacity,1,tab.rows-5);
+    if (!Array.isArray(l.columnWidths) || l.columnWidths.length!==10 || l.columnWidths.some(v=>!Number.isInteger(v)||v<40||v>500)) fail('TABS');
+    exactKeys(l.blocks,['results','scopeOptions','viewOptions']);
+    const data=boundedBlock(l.blocks.results,tab), scopes=boundedBlock(l.blocks.scopeOptions,tab), views=boundedBlock(l.blocks.viewOptions,tab);
+    if (data.startCol!==13 || data.endCol!==25 || scopes.startCol!==26 || scopes.endCol!==26 ||
+        views.startCol!==27 || views.endCol!==27 || data.startRow!==1 || scopes.startRow!==1 || views.startRow!==1) fail('TABS');
+  } else if (tab.presentation === 'recruit-profiles-v1') {
+    exactKeys(l,['selectorCells','profileKeyCell','imageAnchor','frozenRows','helperStartCol','tabColor','columnWidths','expectedPreviewCount',
+      'dimensionCount','activityCount','factorCount','evaluatorCapacity','criterionCapacity','auditCapacity','sectionRows','charts','blocks']);
+    if (JSON.stringify(l.selectorCells)!==JSON.stringify(['B3','E3']) || l.profileKeyCell!=='H3' || l.imageAnchor!=='J3' ||
+        l.frozenRows!==7 || l.helperStartCol!==27 || l.tabColor!=='YELLOW') fail('TABS');
+    if (!Array.isArray(l.columnWidths) || l.columnWidths.length!==12 || l.columnWidths.some(v=>!Number.isInteger(v)||v<20||v>500)) fail('TABS');
+    boundedInteger(l.expectedPreviewCount,0,5000); boundedInteger(l.dimensionCount,1,40); boundedInteger(l.activityCount,1,40);
+    boundedInteger(l.factorCount,0,40); boundedInteger(l.evaluatorCapacity,1,500); boundedInteger(l.criterionCapacity,1,116); boundedInteger(l.auditCapacity,1,500);
+    exactKeys(l.sectionRows,['dimension','dimensionHeader','dimensionStart','activity','activityHeader','activityStart','general','generalStart',
+      'evaluator','evaluatorHeader','evaluatorStart','criterion','criterionHeader','criterionStart','audit','auditHeader','auditStart']);
+    Object.values(l.sectionRows).forEach(v=>boundedInteger(v,1,tab.rows));
+    if (!Array.isArray(l.charts) || l.charts.length!==2) fail('TABS');
+    l.charts.forEach((chart,index)=>{
+      exactKeys(chart,['startRow','endRow','labelCol','valueCol','anchor','maximum']);
+      boundedInteger(chart.startRow,1,tab.rows); boundedInteger(chart.endRow,chart.startRow,tab.rows);
+      if (chart.labelCol!==1 || chart.valueCol!==2 || chart.anchor!==(index?'G26':'G8') || !Number.isInteger(chart.maximum) || chart.maximum<1 || chart.maximum>100) fail('TABS');
+    });
+    exactKeys(l.blocks,['summaries','dimensions','activities','evaluators','criteria','audit','scopeOptions','profileOptions','dependentOptions','previews']);
+    Object.values(l.blocks).forEach(block=>boundedBlock(block,tab));
+    const expectedWidths={summaries:24,dimensions:6,activities:6,evaluators:7,criteria:9,audit:7,scopeOptions:1,profileOptions:3,dependentOptions:2,previews:5};
+    Object.entries(expectedWidths).forEach(([key,width])=>{if(l.blocks[key].endCol-l.blocks[key].startCol+1!==width)fail('TABS')});
+    if (l.blocks.summaries.startCol!==27 || Object.values(l.blocks).some(block=>block.startRow!==1)) fail('TABS');
+  } else fail('TABS');
+  return l;
+}
+function blockRange(block, offset, startRow) {
+  const column = columnLetter(block.startCol + offset);
+  return `$${column}$${startRow || block.startRow+1}:$${column}$${block.endRow}`;
+}
+function scalarLookup(key, keyRange, valueRange, blank) {
+  const fallback=(blank===undefined?'—':blank).replace(/"/g,'""');
+  const lookup=`XLOOKUP(${key},${keyRange},${valueRange})`;
+  return `=IFERROR(IF(${lookup}="","${fallback}",${lookup}),"${fallback}")`;
+}
+function indexedFilter(key, keyRange, valueRange, ordinal) {
+  return `=IFERROR(INDEX(FILTER(${valueRange},${keyRange}=${key}),${ordinal}),"")`;
+}
+function setListValidation(sheet, cell, block) {
+  const target=sheet.getRange(cell);
+  target.clearDataValidations();
+  if (block.endRow<=block.startRow) return;
+  const source=sheet.getRange(block.startRow+1,block.startCol,block.endRow-block.startRow,1);
+  target.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(source,true).setAllowInvalid(false)
+    .setHelpText('Choose a value from the managed backup list.').build());
+}
+function textRule(sheet, range, text, background, font) {
+  return SpreadsheetApp.newConditionalFormatRule().whenTextEqualTo(text).setBackground(background).setFontColor(font)
+    .setRanges([sheet.getRange(range)]).build();
+}
+function replaceProtection(sheet) {
+  const owned=sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).filter(item=>
+    ['Backup data managed by the private backup script.',LAYOUT_PROTECTION].includes(item.getDescription()));
+  if (owned.length!==1) fail('VERIFY');
+  owned[0].setDescription(LAYOUT_PROTECTION).setUnprotectedRanges([sheet.getRange('B3'),sheet.getRange('E3')]);
+}
+function styleBase(sheet, tab, layout, span) {
+  sheet.setFrozenRows(layout.frozenRows);
+  sheet.setHiddenGridlines(true);
+  sheet.setTabColor(layout.tabColor==='GREEN'?'#16834B':'#E3AD22');
+  sheet.hideColumns(layout.helperStartCol,tab.cols-layout.helperStartCol+1);
+  layout.columnWidths.forEach((width,index)=>sheet.setColumnWidth(index+1,width));
+  sheet.getRange(1,1,tab.rows,Math.min(span,tab.cols)).setFontFamily('Aptos').setVerticalAlignment('MIDDLE');
+}
+function clearOwnedLayout(sheet, presentation) {
+  sheet.setConditionalFormatRules([]);
+  sheet.getCharts().forEach(chart=>sheet.removeChart(chart));
+  if (presentation==='recruit-profiles-v1') {
+    sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3 && image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
+  }
+}
+function applyResultsLayout(sheet, tab, layout) {
+  clearOwnedLayout(sheet,tab.presentation);
+  styleBase(sheet,tab,layout,10);
+  sheet.getRange('A1:J1').breakApart().merge().setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(18);
+  sheet.getRange('A2:J2').breakApart().merge().setFontColor('#667085').setFontSize(10);
+  ['B3','E3'].forEach(cell=>sheet.getRange(cell).setBackground('#EAF1F8').setFontWeight('bold').setFontColor('#223449'));
+  sheet.getRange('A5:J5').setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setWrap(true);
+  setListValidation(sheet,'B3',layout.blocks.scopeOptions); setListValidation(sheet,'E3',layout.blocks.viewOptions);
+  const block=layout.blocks.results, keyRange=blockRange(block,12), start=layout.visibleStartRow, end=start+layout.visibleCapacity-1;
+  for(let row=start;row<=end;row++) {
+    const ordinal=`ROWS($A$${start}:$A${row})`, key=`$B$3&"|"&$E$3&"|"&${ordinal}`;
+    for(let column=1;column<=10;column++) sheet.getRange(row,column).setFormula(scalarLookup(key,keyRange,blockRange(block,column+1),'')).setWrap(true);
+    if ((row-start)%2) sheet.getRange(row,1,1,10).setBackground('#F7F9FC');
+    sheet.setRowHeight(row,44);
+  }
+  sheet.getRange(start,4,layout.visibleCapacity,1).setNumberFormat('0.00');
+  const rules=[
+    textRule(sheet,`G${start}:G${end}`,'Complete','#E8F5ED','#16834B'),
+    textRule(sheet,`G${start}:G${end}`,'Incomplete','#FFF5D9','#745300'),
+    textRule(sheet,`H${start}:H${end}`,'Green','#E8F5ED','#16834B'),
+    textRule(sheet,`H${start}:H${end}`,'Yellow','#FFF5D9','#745300'),
+    textRule(sheet,`H${start}:H${end}`,'Red','#FCE9ED','#C8102E'),
+  ];
+  sheet.setConditionalFormatRules(rules);
+  replaceProtection(sheet);
+}
+function summaryFormula(layout, offset, blank) {
+  const block=layout.blocks.summaries;
+  return scalarLookup('$B$3&"|"&$E$3',blockRange(block,0),blockRange(block,offset),blank);
+}
+function applyProfileFormulas(sheet, layout) {
+  const summary=layout.blocks.summaries;
+  sheet.getRange('H3').setFormula(summaryFormula(layout,1,''));
+  [['B5',4],['E5',2],['H5',3],['B6',5],['E6',6],['H6',8],['H7',16]].forEach(([cell,offset])=>sheet.getRange(cell).setFormula(summaryFormula(layout,offset)));
+  const attendance=scalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,7),'');
+  const comment=scalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,9),'');
+  sheet.getRange('B7').setFormula(`=IFERROR(${attendance.slice(1)}&IF(${comment.slice(1)}="",""," · "&${comment.slice(1)}),"—")`);
+  const score=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,10)})`;
+  const overallRank=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,12)})`;
+  const overallPopulation=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,13)})`;
+  const journeyRank=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,14)})`;
+  const journeyPopulation=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,15)})`;
+  sheet.getRange('E7').setFormula(`=IFERROR(TEXT(${score},"0.00")&" · overall "&${overallRank}&"/"&${overallPopulation}&" · Journee "&${journeyRank}&"/"&${journeyPopulation},"—")`);
+  const sections=layout.sectionRows;
+  const dimension=layout.blocks.dimensions;
+  for(let index=0;index<layout.dimensionCount;index++) {
+    const row=sections.dimensionStart+index,key=`$B$3&"|"&$E$3&"|"&$A${row}`;
+    for(let column=2;column<=5;column++) sheet.getRange(row,column).setFormula(scalarLookup(key,`${blockRange(dimension,0)}&"|"&${blockRange(dimension,1)}`,blockRange(dimension,column),''));
+  }
+  const activity=layout.blocks.activities;
+  for(let index=0;index<layout.activityCount;index++) {
+    const row=sections.activityStart+index,key=`$B$3&"|"&$E$3&"|"&$A${row}`;
+    for(let column=2;column<=5;column++) sheet.getRange(row,column).setFormula(scalarLookup(key,`${blockRange(activity,0)}&"|"&${blockRange(activity,1)}`,blockRange(activity,column),''));
+  }
+  const factorOffsets=[]; for(let index=0;index<layout.factorCount;index++) factorOffsets.push(18+index);
+  const generalOffsets=[...factorOffsets,18+layout.factorCount,17,19+layout.factorCount,20+layout.factorCount];
+  generalOffsets.forEach((offset,index)=>sheet.getRange(sections.generalStart+index,2).setFormula(summaryFormula(layout,offset,'')));
+  const applyFiltered=(block,start,capacity,columns)=>{
+    for(let index=0;index<capacity;index++) for(let column=1;column<=columns;column++) {
+      const row=start+index,ordinal=`ROWS($A$${start}:$A${row})`;
+      sheet.getRange(row,column).setFormula(indexedFilter('$H$3',blockRange(block,0),blockRange(block,column),ordinal));
+    }
+  };
+  applyFiltered(layout.blocks.evaluators,sections.evaluatorStart,layout.evaluatorCapacity,6);
+  applyFiltered(layout.blocks.criteria,sections.criterionStart,layout.criterionCapacity,8);
+  applyFiltered(layout.blocks.audit,sections.auditStart,layout.auditCapacity,6);
+}
+function refreshInitialProfileImage(sheet, layout) {
+  if (!layout.expectedPreviewCount) return;
+  const selected=String(sheet.getRange('E3').getValue());
+  const options=sheet.getRange(layout.blocks.dependentOptions.startRow+1,layout.blocks.dependentOptions.startCol,
+    layout.blocks.dependentOptions.endRow-layout.blocks.dependentOptions.startRow,2).getValues();
+  const match=options.find(row=>String(row[0])===selected);
+  if (!match || !match[1]) fail('VERIFY');
+  const key=String(match[1]),block=layout.blocks.previews;
+  const rows=sheet.getRange(block.startRow+1,block.startCol,block.endRow-block.startRow,5).getValues().filter(row=>String(row[0])===key);
+  rows.sort((a,b)=>Number(a[1])-Number(b[1]));
+  if (!rows.length || rows.length!==Number(rows[0][2]) || rows.some((row,index)=>Number(row[1])!==index||Number(row[2])!==rows.length||row[3]!==rows[0][3])) fail('VERIFY');
+  const bytes=Utilities.base64Decode(rows.map(row=>row[4]).join(''));
+  if (bytes.length>524288 || hashBytes(bytes)!==rows[0][3]) fail('VERIFY');
+  sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
+  const image=sheet.insertImage(Utilities.newBlob(bytes,'image/png','profile-preview.png'),10,3);
+  if (image.setWidth) image.setWidth(150).setHeight(150);
+}
+function applyProfileLayout(sheet, tab, layout) {
+  clearOwnedLayout(sheet,tab.presentation);
+  styleBase(sheet,tab,layout,12);
+  sheet.getRange('A1:L1').breakApart().merge().setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(18);
+  sheet.getRange('A2:L2').breakApart().merge().setFontColor('#667085').setFontSize(10);
+  ['B3','E3'].forEach(cell=>sheet.getRange(cell).setBackground('#FFF5D9').setFontWeight('bold').setFontColor('#223449'));
+  setListValidation(sheet,'B3',layout.blocks.scopeOptions); setListValidation(sheet,'E3',layout.blocks.dependentOptions);
+  applyProfileFormulas(sheet,layout);
+  const s=layout.sectionRows;
+  [s.dimension,s.activity,s.general,s.evaluator,s.criterion,s.audit].forEach(row=>sheet.getRange(row,1,1,12).setBackground('#EAF1F8').setFontColor('#223449').setFontWeight('bold'));
+  [s.dimensionHeader,s.activityHeader,s.evaluatorHeader,s.criterionHeader,s.auditHeader].forEach(row=>sheet.getRange(row,1,1,12).setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setWrap(true));
+  for(let index=0;index<layout.factorCount+4;index++) sheet.getRange(s.generalStart+index,2,1,11).breakApart().merge().setWrap(true);
+  const rules=[
+    textRule(sheet,'H7','Green','#E8F5ED','#16834B'),textRule(sheet,'H7','Yellow','#FFF5D9','#745300'),textRule(sheet,'H7','Red','#FCE9ED','#C8102E'),
+    textRule(sheet,`D${s.dimensionStart}:D${s.dimensionStart+layout.dimensionCount-1}`,'Complete','#E8F5ED','#16834B'),
+    textRule(sheet,`D${s.dimensionStart}:D${s.dimensionStart+layout.dimensionCount-1}`,'Incomplete','#FFF5D9','#745300'),
+    textRule(sheet,`E${s.activityStart}:E${s.activityStart+layout.activityCount-1}`,'Complete','#E8F5ED','#16834B'),
+    textRule(sheet,`E${s.activityStart}:E${s.activityStart+layout.activityCount-1}`,'Incomplete','#FFF5D9','#745300'),
+    textRule(sheet,`E${s.evaluatorStart}:E${s.evaluatorStart+layout.evaluatorCapacity-1}`,'Complete','#E8F5ED','#16834B'),
+    textRule(sheet,`E${s.evaluatorStart}:E${s.evaluatorStart+layout.evaluatorCapacity-1}`,'Missing','#FCE9ED','#C8102E'),
+    textRule(sheet,`H${s.criterionStart}:H${s.criterionStart+layout.criterionCapacity-1}`,'Complete','#E8F5ED','#16834B'),
+    textRule(sheet,`H${s.criterionStart}:H${s.criterionStart+layout.criterionCapacity-1}`,'Incomplete','#FFF5D9','#745300'),
+  ];
+  sheet.setConditionalFormatRules(rules);
+  layout.charts.forEach(chart=>{
+    const anchor=sheet.getRange(chart.anchor);
+    const built=sheet.newChart().setChartType(Charts.ChartType.RADAR)
+      .addRange(sheet.getRange(chart.startRow,chart.labelCol,chart.endRow-chart.startRow+1,2))
+      .setPosition(anchor.getRow(),anchor.getColumn(),0,0).setOption('legend',{position:'none'})
+      .setOption('vAxis',{viewWindow:{min:0,max:chart.maximum}}).build();
+    sheet.insertChart(built);
+  });
+  refreshInitialProfileImage(sheet,layout);
+  replaceProtection(sheet);
+}
+function applyPresentationLayout(op, state, ss) {
+  const tab=state.tabs.find(item=>item.name===op.tab);
+  if (!tab || !tab.presentation || tab.written!==tab.rows || tab.verified!==tab.rows) fail('INCOMPLETE');
+  const layout=validateLayout(op,tab),sheet=stage(ss,state,tab.name);
+  if (tab.presentation==='results-v1') applyResultsLayout(sheet,tab,layout);
+  else applyProfileLayout(sheet,tab,layout);
+  tab.layoutDigest=hash(JSON.stringify({presentation:op.presentation,layout}));
+  tab.layoutVerified=false;
+}
+function verifyPresentationLayout(op, state, ss) {
+  const tab=state.tabs.find(item=>item.name===op.tab);
+  if (!tab || !tab.presentation) fail('TABS');
+  const layout=validateLayout(op,tab),digest=hash(JSON.stringify({presentation:op.presentation,layout}));
+  if (tab.layoutDigest!==digest) fail('VERIFY');
+  const sheet=stage(ss,state,tab.name), expectedRules=tab.presentation==='results-v1'?5:11;
+  if (sheet.getFrozenRows()!==layout.frozenRows || !sheet.isColumnHiddenByUser(layout.helperStartCol) ||
+      !sheet.getRange('B3').getDataValidation() || !sheet.getRange('E3').getDataValidation() ||
+      sheet.getConditionalFormatRules().length!==expectedRules) fail('VERIFY');
+  if (tab.presentation==='results-v1') {
+    if (!sheet.getRange('A6').getFormula() || sheet.getCharts().length!==0 || sheet.getImages().length!==0) fail('VERIFY');
+  } else {
+    const imageCount=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).length;
+    if (!sheet.getRange('H3').getFormula() || sheet.getCharts().length!==2 || imageCount!==(layout.expectedPreviewCount?1:0)) fail('VERIFY');
+  }
+  const owned=sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).filter(item=>item.getDescription()===LAYOUT_PROTECTION);
+  if (owned.length!==1 || JSON.stringify(owned[0].getUnprotectedRanges().map(range=>range.getA1Notation()).sort())!==JSON.stringify(['B3','E3'])) fail('VERIFY');
+  tab.layoutVerified=true;
+}
 function applyOperation(op, state, ss) {
   if (!op || typeof op.kind !== 'string') fail('SEQUENCE');
   if (op.kind === 'batch') {
     if (!Array.isArray(op.operations) || !op.operations.length || op.operations.length>8 ||
-        op.operations.some(item=>!item || item.kind==='batch' || item.kind==='prepare' || item.kind==='publish')) fail('SEQUENCE');
+        op.operations.some(item=>!item || item.kind==='batch' || item.kind==='prepare' || item.kind==='layout' || item.kind==='verifyLayout' || item.kind==='publish')) fail('SEQUENCE');
     // Each child is independently idempotent. If an invocation stops before
     // state persistence, replay overwrites the same rows and replaces images
     // at the same anchors before the sequence advances.
@@ -164,7 +429,7 @@ function applyOperation(op, state, ss) {
     validateTabs(op.tabs, ss.getSheets().reduce((n,s) => n+(reused.has(s.getSheetId()) ? 0 : s.getMaxRows()*s.getMaxColumns()),0));
     const current = published(ss);
     op.tabs.forEach(t => {
-      const collision = ss.getSheetByName(`Backup - ${t.name}`);
+      const collision = ss.getSheetByName(finalTitle(t));
       if (collision && (!meta(collision,OWNED_KEY) || meta(collision,OWNED_KEY).getValue() !== (current || {}).runId)) fail('COLLISION');
     });
     const existingIds = new Set(ss.getSheets().map(s=>s.getSheetId()));
@@ -183,7 +448,9 @@ function applyOperation(op, state, ss) {
         requests.push({addProtectedRange:{protectedRange:{range:{sheetId:id},description:'Backup data managed by the private backup script.',warningOnly:false,
           editors:{users:[],groups:[],domainUsersCanEdit:false}}}});
       }
-      return {name:t.name,rows:t.rows,cols:t.cols,hidden:!!t.hidden,id,written:0,verified:0};
+      const stored={name:t.name,rows:t.rows,cols:t.cols,hidden:!!t.hidden,id,written:0,verified:0};
+      if (t.presentation) Object.assign(stored,{presentation:t.presentation,layoutDigest:'',layoutVerified:false});
+      return stored;
     });
     state.snapshotAt = op.manifest.snapshotAt;
     state.workspaceName = op.manifest.workspaceName;
@@ -267,9 +534,17 @@ function applyOperation(op, state, ss) {
     state.verifiedPhotos++;
     return;
   }
+  if (op.kind === 'layout') {
+    applyPresentationLayout(op,state,ss);
+    return;
+  }
+  if (op.kind === 'verifyLayout') {
+    verifyPresentationLayout(op,state,ss);
+    return;
+  }
   if (op.kind !== 'publish') fail('SEQUENCE');
   const records = state.tabs.find(t=>t.name==='_Records');
-  if (state.tabs.some(t=>t.written!==t.rows || t.verified!==t.rows) || state.images!==state.photoCount || state.verifiedPhotos!==state.photoCount ||
+  if (state.tabs.some(t=>t.written!==t.rows || t.verified!==t.rows || (t.presentation && !t.layoutVerified)) || state.images!==state.photoCount || state.verifiedPhotos!==state.photoCount ||
       !records || state.verifiedRecordRows!==records.rows-1 || state.verifiedRecords!==state.expectedRecords ||
       state.recordChain!==state.expectedRecordChain) fail('INCOMPLETE');
   const current = published(ss);
@@ -285,9 +560,11 @@ function applyOperation(op, state, ss) {
   });
   state.tabs.forEach((t,index)=>{
     stage(ss,state,t.name);
-    const collision = ss.getSheetByName(`Backup - ${t.name}`);
+    const targetTitle=t.presentation?PRESENTATIONS[t.presentation].finalTitle:`Backup - ${t.name}`;
+    const collision = ss.getSheetByName(targetTitle);
     if (collision && (!meta(collision,OWNED_KEY) || meta(collision,OWNED_KEY).getValue() !== (current || {}).runId)) fail('COLLISION');
-    requests.push({updateSheetProperties:{properties:{sheetId:t.id,title:`Backup - ${t.name}`,hidden:t.hidden,index},fields:'title,hidden,index'}});
+    requests.push({updateSheetProperties:{properties:{sheetId:t.id,title:targetTitle,hidden:t.hidden,index},fields:'title,hidden,index'}});
+    if (t.presentation) return;
     requests.push({repeatCell:{range:{sheetId:t.id,startRowIndex:0,endRowIndex:1},cell:{userEnteredFormat:{
       backgroundColor:{red:0.10,green:0.13,blue:0.18},textFormat:{bold:true,foregroundColor:{red:1,green:1,blue:1}},wrapStrategy:'WRAP'}},fields:'userEnteredFormat'}});
     requests.push({updateDimensionProperties:{range:{sheetId:t.id,dimension:'COLUMNS',startIndex:0,endIndex:t.cols},properties:{pixelSize:180},fields:'pixelSize'}});
@@ -306,4 +583,4 @@ function authorizeBackup() {
   Sheets.Spreadsheets.get(BACKUP_SHEET,{fields:'spreadsheetId'});
 }
 
-if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,verifyRows,dispatch,applyOperation};
+if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout};

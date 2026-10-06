@@ -340,6 +340,10 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
     option_rows = [["Scope", "Label", "Profile key"]]
     for scope in profiles["scopes"]:
         option_rows.extend([[scope, option["label"], option["profileKey"]] for option in profiles["optionsByScope"].get(scope, [])])
+    scope_rows = [["Scope options"], *[[scope] for scope in profiles["scopes"]]]
+    dependent_rows = [["Recruit options", "Profile key"], *[
+        [option["label"], option["profileKey"]] for option in all_options
+    ]]
 
     preview_rows: list[list[object]] = [["Profile key", "Part", "Parts", "SHA-256", "PNG chunk"]]
     seen_keys: set[str] = set()
@@ -364,7 +368,8 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
     for name, values in (
         ("summaries", summary_rows), ("dimensions", dimension_rows), ("activities", activity_rows),
         ("evaluators", evaluator_rows), ("criteria", criterion_rows), ("audit", audit_rows),
-        ("profileOptions", option_rows), ("previews", preview_rows),
+        ("scopeOptions", scope_rows), ("profileOptions", option_rows),
+        ("dependentOptions", dependent_rows), ("previews", preview_rows),
     ):
         blocks[name] = grid.block(1, next_col, values)
         next_col = blocks[name]["endCol"] + 1
