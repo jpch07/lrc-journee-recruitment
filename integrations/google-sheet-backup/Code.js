@@ -7,6 +7,7 @@ const LEASE_SECONDS = 900;
 const OWNED_KEY = 'evalday_backup_run';
 const PUBLISHED_KEY = 'evalday_backup_published';
 const LAYOUT_PROTECTION = 'Evalday interactive presentation selectors';
+const PROFILE_LAYOUT_KEY = 'evalday_profile_layout_v1';
 const PRESENTATIONS = {
   'results-v1': {name:'Results', finalTitle:'Results'},
   'recruit-profiles-v1': {name:'Recruit Profiles', finalTitle:'Recruit Profiles'},
@@ -340,6 +341,11 @@ function refreshInitialProfileImage(sheet, layout) {
 }
 function applyProfileLayout(sheet, tab, layout) {
   clearOwnedLayout(sheet,tab.presentation);
+  sheet.getDeveloperMetadata().filter(item=>item.getKey()===PROFILE_LAYOUT_KEY).forEach(item=>item.remove());
+  sheet.addDeveloperMetadata(PROFILE_LAYOUT_KEY,JSON.stringify({v:1,e:layout.expectedPreviewCount,
+    o:[layout.blocks.profileOptions.startRow,layout.blocks.profileOptions.endRow,layout.blocks.profileOptions.startCol,layout.blocks.profileOptions.endCol],
+    d:[layout.blocks.dependentOptions.startRow,layout.blocks.dependentOptions.endRow,layout.blocks.dependentOptions.startCol,layout.blocks.dependentOptions.endCol],
+    p:[layout.blocks.previews.startRow,layout.blocks.previews.endRow,layout.blocks.previews.startCol,layout.blocks.previews.endCol]}));
   styleBase(sheet,tab,layout,12);
   sheet.getRange('A1:L1').breakApart().merge().setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(18);
   sheet.getRange('A2:L2').breakApart().merge().setFontColor('#667085').setFontSize(10);
@@ -395,7 +401,8 @@ function verifyPresentationLayout(op, state, ss) {
     if (!sheet.getRange('A6').getFormula() || sheet.getCharts().length!==0 || sheet.getImages().length!==0) fail('VERIFY');
   } else {
     const imageCount=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).length;
-    if (!sheet.getRange('H3').getFormula() || sheet.getCharts().length!==2 || imageCount!==(layout.expectedPreviewCount?1:0)) fail('VERIFY');
+    const profileMetadata=sheet.getDeveloperMetadata().filter(item=>item.getKey()===PROFILE_LAYOUT_KEY);
+    if (!sheet.getRange('H3').getFormula() || sheet.getCharts().length!==2 || imageCount!==(layout.expectedPreviewCount?1:0) || profileMetadata.length!==1) fail('VERIFY');
   }
   const owned=sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).filter(item=>item.getDescription()===LAYOUT_PROTECTION);
   if (owned.length!==1 || JSON.stringify(owned[0].getUnprotectedRanges().map(range=>range.getA1Notation()).sort())!==JSON.stringify(['B3','E3'])) fail('VERIFY');
@@ -577,10 +584,85 @@ function applyOperation(op, state, ss) {
   Sheets.Spreadsheets.batchUpdate({requests},BACKUP_SHEET);
 }
 
-// Runs once in the owner account to show Google's consent screen and verify access.
+function profileTriggerLayout_(sheet) {
+  const entries=sheet.getDeveloperMetadata().filter(item=>item.getKey()===PROFILE_LAYOUT_KEY);
+  if (entries.length!==1) fail('VERIFY');
+  let value;
+  try { value=JSON.parse(entries[0].getValue()); } catch (_) { fail('VERIFY'); }
+  if (!value || value.v!==1 || !Number.isInteger(value.e) || value.e<0 || value.e>5000) fail('VERIFY');
+  const parse=(input,width)=>{
+    if (!Array.isArray(input)||input.length!==4||input.some(item=>!Number.isInteger(item))) fail('VERIFY');
+    const [startRow,endRow,startCol,endCol]=input;
+    if(startRow!==1||endRow<startRow||endRow>sheet.getMaxRows()||startCol<1||endCol>sheet.getMaxColumns()||endCol-startCol+1!==width) fail('VERIFY');
+    return {startRow,endRow,startCol,endCol};
+  };
+  return {expected:value.e,profileOptions:parse(value.o,3),dependentOptions:parse(value.d,2),previews:parse(value.p,5)};
+}
+function blockValues_(sheet, block) {
+  if (block.endRow<=block.startRow) return [];
+  return sheet.getRange(block.startRow+1,block.startCol,block.endRow-block.startRow,block.endCol-block.startCol+1).getValues();
+}
+function refreshDependentProfileOptions_(sheet, layout) {
+  const scope=String(sheet.getRange('B3').getValue());
+  const options=blockValues_(sheet,layout.profileOptions).filter(row=>String(row[0])===scope).map(row=>[String(row[1]),String(row[2])]);
+  const capacity=layout.dependentOptions.endRow-layout.dependentOptions.startRow;
+  if (options.length>capacity) fail('VERIFY');
+  if (capacity) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,capacity,2).clearContent();
+  if (options.length) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,options.length,2).setValues(options);
+  const selector=sheet.getRange('E3');
+  selector.clearDataValidations();
+  if (options.length) {
+    const source=sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,options.length,1);
+    selector.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(source,true).setAllowInvalid(false)
+      .setHelpText('Choose a recruit from the selected completed Journee.').build());
+  }
+  selector.setValue(options.length?options[0][0]:'');
+}
+function refreshProfilePhoto_(spreadsheet, profileSheet) {
+  if (!spreadsheet || spreadsheet.getId()!==BACKUP_SHEET || !profileSheet || profileSheet.getName()!=='Recruit Profiles') return;
+  const complete=published(spreadsheet),owner=meta(profileSheet,OWNED_KEY);
+  if (!complete || !owner || owner.getValue()!==complete.runId) return;
+  const layout=profileTriggerLayout_(profileSheet),selected=String(profileSheet.getRange('E3').getValue());
+  if (!selected) return;
+  const option=blockValues_(profileSheet,layout.dependentOptions).find(row=>String(row[0])===selected);
+  if (!option || !option[1]) fail('VERIFY');
+  const previewRows=blockValues_(profileSheet,layout.previews);
+  const keys=new Set(previewRows.map(row=>String(row[0])).filter(Boolean));
+  if (keys.size!==layout.expected) fail('VERIFY');
+  const key=String(option[1]),parts=previewRows.filter(row=>String(row[0])===key).sort((a,b)=>Number(a[1])-Number(b[1]));
+  if (!parts.length || parts.length!==Number(parts[0][2]) || parts.length>64 ||
+      parts.some((row,index)=>Number(row[1])!==index||Number(row[2])!==parts.length||row[3]!==parts[0][3]||typeof row[4]!=='string'||row[4].length>12000)) fail('VERIFY');
+  const bytes=Utilities.base64Decode(parts.map(row=>row[4]).join(''));
+  if (!bytes.length || bytes.length>524288 || hashBytes(bytes)!==parts[0][3]) fail('VERIFY');
+  // Validate fully before changing the last good image.
+  profileSheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
+  const image=profileSheet.insertImage(Utilities.newBlob(bytes,'image/png','profile-preview.png'),10,3);
+  if (image.setWidth) image.setWidth(150).setHeight(150);
+}
+function profileSelectionChanged(event) {
+  if (!event || !event.source || event.source.getId()!==BACKUP_SHEET || !event.range ||
+      event.range.getNumRows()!==1 || event.range.getNumColumns()!==1) return;
+  const sheet=event.range.getSheet(),cell=event.range.getA1Notation();
+  if (!sheet || sheet.getName()!=='Recruit Profiles' || !['B3','E3'].includes(cell)) return;
+  const complete=published(event.source),owner=meta(sheet,OWNED_KEY);
+  if (!complete || !owner || owner.getValue()!==complete.runId) return;
+  const layout=profileTriggerLayout_(sheet);
+  if (cell==='B3') refreshDependentProfileOptions_(sheet,layout);
+  SpreadsheetApp.flush();
+  refreshProfilePhoto_(event.source,sheet);
+}
+function installInteractiveProfileTrigger() {
+  ScriptApp.getProjectTriggers().filter(trigger=>trigger.getHandlerFunction()==='profileSelectionChanged' &&
+    trigger.getTriggerSourceId()===BACKUP_SHEET).forEach(trigger=>ScriptApp.deleteTrigger(trigger));
+  ScriptApp.newTrigger('profileSelectionChanged').forSpreadsheet(BACKUP_SHEET).onEdit().create();
+}
+
+// Runs once in the owner account to show Google's consent screen, verify access,
+// and install exactly one private selector trigger.
 function authorizeBackup() {
   SpreadsheetApp.openById(BACKUP_SHEET).getName();
   Sheets.Spreadsheets.get(BACKUP_SHEET,{fields:'spreadsheetId'});
+  installInteractiveProfileTrigger();
 }
 
-if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout};
+if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout,profileSelectionChanged,refreshProfilePhoto_,installInteractiveProfileTrigger};

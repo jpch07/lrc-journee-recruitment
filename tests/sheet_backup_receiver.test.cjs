@@ -81,7 +81,7 @@ function fakeGoogle() {
   const sheets = new Map();
   let documentMetadata = [];
   let failPublish = false;
-  const tag = (key,value,id=1) => ({getKey:()=>key,getValue:()=>value,getId:()=>id});
+  const tag = (key,value,id=1,onRemove=()=>{}) => ({getKey:()=>key,getValue:()=>value,getId:()=>id,remove:onRemove});
   const colNumber=value=>[...value.toUpperCase()].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
   const parseA1=value=>{
     const match=String(value).match(/^([A-Z]+)(\d+)(?::([A-Z]+)(\d+))?$/i);
@@ -94,11 +94,12 @@ function fakeGoogle() {
       charts:[],conditionalRules:[],protections:[],merges:[],hiddenColumns:new Set(),frozenRows:0,hiddenGridlines:false,tabColor:null,
       getSheetId(){return this.id}, getName(){return this.title}, getMaxRows(){return this.rows}, getMaxColumns(){return this.cols},
       getDeveloperMetadata(){return this.metadata},
+      addDeveloperMetadata(key,value){const item=tag(key,value,this.metadata.length+10,()=>{this.metadata=this.metadata.filter(entry=>entry!==item)});this.metadata.push(item);return item},
       getRange(start,col,n,width){
         const bounds=typeof start==='string'?parseA1(start):{row:start,col,rows:n||1,cols:width||1,a1:null};
         const key=(r,c)=>`${r}:${c}`;
         const range={
-          sheet:this,bounds,
+          sheet:this,bounds,getSheet:()=>this,
           getRow:()=>bounds.row,getColumn:()=>bounds.col,getNumRows:()=>bounds.rows,getNumColumns:()=>bounds.cols,
           getA1Notation:()=>bounds.a1||`${bounds.row}:${bounds.col}:${bounds.rows}:${bounds.cols}`,
           getValues:()=>Array.from({length:bounds.rows},(_,i)=>Array.from({length:bounds.cols},(_,j)=>this.data[bounds.row+i-1]?.[bounds.col+j-1]??'')),
@@ -121,7 +122,7 @@ function fakeGoogle() {
         return range;
       },
       getDataRange(){return {getValues:()=>this.data}}, getImages(){return this.images},
-      insertImage(blob,col,row){const image={getAnchorCell:()=>({getRow:()=>row,getColumn:()=>col}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
+      insertImage(blob,col,row){const image={blob,getAnchorCell:()=>({getRow:()=>row,getColumn:()=>col}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
       setRowHeight(){},setColumnWidth(){},setFrozenRows(value){this.frozenRows=value},getFrozenRows(){return this.frozenRows},
       setHiddenGridlines(value){this.hiddenGridlines=value},hideColumns(start,count){for(let i=0;i<count;i++)this.hiddenColumns.add(start+i)},
       isColumnHiddenByUser(col){return this.hiddenColumns.has(col)},setTabColor(value){this.tabColor=value},
@@ -134,12 +135,17 @@ function fakeGoogle() {
     sheets.set(id,s); return s;
   };
   add(1,'My own notes');
-  const ss = {getSheets:()=>[...sheets.values()], getSheetById:id=>sheets.get(id),
+  const ss = {getId:()=> '11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0',getSheets:()=>[...sheets.values()], getSheetById:id=>sheets.get(id),
     getSheetByName:name=>[...sheets.values()].find(s=>s.title===name), getDeveloperMetadata:()=>documentMetadata};
   const validationBuilder=()=>{const rule={range:null,allowInvalid:true};const builder={requireValueInRange:range=>{rule.range=range.getA1Notation();return builder},setAllowInvalid:value=>{rule.allowInvalid=value;return builder},setHelpText:()=>builder,build:()=>({...rule})};return builder};
   const conditionalBuilder=()=>{const rule={text:null,ranges:[]};const builder={whenTextEqualTo:value=>{rule.text=value;return builder},setBackground:()=>builder,setFontColor:()=>builder,setBold:()=>builder,setRanges:ranges=>{rule.ranges=ranges.map(item=>item.getA1Notation());return builder},build:()=>({...rule})};return builder};
-  global.SpreadsheetApp = {openById:()=>ss,ProtectionType:{SHEET:'SHEET'},newDataValidation:validationBuilder,newConditionalFormatRule:conditionalBuilder};
+  global.SpreadsheetApp = {openById:()=>ss,flush:()=>{},ProtectionType:{SHEET:'SHEET'},newDataValidation:validationBuilder,newConditionalFormatRule:conditionalBuilder};
   global.Charts={ChartType:{RADAR:'RADAR'}};
+  let triggers=[];
+  global.ScriptApp={getProjectTriggers:()=>[...triggers],deleteTrigger:trigger=>{triggers=triggers.filter(item=>item!==trigger)},newTrigger:handler=>{
+    const state={handler,sourceId:null};const builder={forSpreadsheet:id=>{state.sourceId=id;return builder},onEdit:()=>builder,
+      create:()=>{const trigger={getHandlerFunction:()=>state.handler,getTriggerSourceId:()=>state.sourceId};triggers.push(trigger);return trigger}};return builder;
+  }};
   global.Utilities = {Charset:{UTF_8:'utf8'},DigestAlgorithm:{SHA_256:'sha256'},
     computeDigest:(_,value)=>[...crypto.createHash('sha256').update(Array.isArray(value)?Buffer.from(value):value).digest()],
     base64Decode:value=>[...Buffer.from(value,'base64')],
@@ -169,7 +175,8 @@ function fakeGoogle() {
   }};
   const values = {};
   const props = {getProperty:key=>values[key]||null,setProperty:(key,value)=>{values[key]=value},deleteProperty:key=>{delete values[key]}};
-  return {ss,props,add,failPublish:value=>{failPublish=value},remove:id=>sheets.delete(id)};
+  return {ss,props,add,publish:runId=>{documentMetadata=[tag('evalday_backup_published',JSON.stringify({runId}),99)]},triggers:()=>[...triggers],
+    failPublish:value=>{failPublish=value},remove:id=>sheets.delete(id)};
 }
 
 const digest = value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -295,26 +302,32 @@ function profilePresentation() {
   const set=(r,c,values)=>values.forEach((value,index)=>rows[r-1][c-1+index]=String(value));
   set(1,27,['Selection','Profile key','Journee','Date','Recruit','Phone','DOB','Attendance','Arrival','Attendance comment','Overall','Display rank','Overall rank','Overall population','Journee rank','Journee population','Color','Missing','Punctuality','Respect','Seriousness','General average','General comment','Notes']);
   set(2,27,['All completed Journees|Alex','j:r','Day','2026-10-06','Alex','123','2000-01-01','Present','08:00','','10','1','1','1','1','1','Green','Complete','1','1','1','1','','']);
+  set(3,27,['All completed Journees|Alex — Other · 2','j2:r2','Other','2026-10-07','Alex','456','2000-01-02','Present','09:00','','9','2','2','2','1','1','Yellow','Complete','1','1','1','1','','']);
+  set(4,27,['Day|Day Alex','j:r','Day','2026-10-06','Alex','123','2000-01-01','Present','08:00','','10','1','1','1','1','1','Green','Complete','1','1','1','1','','']);
   set(1,51,['Selection','Dimension','Score','Rank','Status','Coverage']);set(2,51,['All completed Journees|Alex','Dimension','4','1','Complete','100%']);
   set(1,57,['Selection','Activity','Score','Rank','Submissions','Status']);set(2,57,['All completed Journees|Alex','Activity','4','1','1/1','Complete']);
   set(1,63,['Profile key','Activity','Evaluator','Category','Score','Status','Comment']);set(2,63,['j:r','Activity','Eva','Overall','4','Complete','']);
   set(1,70,['Profile key','Activity','Dimension','Criterion','Explanation','Evaluator','Grade','Raw result','Status']);set(2,70,['j:r','Activity','Dimension','Criterion','Why','Eva','4','','Complete']);
   set(1,79,['Profile key','Date','Username','Action','Reason','Before','After']);set(2,79,['j:r','2026-10-06','Admin','Updated','','','']);
-  set(1,86,['Scope options']);set(2,86,['All completed Journees']);
+  set(1,86,['Scope options']);set(2,86,['All completed Journees']);set(3,86,['Day']);
   set(1,87,['Scope','Label','Profile key']);set(2,87,['All completed Journees','Alex','j:r']);
-  set(1,90,['Recruit options','Profile key']);set(2,90,['Alex','j:r']);
+  set(3,87,['All completed Journees','Alex — Other · 2','j2:r2']);set(4,87,['Day','Day Alex','j:r']);
+  set(1,90,['Recruit options','Profile key']);set(2,90,['Alex','j:r']);set(3,90,['Alex — Other · 2','j2:r2']);
   const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+  const secondPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlB8AAAAASUVORK5CYII=','base64');
   set(1,92,['Profile key','Part','Parts','SHA-256','PNG chunk']);set(2,92,['j:r','0','1',digest(png),png.toString('base64')]);
+  set(3,92,['j2:r2','0','1',digest(secondPng),secondPng.toString('base64')]);
   const block=(start,end,width)=>({startRow:1,endRow:2,startCol:start,endCol:start+width-1});
   const layout={selectorCells:['B3','E3'],profileKeyCell:'H3',imageAnchor:'J3',frozenRows:7,helperStartCol:27,tabColor:'YELLOW',
-    columnWidths:[165,125,24,145,125,24,120,125,90,75,75,75],expectedPreviewCount:1,dimensionCount:1,activityCount:1,
+    columnWidths:[165,125,24,145,125,24,120,125,90,75,75,75],expectedPreviewCount:2,dimensionCount:1,activityCount:1,
     factorCount:3,evaluatorCapacity:1,criterionCapacity:1,auditCapacity:1,sectionRows:{dimension:8,dimensionHeader:9,dimensionStart:10,
       activity:26,activityHeader:27,activityStart:28,general:44,generalStart:45,evaluator:55,evaluatorHeader:56,evaluatorStart:57,
       criterion:79,criterionHeader:80,criterionStart:81,audit:200,auditHeader:201,auditStart:202},
     charts:[{startRow:10,endRow:10,labelCol:1,valueCol:2,anchor:'G8',maximum:5},{startRow:28,endRow:28,labelCol:1,valueCol:2,anchor:'G26',maximum:5}],
-    blocks:{summaries:block(27,50,24),dimensions:block(51,56,6),activities:block(57,62,6),evaluators:block(63,69,7),criteria:block(70,78,9),
-      audit:block(79,85,7),scopeOptions:block(86,86,1),profileOptions:block(87,89,3),dependentOptions:block(90,91,2),previews:block(92,96,5)}};
-  return {rows,layout};
+    blocks:{summaries:{startRow:1,endRow:4,startCol:27,endCol:50},dimensions:block(51,56,6),activities:block(57,62,6),evaluators:block(63,69,7),criteria:block(70,78,9),
+      audit:block(79,85,7),scopeOptions:{startRow:1,endRow:3,startCol:86,endCol:86},profileOptions:{startRow:1,endRow:4,startCol:87,endCol:89},
+      dependentOptions:{startRow:1,endRow:3,startCol:90,endCol:91},previews:{startRow:1,endRow:3,startCol:92,endCol:96}}};
+  return {rows,layout,secondDigest:digest(secondPng)};
 }
 
 test('trusted layouts replay without duplicate owned objects and keep only selectors editable', () => {
@@ -337,6 +350,61 @@ test('trusted layouts replay without duplicate owned objects and keep only selec
     assert.equal(sheet.effectiveEditable('A1'),false);
     assert.doesNotThrow(()=>receiver.verifyPresentationLayout({kind:'verifyLayout',version:1,tab:name,presentation,layout:fixture.layout},state,env.ss));
   }
+});
+
+function managedProfileEnvironment() {
+  const env=fakeGoogle(),fixture=profilePresentation(),runId='f'.repeat(32);
+  const descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation:'recruit-profiles-v1',version:1,
+    rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,runId);
+  receiver.applyPresentationLayout({kind:'layout',version:1,tab:'Recruit Profiles',presentation:'recruit-profiles-v1',layout:fixture.layout},state,env.ss);
+  const sheet=env.ss.getSheetById(state.tabs[0].id);
+  sheet.title='Recruit Profiles';
+  env.publish(runId);
+  return {env,fixture,sheet,runId};
+}
+
+test('profile selector trigger ignores every unowned or out-of-scope edit', () => {
+  const {env,sheet}=managedProfileEnvironment();
+  const original=sheet.getImages()[0];
+  receiver.profileSelectionChanged({source:{getId:()=> 'wrong'},range:sheet.getRange('B3')});
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('A1')});
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3:C3')});
+  sheet.title='_stage_unpublished_Recruit Profiles';
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  sheet.title='Recruit Profiles';
+  env.publish('0'.repeat(32));
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  assert.equal(sheet.getImages()[0],original);
+  assert.equal(sheet.getRange('E3').getValue(),'Alex');
+});
+
+test('scope edits reset the recruit before refreshing and stable keys select duplicate-name photos', () => {
+  const {env,fixture,sheet,runId}=managedProfileEnvironment();
+  sheet.getRange('B3').setValue('Day');
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  assert.equal(sheet.getRange('E3').getValue(),'Day Alex');
+  assert.ok(sheet.getRange('E3').getDataValidation());
+  sheet.getRange('B3').setValue('All completed Journees');
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  sheet.getRange('E3').setValue('Alex — Other · 2');
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')});
+  assert.equal(digest(Buffer.from(sheet.getImages()[0].blob.getBytes())),fixture.secondDigest);
+
+  const lastGood=sheet.getImages()[0];
+  sheet.getRange(3,96).setValue('corrupt-base64');
+  assert.throws(()=>receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')}),/VERIFY/);
+  assert.equal(sheet.getImages()[0],lastGood);
+  env.publish(runId);
+});
+
+test('interactive profile trigger installation is idempotent and scoped to the fixed spreadsheet', () => {
+  const env=fakeGoogle();
+  receiver.installInteractiveProfileTrigger();
+  receiver.installInteractiveProfileTrigger();
+  assert.equal(env.triggers().length,1);
+  assert.equal(env.triggers()[0].getHandlerFunction(),'profileSelectionChanged');
+  assert.equal(env.triggers()[0].getTriggerSourceId(),env.ss.getId());
 });
 
 module.exports={fakeGoogle};

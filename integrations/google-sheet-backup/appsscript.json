@@ -3,6 +3,9 @@
   "dependencies": {"enabledAdvancedServices": [{"userSymbol": "Sheets", "serviceId": "sheets", "version": "v4"}]},
   "exceptionLogging": "NONE",
   "runtimeVersion": "V8",
-  "oauthScopes": ["https://www.googleapis.com/auth/spreadsheets"],
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/script.scriptapp"
+  ],
   "webapp": {"executeAs": "USER_DEPLOYING", "access": "ANYONE_ANONYMOUS"}
 }
