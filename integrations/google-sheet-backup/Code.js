@@ -106,7 +106,9 @@ function sheetInventory() {
   sheets.forEach(item => {
     const properties = item.properties || {}, grid = properties.gridProperties || {};
     const owners = (item.developerMetadata || []).filter(entry => entry.metadataKey === OWNED_KEY);
-    const id=Number(properties.sheetId), title=String(properties.title || ''), rows=Number(grid.rowCount), cols=Number(grid.columnCount);
+    const hasSheetId=Object.prototype.hasOwnProperty.call(properties,'sheetId');
+    if (hasSheetId && (properties.sheetId === null || properties.sheetId === '')) fail('VERIFY');
+    const id=hasSheetId ? Number(properties.sheetId) : 0, title=String(properties.title || ''), rows=Number(grid.rowCount), cols=Number(grid.columnCount);
     if (!Number.isInteger(id) || id<0 || inventory.has(id) || !title || !Number.isInteger(rows) || rows<1 || !Number.isInteger(cols) || cols<1) fail('VERIFY');
     inventory.set(id, {
       title, rows, cols,

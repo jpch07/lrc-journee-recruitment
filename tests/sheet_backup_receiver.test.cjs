@@ -83,6 +83,7 @@ function fakeGoogle() {
   let failPublish = false;
   let rejectPerSheetMetadata = false;
   let rejectSheetList = false;
+  let omitDefaultSheetId = false;
   const tag = (key,value,id=1,onRemove=()=>{}) => ({getKey:()=>key,getValue:()=>value,getId:()=>id,remove:onRemove});
   const colNumber=value=>[...value.toUpperCase()].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
   const parseA1=value=>{
@@ -154,7 +155,7 @@ function fakeGoogle() {
     newBlob:value=>({getBytes:()=>[...Buffer.from(value)]})};
   global.Sheets = {Spreadsheets:{
     get:()=>({sheets:[...sheets.values()].map(sheet=>({
-      properties:{sheetId:sheet.id,title:sheet.title,gridProperties:{rowCount:sheet.rows,columnCount:sheet.cols}},
+      properties:{...(omitDefaultSheetId && sheet.id===0 ? {} : {sheetId:sheet.id}),title:sheet.title,gridProperties:{rowCount:sheet.rows,columnCount:sheet.cols}},
       developerMetadata:sheet.metadata.map(item=>({metadataKey:item.getKey(),metadataValue:item.getValue()})),
     }))}),
     Values:{update:(body,id,range,options)=>{
@@ -182,7 +183,8 @@ function fakeGoogle() {
   const values = {};
   const props = {getProperty:key=>values[key]||null,setProperty:(key,value)=>{values[key]=value},deleteProperty:key=>{delete values[key]}};
   return {ss,props,add,publish:runId=>{documentMetadata=[tag('evalday_backup_published',JSON.stringify({runId}),99)]},triggers:()=>[...triggers],
-    failPublish:value=>{failPublish=value},rejectPerSheetMetadata:value=>{rejectPerSheetMetadata=value},rejectSheetList:value=>{rejectSheetList=value},remove:id=>sheets.delete(id)};
+    failPublish:value=>{failPublish=value},rejectPerSheetMetadata:value=>{rejectPerSheetMetadata=value},rejectSheetList:value=>{rejectSheetList=value},
+    omitDefaultSheetId:value=>{omitDefaultSheetId=value},remove:id=>sheets.delete(id)};
 }
 
 const digest = value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -276,6 +278,16 @@ test('lost prepare response reconciles staging from one inventory without per-sh
   assert.equal(apply().next,1);
   env.rejectSheetList(false);
   assert.equal(env.ss.getSheets().length,38);
+});
+
+test('inventory accepts an omitted default sheet id as id zero', () => {
+  const env=fakeGoogle(),runId='b6'.repeat(16);
+  env.add(0,'Sheet1',1000,26);
+  env.omitDefaultSheetId(true);
+  receiver.dispatch({action:'begin',runId},env.props,1000);
+  const operation={kind:'prepare',tabs:[{name:'Example',rows:2,cols:2}],manifest:{photoCount:0,snapshotAt:'2026-10-06T00:00:00Z',workspaceName:'Test',recordsSha256:'x',recordChain:'',recordCount:0}};
+  assert.equal(receiver.dispatch({action:'apply',runId,sequence:0,operation},env.props,1000).next,1);
+  assert.equal(env.ss.getSheetById(0).title,'Sheet1');
 });
 
 test('publishing works when only the old backup has a visible tab', () => {
