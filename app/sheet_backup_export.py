@@ -25,6 +25,7 @@ from .assessment_config import load_stored_definition
 from .assessment_runtime import activate_assessment_definition, reset_assessment_definition
 from .audit_presentation import present_events
 from .management_report_payload import build_management_report_payload, load_management_report_source
+from .google_sheet_presentations import build_presentation_tabs, layout_operation, PresentationError
 from .tenant import select_system, reset_system
 from scripts.database_transfer import encode, read_snapshot, assert_schema, TransferError
 
@@ -245,7 +246,11 @@ def build_export(engine, system_id):
             'restoration': 'Account identities and permissions included. Set new passwords and access links after restoration.'}
         export = {'manifest': manifest, 'records': records, 'technical_rows': technical, 'photos': photos,
                   'presentation_payload': presentation_payload}
-        export['tabs'] = readable_tabs(records, readable_audit, photos, manifest)
+        try:
+            presentation_tabs = build_presentation_tabs(presentation_payload, photos)
+        except PresentationError:
+            raise BackupError('Interactive management views could not be prepared; previous backup is unchanged.') from None
+        export['tabs'] = [*presentation_tabs, *readable_tabs(records, readable_audit, photos, manifest)]
         if len(json_text(export).encode('utf-8')) > MAX_EXPORT_BYTES:
             raise BackupError('Workspace exceeds the safe export size; previous backup is unchanged.')
         return export
@@ -314,19 +319,12 @@ def readable_tabs(records, readable_audit, photos, manifest):
             rendered.append([*ctx, *cells])
         tabs.append({'name': title, 'rows': rendered})
     tabs.append({'name': 'Field details', 'rows': details})
-    result_rows = [['Journee', 'Recruit', 'Overall score', 'Overall rank (completed)', 'Journee rank', 'Color', 'Recruit ID']]
-    ranks = {row['profileKey']: row for row in records['_completed_results'][0]['rows']}
     for snapshot in records['_results']:
         for row in snapshot['rows']:
-            ranked = ranks.get(f"{snapshot['journeyId']}:{row['recruitId']}", {})
-            result_rows.append([snapshot['journeyName'], row['name'], _value(row['overallScore']),
-                _value(ranked.get('overallRank')), _value(row.get('journeyRank', row.get('overallRank'))),
-                _value(row.get('colorGrade', row.get('color'))), row['recruitId']])
             for field, scalar in _leaves(row):
                 for offset in range(0, max(1, len(scalar)), CHUNK_SIZE):
                     details.append(['Calculated results', snapshot['journeyName'], row['name'], '', row['recruitId'],
                                     field, str(offset // CHUNK_SIZE + 1), scalar[offset:offset + CHUNK_SIZE]])
-    tabs.append({'name': 'Results', 'rows': result_rows})
     audit_rows = [['Time (UTC)', 'Journee', 'Person', 'Account', 'Action', 'Field', 'Before', 'After', 'Reason', 'Event ID']]
     for event in readable_audit:
         for change in (event['changes'] + event['criteriaChanges']) or [{}]:
@@ -369,7 +367,10 @@ def _encode_operations(export):
         parts = [photo['data'][i:i + CHUNK_SIZE] for i in range(0, len(photo['data']), CHUNK_SIZE)]
         photo_rows.extend([[photo['recruitId'], str(i), str(len(parts)), photo['sha256'], photo['contentType'], part] for i, part in enumerate(parts)])
     tabs.append({'name': '_Photo bytes', 'hidden': True, 'rows': photo_rows})
-    descriptors = [{'name': t['name'], 'rows': len(t['rows']), 'cols': len(t['rows'][0]), 'hidden': t.get('hidden', False)} for t in tabs]
+    descriptors = [{
+        'name': t['name'], 'rows': len(t['rows']), 'cols': len(t['rows'][0]), 'hidden': t.get('hidden', False),
+        **({'finalTitle': t['finalTitle'], 'presentation': t['presentation'], 'version': 1} if t.get('presentation') else {}),
+    } for t in tabs]
     record_checks, chain, cursor = [], '', 0
     while cursor < len(export['technical_rows']):
         table, index, _, count, digest, _ = export['technical_rows'][cursor]
@@ -416,6 +417,10 @@ def _encode_operations(export):
         size += count
     if batch:
         yield {'kind': 'verifyRecords', 'start': start, 'records': batch}
+    for tab in tabs:
+        if tab.get('presentation'):
+            yield layout_operation(tab)
+            yield {'kind': 'verifyLayout', 'version': 1, 'tab': tab['name'], 'presentation': tab['presentation']}
     yield {'kind': 'publish'}
 
 
@@ -427,7 +432,7 @@ def encode_operations(export):
         return operations[0] if len(operations) == 1 else {'kind': 'batch', 'operations': operations}
 
     for operation in _encode_operations(export):
-        if operation['kind'] in ('prepare', 'publish'):
+        if operation['kind'] in ('prepare', 'layout', 'verifyLayout', 'publish'):
             if pending:
                 yield grouped(pending)
                 pending = []

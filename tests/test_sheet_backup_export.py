@@ -78,13 +78,25 @@ def test_complete_scoped_roundtrip(client):
     assert export['photos'][0]['recruitId'] == rid
     import base64
     assert base64.b64decode(export['photos'][0]['data']) == photo
-    assert any(t['name'] == 'Results' for t in export['tabs'])
+    assert [tab['name'] for tab in export['tabs'][:3]] == ['Results', 'Recruit Profiles', 'Backup summary']
+    assert [tab.get('presentation') for tab in export['tabs'][:2]] == ['results-v1', 'recruit-profiles-v1']
+    assert all(tab['name'] != 'Results' for tab in export['tabs'][2:])
     operations = list(encode_operations(export))
     assert operations[-1]['kind'] == 'publish'
     assert all(len(json_text(op).encode()) < 1_300_000 for op in operations)
     assert all(len(op.get('operations', [])) <= 8 for op in operations)
     assert all(op['kind'] != 'batch' or all(child['kind'] not in ('prepare', 'publish', 'batch')
                for child in op['operations']) for op in operations)
+    flattened_operations = list(flattened(operations))
+    assert [op['kind'] for op in flattened_operations[-5:]] == [
+        'layout', 'verifyLayout', 'layout', 'verifyLayout', 'publish',
+    ]
+    assert all(op['kind'] != 'batch' for op in operations if op['kind'] in ('layout', 'verifyLayout'))
+    prepare = flattened_operations[0]
+    presentation_descriptors = [tab for tab in prepare['tabs'] if tab.get('presentation')]
+    assert all(tab['cols'] <= 128 for tab in presentation_descriptors)
+    assert all(tab['cols'] <= 60 for tab in prepare['tabs'] if not tab.get('presentation'))
+    assert all('Same Name' not in json.dumps(op) for op in flattened_operations if op['kind'] == 'layout')
 
 
 def test_real_export_protocol_runs_through_google_simulator(client):
