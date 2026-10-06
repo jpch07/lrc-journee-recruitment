@@ -1228,42 +1228,50 @@ def _payload_results_sheet(workbook: Workbook, payload: dict[str, object]) -> No
     _title(sheet, "Results & rankings", "Overall, dimension, and activity rankings", 10)
     _style_selector(sheet, "A3", "B3", f"{terms['session']} view")
     _style_selector(sheet, "D3", "E3", "Result view")
-    scopes = results["scopes"]
-    views = results["views"]
+    scope_options = results["scopeOptions"]
+    view_options = results["viewOptions"]
+    scopes = [item["label"] for item in scope_options]
+    views = [item["label"] for item in view_options]
     sheet["B3"] = scopes[0] if scopes else ""
     sheet["E3"] = views[0] if views else ""
     rows = [[
-        row["scope"], row["view"], row["rank"] or "", row["name"], row["journeyName"],
+        row["scopeKey"], row["viewKey"], row["rank"] or "", row["name"], row["journeyName"],
         row["score"], row["scale"], row["details"], row["status"], row["color"],
         row["generalComment"], row["notes"],
     ] for row in results["rows"]]
     rows = _with_lookup_keys(rows, 0, 1)
     start, end = _write_hidden_rows(
         sheet, 13,
-        ["Scope", "View", "Rank", terms["participant"], terms["session"], "Score", "Scale",
+        ["Scope key", "View key", "Rank", terms["participant"], terms["session"], "Score", "Scale",
          "Details", "Status", "Color", "General comment", "Notes", "Lookup key"],
         rows,
     )
-    for index, value in enumerate(scopes, 2):
-        sheet.cell(index, 26, value)
-    for index, value in enumerate(views, 2):
-        sheet.cell(index, 27, value)
+    for index, option in enumerate(scope_options, 2):
+        sheet.cell(index, 26, option["label"])
+        sheet.cell(index, 27, option["key"])
+    for index, option in enumerate(view_options, 2):
+        sheet.cell(index, 28, option["label"])
+        sheet.cell(index, 29, option["key"])
     sheet.cell(1, 26, "Scope options")
-    sheet.cell(1, 27, "View options")
-    sheet.column_dimensions["Z"].hidden = True
-    sheet.column_dimensions["AA"].hidden = True
+    sheet.cell(1, 27, "Scope keys")
+    sheet.cell(1, 28, "View options")
+    sheet.cell(1, 29, "View keys")
+    for column in ("Z", "AA", "AB", "AC"):
+        sheet.column_dimensions[column].hidden = True
     _validation(sheet, "B3", "Z", len(scopes))
-    _validation(sheet, "E3", "AA", len(views))
+    _validation(sheet, "E3", "AB", len(views))
     headers = ["Rank", terms["participant"], terms["session"], "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes"]
     for column, header in enumerate(headers, 1):
         cell = sheet.cell(5, column, header)
         cell.fill = PatternFill("solid", fgColor=NAVY)
         cell.font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     maximum_rows = max(Counter((row[0], row[1]) for row in rows).values(), default=1)
+    scope_key = f'_xlfn.XLOOKUP($B$3,$Z$2:$Z${len(scopes) + 1},$AA$2:$AA${len(scopes) + 1})'
+    view_key = f'_xlfn.XLOOKUP($E$3,$AB$2:$AB${len(views) + 1},$AC$2:$AC${len(views) + 1})'
     for visible_row in range(6, 6 + maximum_rows):
         for column, source_column in enumerate(("O", "P", "Q", "R", "S", "T", "U", "V", "W", "X"), 1):
             sheet.cell(visible_row, column, _lookup_value_formula(
-                key_expression=f'$B$3&"|"&$E$3&"|"&ROWS($A$6:$A{visible_row})',
+                key_expression=f'{scope_key}&"|"&{view_key}&"|"&ROWS($A$6:$A{visible_row})',
                 lookup_column="Y", result_column=source_column, start=start, end=end,
             ))
     _style_formula_rows(sheet, 6, maximum_rows, len(headers))
@@ -1307,7 +1315,9 @@ def _payload_profile_sheet(
     audit_column = criterion_column + len(criterion_headers)
     scope_options_column = audit_column + len(audit_headers)
     recruit_options_column = scope_options_column + 1
-    photo_key_column = recruit_options_column + 1
+    scope_key_column = recruit_options_column + 1
+    recruit_key_column = scope_key_column + 1
+    photo_key_column = recruit_key_column + 1
     photo_value_column = photo_key_column + 1
 
     def hidden_column(block_start: int, offset: int) -> str:
@@ -1354,22 +1364,28 @@ def _payload_profile_sheet(
     _write_hidden_rows(sheet, evaluator_column, evaluator_headers, evaluator_rows)
     _write_hidden_rows(sheet, criterion_column, criterion_headers, criterion_rows)
     _write_hidden_rows(sheet, audit_column, audit_headers, audit_rows)
-    all_options = profiles["optionsByScope"].get(profiles["defaultScope"], [])
-    for index, value in enumerate(profiles["scopes"], 2):
-        sheet.cell(index, scope_options_column, value)
+    all_options = profiles["optionsByScopeKey"].get(profiles["defaultScopeKey"], [])
+    for index, option in enumerate(profiles["scopeOptions"], 2):
+        sheet.cell(index, scope_options_column, option["label"])
+        sheet.cell(index, scope_key_column, option["key"])
     for index, option in enumerate(all_options, 2):
         sheet.cell(index, recruit_options_column, option["label"])
+        sheet.cell(index, recruit_key_column, option["profileKey"])
     scope_letter = get_column_letter(scope_options_column)
+    scope_key_letter = get_column_letter(scope_key_column)
     recruit_letter = get_column_letter(recruit_options_column)
-    sheet.column_dimensions[scope_letter].hidden = True
-    sheet.column_dimensions[recruit_letter].hidden = True
-    _validation(sheet, "B3", scope_letter, len(profiles["scopes"]))
+    recruit_key_letter = get_column_letter(recruit_key_column)
+    for column in (scope_letter, scope_key_letter, recruit_letter, recruit_key_letter):
+        sheet.column_dimensions[column].hidden = True
+    _validation(sheet, "B3", scope_letter, len(profiles["scopeOptions"]))
     _validation(sheet, "E3", recruit_letter, len(all_options))
 
     last_summary = max(2, len(summary_rows) + 1)
     last_dimension = max(2, len(dimension_rows) + 1)
     last_activity = max(2, len(activity_rows) + 1)
-    selection = '$B$3&"|"&$E$3'
+    scope_key = f'_xlfn.XLOOKUP($B$3,${scope_letter}$2:${scope_letter}${len(profiles["scopeOptions"]) + 1},${scope_key_letter}$2:${scope_key_letter}${len(profiles["scopeOptions"]) + 1})'
+    profile_key = f'_xlfn.XLOOKUP($E$3,${recruit_letter}$2:${recruit_letter}${len(all_options) + 1},${recruit_key_letter}$2:${recruit_key_letter}${len(all_options) + 1})'
+    selection = f'{scope_key}&"|"&{profile_key}'
     summary_selection_letter = hidden_column(summary_column, 0)
     sheet["H3"] = _scalar_lookup_formula(
         selection,

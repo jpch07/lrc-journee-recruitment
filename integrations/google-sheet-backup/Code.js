@@ -11,6 +11,8 @@ const PROFILE_LAYOUT_KEY = 'evalday_profile_layout_v1';
 const PRESENTATIONS = {
   'results-v1': {name:'Results', finalTitle:'Results'},
   'recruit-profiles-v1': {name:'Recruit Profiles', finalTitle:'Recruit Profiles'},
+  'results-v2': {name:'Results', finalTitle:'Results'},
+  'recruit-profiles-v2': {name:'Recruit Profiles', finalTitle:'Recruit Profiles'},
 };
 
 function fail(code) { throw new Error(code); }
@@ -233,6 +235,17 @@ function validateLayout(op, tab) {
     const data=boundedBlock(l.blocks.results,tab), scopes=boundedBlock(l.blocks.scopeOptions,tab), views=boundedBlock(l.blocks.viewOptions,tab);
     if (data.startCol!==13 || data.endCol!==25 || scopes.startCol!==26 || scopes.endCol!==26 ||
         views.startCol!==27 || views.endCol!==27 || data.startRow!==1 || scopes.startRow!==1 || views.startRow!==1) fail('TABS');
+  } else if (tab.presentation === 'results-v2') {
+    exactKeys(l,['selectorCells','headerRow','visibleStartRow','visibleCapacity','frozenRows','helperStartCol','tabColor','bandStyles','columnWidths','blocks']);
+    if (JSON.stringify(l.selectorCells)!==JSON.stringify(['B3','E3']) || l.headerRow!==5 || l.visibleStartRow!==6 ||
+        l.frozenRows!==5 || l.helperStartCol!==13 || l.tabColor!=='GREEN') fail('TABS');
+    boundedInteger(l.visibleCapacity,1,tab.rows-5);
+    validateBandStyles(l.bandStyles);
+    if (!Array.isArray(l.columnWidths) || l.columnWidths.length!==10 || l.columnWidths.some(v=>!Number.isInteger(v)||v<40||v>500)) fail('TABS');
+    exactKeys(l.blocks,['results','scopeOptions','viewOptions']);
+    const data=boundedBlock(l.blocks.results,tab), scopes=boundedBlock(l.blocks.scopeOptions,tab), views=boundedBlock(l.blocks.viewOptions,tab);
+    if (data.startCol!==13 || data.endCol!==24 || scopes.startCol!==25 || scopes.endCol!==26 ||
+        views.startCol!==27 || views.endCol!==28 || data.startRow!==1 || scopes.startRow!==1 || views.startRow!==1) fail('TABS');
   } else if (tab.presentation === 'recruit-profiles-v1') {
     exactKeys(l,['selectorCells','profileKeyCell','imageAnchor','frozenRows','helperStartCol','tabColor','bandStyles','columnWidths','expectedPreviewCount',
       'dimensionCount','activityCount','factorCount','evaluatorCapacity','criterionCapacity','auditCapacity','sectionRows','charts','blocks']);
@@ -262,8 +275,54 @@ function validateLayout(op, tab) {
       nextColumn=block.endCol+1;
     });
     if (l.blocks.previews.endCol!==tab.cols || l.blocks.dependentOptions.endRow-l.blocks.dependentOptions.startRow!==l.expectedPreviewCount) fail('TABS');
+  } else if (tab.presentation === 'recruit-profiles-v2') {
+    exactKeys(l,['selectorCells','profileKeyCell','imageAnchor','frozenRows','helperStartCol','tabColor','bandStyles','columnWidths','expectedPreviewCount',
+      'dimensionCount','activityCount','factorCount','evaluatorCapacity','criterionCapacity','auditCapacity','sectionRows','charts','blocks']);
+    if (JSON.stringify(l.selectorCells)!==JSON.stringify(['B3','E3']) || l.profileKeyCell!=='H3' || l.imageAnchor!=='J3' ||
+        l.frozenRows!==7 || l.helperStartCol!==27 || l.tabColor!=='YELLOW') fail('TABS');
+    if (!Array.isArray(l.columnWidths) || l.columnWidths.length!==12 || l.columnWidths.some(v=>!Number.isInteger(v)||v<20||v>500)) fail('TABS');
+    validateBandStyles(l.bandStyles);
+    boundedInteger(l.expectedPreviewCount,0,5000); boundedInteger(l.dimensionCount,1,40); boundedInteger(l.activityCount,1,40);
+    boundedInteger(l.factorCount,0,34); boundedInteger(l.evaluatorCapacity,1,500); boundedInteger(l.criterionCapacity,1,500); boundedInteger(l.auditCapacity,1,500);
+    exactKeys(l.sectionRows,['dimension','dimensionHeader','dimensionStart','activity','activityHeader','activityStart','general','generalStart',
+      'evaluator','evaluatorHeader','evaluatorStart','criterion','criterionHeader','criterionStart','audit','auditHeader','auditStart']);
+    const expected=expectedProfileRows_(l);
+    Object.entries(expected).forEach(([key,value])=>{if(l.sectionRows[key]!==value)fail('TABS')});
+    Object.values(l.sectionRows).forEach(v=>boundedInteger(v,1,tab.rows));
+    if (l.sectionRows.auditStart+l.auditCapacity-1>tab.rows) fail('TABS');
+    if (!Array.isArray(l.charts) || l.charts.length!==2) fail('TABS');
+    l.charts.forEach((chart,index)=>{
+      exactKeys(chart,['startRow','endRow','labelCol','valueCol','anchor','maximum']);
+      const start=index?l.sectionRows.activityStart:l.sectionRows.dimensionStart;
+      const count=index?l.activityCount:l.dimensionCount;
+      const anchor=`G${index?l.sectionRows.activity:l.sectionRows.dimension}`;
+      if (chart.startRow!==start || chart.endRow!==start+count-1 || chart.labelCol!==1 || chart.valueCol!==2 ||
+          chart.anchor!==anchor || !Number.isInteger(chart.maximum) || chart.maximum<1 || chart.maximum>100) fail('TABS');
+    });
+    exactKeys(l.blocks,['summaries','dimensions','activities','evaluators','criteria','audit','scopeOptions','profileOptions','dependentOptions','previews']);
+    Object.values(l.blocks).forEach(block=>boundedBlock(block,tab));
+    const expectedWidths={summaries:21+l.factorCount,dimensions:6,activities:6,evaluators:7,criteria:9,audit:7,scopeOptions:2,profileOptions:3,dependentOptions:2,previews:5};
+    Object.entries(expectedWidths).forEach(([key,width])=>{if(l.blocks[key].endCol-l.blocks[key].startCol+1!==width)fail('TABS')});
+    let nextColumn=27;
+    ['summaries','dimensions','activities','evaluators','criteria','audit','scopeOptions','profileOptions','dependentOptions','previews'].forEach(key=>{
+      const block=l.blocks[key];
+      if(block.startRow!==1 || block.startCol!==nextColumn) fail('TABS');
+      nextColumn=block.endCol+1;
+    });
+    if (l.blocks.previews.endCol!==tab.cols || l.blocks.dependentOptions.endRow-l.blocks.dependentOptions.startRow!==l.expectedPreviewCount) fail('TABS');
   } else fail('TABS');
   return l;
+}
+
+function expectedProfileRows_(layout) {
+  const dimension=8,dimensionHeader=9,dimensionStart=10;
+  const activity=Math.max(26,dimensionStart+layout.dimensionCount),activityHeader=activity+1,activityStart=activity+2;
+  const general=Math.max(44,activity+18,activityStart+layout.activityCount),generalStart=general+1;
+  const evaluator=Math.max(55,generalStart+layout.factorCount+5),evaluatorHeader=evaluator+1,evaluatorStart=evaluator+2;
+  const criterion=Math.max(79,evaluatorStart+layout.evaluatorCapacity+1),criterionHeader=criterion+1,criterionStart=criterion+2;
+  const audit=Math.max(200,criterionStart+layout.criterionCapacity+1),auditHeader=audit+1,auditStart=audit+2;
+  return {dimension,dimensionHeader,dimensionStart,activity,activityHeader,activityStart,general,generalStart,
+    evaluator,evaluatorHeader,evaluatorStart,criterion,criterionHeader,criterionStart,audit,auditHeader,auditStart};
 }
 function blockRange(block, offset, startRow) {
   const column = columnLetter(block.startCol + offset);
@@ -282,6 +341,24 @@ function numericScalarLookup(key, keyRange, valueRange) {
 function indexedFilter(key, keyRange, valueRange, ordinal) {
   return `=IFERROR(INDEX(FILTER(${valueRange},${keyRange}=${key}),${ordinal}),"")`;
 }
+function selectedOptionKey_(cell, block) {
+  return `XLOOKUP(${cell},${blockRange(block,0)},${blockRange(block,1)})`;
+}
+function filteredValue2_(key1, range1, key2, range2, valueRange, ordinal) {
+  return `INDEX(FILTER(${valueRange},${range1}=${key1},${range2}=${key2}),${ordinal})`;
+}
+function scalarFilter2_(key1, range1, key2, range2, valueRange, blank) {
+  const fallback=(blank===undefined?'—':blank).replace(/"/g,'""');
+  const lookup=filteredValue2_(key1,range1,key2,range2,valueRange,1);
+  return `=IFERROR(IF(${lookup}="","${fallback}",${lookup}),"${fallback}")`;
+}
+function numericFilter2_(key1, range1, key2, range2, valueRange, ordinal) {
+  const lookup=filteredValue2_(key1,range1,key2,range2,valueRange,ordinal);
+  return `=IFERROR(LET(v,${lookup},IF(v="","",VALUE(v))),"")`;
+}
+function indexedFilter2_(key1, range1, key2, range2, valueRange, ordinal) {
+  return `=IFERROR(${filteredValue2_(key1,range1,key2,range2,valueRange,ordinal)},"")`;
+}
 function applyFormulaRanges(sheet, ranges) {
   ranges.forEach(item=>sheet.getRange(item.row,item.col,item.values.length,item.values[0].length).setFormulas(item.values));
 }
@@ -291,13 +368,21 @@ function verifyFormulaRanges(sheet, ranges) {
     if(JSON.stringify(actual)!==JSON.stringify(item.values)) fail('VERIFY');
   });
 }
-function resultsFormulaRanges(layout) {
-  const block=layout.blocks.results,keyRange=blockRange(block,12),start=layout.visibleStartRow;
+function resultsFormulaRanges(layout, presentation) {
+  const block=layout.blocks.results,start=layout.visibleStartRow;
   const values=[];
+  const v2=presentation==='results-v2';
+  const scopeKey=v2?selectedOptionKey_('$B$3',layout.blocks.scopeOptions):'';
+  const viewKey=v2?selectedOptionKey_('$E$3',layout.blocks.viewOptions):'';
+  const keyRange=v2?'':blockRange(block,12);
   for(let index=0;index<layout.visibleCapacity;index++) {
     const row=start+index,ordinal=`ROWS($A$${start}:$A${row})`,key=`$B$3&"|"&$E$3&"|"&${ordinal}`;
     const formulas=[];
-    for(let column=1;column<=10;column++) formulas.push(scalarLookup(key,keyRange,blockRange(block,column+1),''));
+    for(let column=1;column<=10;column++) {
+      formulas.push(v2
+        ? indexedFilter2_(scopeKey,blockRange(block,0),viewKey,blockRange(block,1),blockRange(block,column+1),ordinal)
+        : scalarLookup(key,keyRange,blockRange(block,column+1),''));
+    }
     values.push(formulas);
   }
   return [{row:start,col:1,values}];
@@ -331,7 +416,7 @@ function styleBase(sheet, tab, layout, span) {
 function clearOwnedLayout(sheet, presentation) {
   sheet.setConditionalFormatRules([]);
   sheet.getCharts().forEach(chart=>sheet.removeChart(chart));
-  if (presentation==='recruit-profiles-v1') {
+  if (presentation==='recruit-profiles-v1' || presentation==='recruit-profiles-v2') {
     sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3 && image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
   }
 }
@@ -344,7 +429,7 @@ function applyResultsLayout(sheet, tab, layout) {
   sheet.getRange('A5:J5').setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setWrap(true);
   setListValidation(sheet,'B3',layout.blocks.scopeOptions); setListValidation(sheet,'E3',layout.blocks.viewOptions);
   const start=layout.visibleStartRow, end=start+layout.visibleCapacity-1;
-  applyFormulaRanges(sheet,resultsFormulaRanges(layout));
+  applyFormulaRanges(sheet,resultsFormulaRanges(layout,tab.presentation));
   for(let row=start;row<=end;row++) {
     sheet.getRange(row,1,1,10).setWrap(true);
     if ((row-start)%2) sheet.getRange(row,1,1,10).setBackground('#F7F9FC');
@@ -359,31 +444,46 @@ function applyResultsLayout(sheet, tab, layout) {
   sheet.setConditionalFormatRules(rules);
   replaceProtection(sheet);
 }
-function summaryFormula(layout, offset, blank) {
+function summaryFormula(layout, offset, blank, presentation) {
   const block=layout.blocks.summaries;
+  if (presentation==='recruit-profiles-v2') {
+    return scalarFilter2_(selectedOptionKey_('$B$3',layout.blocks.scopeOptions),blockRange(block,0),
+      '$H$3',blockRange(block,1),blockRange(block,offset),blank);
+  }
   return scalarLookup('$B$3&"|"&$E$3',blockRange(block,0),blockRange(block,offset),blank);
 }
-function profileFormulaRanges(layout) {
+function profileFormulaRanges(layout, presentation) {
   const ranges=[];
   const summary=layout.blocks.summaries;
+  const v2=presentation==='recruit-profiles-v2';
+  const scopeKey=v2?selectedOptionKey_('$B$3',layout.blocks.scopeOptions):'';
   const single=(row,col,formula)=>ranges.push({row,col,values:[[formula]]});
-  single(3,8,summaryFormula(layout,1,''));
-  [[5,2,4],[5,5,2],[5,8,3],[6,2,5],[6,5,6],[6,8,8],[7,8,16]].forEach(([row,col,offset])=>single(row,col,summaryFormula(layout,offset)));
-  const attendance=scalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,7),'');
-  const comment=scalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,9),'');
+  single(3,8,v2?scalarLookup('$E$3',blockRange(layout.blocks.dependentOptions,0),blockRange(layout.blocks.dependentOptions,1),''):summaryFormula(layout,1,'',presentation));
+  [[5,2,4],[5,5,2],[5,8,3],[6,2,5],[6,5,6],[6,8,8],[7,8,16]].forEach(([row,col,offset])=>single(row,col,summaryFormula(layout,offset,undefined,presentation)));
+  const attendance=v2
+    ? scalarFilter2_(scopeKey,blockRange(summary,0),'$H$3',blockRange(summary,1),blockRange(summary,7),'')
+    : scalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,7),'');
+  const comment=v2
+    ? scalarFilter2_(scopeKey,blockRange(summary,0),'$H$3',blockRange(summary,1),blockRange(summary,9),'')
+    : scalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,9),'');
   single(7,2,`=IFERROR(${attendance.slice(1)}&IF(${comment.slice(1)}="",""," · "&${comment.slice(1)}),"—")`);
-  const score=`VALUE(XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,10)}))`;
-  const overallRank=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,12)})`;
-  const overallPopulation=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,13)})`;
-  const journeyRank=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,14)})`;
-  const journeyPopulation=`XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,15)})`;
+  const summaryValue=offset=>v2
+    ? filteredValue2_(scopeKey,blockRange(summary,0),'$H$3',blockRange(summary,1),blockRange(summary,offset),1)
+    : `XLOOKUP($B$3&"|"&$E$3,${blockRange(summary,0)},${blockRange(summary,offset)})`;
+  const score=`VALUE(${summaryValue(10)})`;
+  const overallRank=summaryValue(12),overallPopulation=summaryValue(13),journeyRank=summaryValue(14),journeyPopulation=summaryValue(15);
   single(7,5,`=IFERROR(TEXT(${score},"0.00")&" · overall "&${overallRank}&"/"&${overallPopulation}&" · Journee "&${journeyRank}&"/"&${journeyPopulation},"—")`);
   const sections=layout.sectionRows;
   const dimension=layout.blocks.dimensions;
   const dimensionValues=[];
   for(let index=0;index<layout.dimensionCount;index++) {
     const row=sections.dimensionStart+index,key=`$B$3&"|"&$E$3&"|"&$A${row}`;
-    dimensionValues.push([
+    dimensionValues.push(v2 ? [
+      numericFilter2_(scopeKey,blockRange(dimension,0),'$H$3',blockRange(dimension,1),blockRange(dimension,2),index+1),
+      indexedFilter2_(scopeKey,blockRange(dimension,0),'$H$3',blockRange(dimension,1),blockRange(dimension,3),index+1),
+      indexedFilter2_(scopeKey,blockRange(dimension,0),'$H$3',blockRange(dimension,1),blockRange(dimension,4),index+1),
+      indexedFilter2_(scopeKey,blockRange(dimension,0),'$H$3',blockRange(dimension,1),blockRange(dimension,5),index+1),
+    ] : [
       numericScalarLookup(key,`${blockRange(dimension,0)}&"|"&${blockRange(dimension,1)}`,blockRange(dimension,2)),
       scalarLookup(key,`${blockRange(dimension,0)}&"|"&${blockRange(dimension,1)}`,blockRange(dimension,3),''),
       scalarLookup(key,`${blockRange(dimension,0)}&"|"&${blockRange(dimension,1)}`,blockRange(dimension,4),''),
@@ -395,7 +495,12 @@ function profileFormulaRanges(layout) {
   const activityValues=[];
   for(let index=0;index<layout.activityCount;index++) {
     const row=sections.activityStart+index,key=`$B$3&"|"&$E$3&"|"&$A${row}`;
-    activityValues.push([
+    activityValues.push(v2 ? [
+      numericFilter2_(scopeKey,blockRange(activity,0),'$H$3',blockRange(activity,1),blockRange(activity,2),index+1),
+      indexedFilter2_(scopeKey,blockRange(activity,0),'$H$3',blockRange(activity,1),blockRange(activity,3),index+1),
+      indexedFilter2_(scopeKey,blockRange(activity,0),'$H$3',blockRange(activity,1),blockRange(activity,4),index+1),
+      indexedFilter2_(scopeKey,blockRange(activity,0),'$H$3',blockRange(activity,1),blockRange(activity,5),index+1),
+    ] : [
       numericScalarLookup(key,`${blockRange(activity,0)}&"|"&${blockRange(activity,1)}`,blockRange(activity,2)),
       scalarLookup(key,`${blockRange(activity,0)}&"|"&${blockRange(activity,1)}`,blockRange(activity,3),''),
       scalarLookup(key,`${blockRange(activity,0)}&"|"&${blockRange(activity,1)}`,blockRange(activity,4),''),
@@ -407,8 +512,10 @@ function profileFormulaRanges(layout) {
   const generalOffsets=[...factorOffsets,18+layout.factorCount,17,19+layout.factorCount,20+layout.factorCount];
   ranges.push({row:sections.generalStart,col:2,values:generalOffsets.map((offset,index)=>[
     index<=layout.factorCount
-      ? numericScalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,offset))
-      : summaryFormula(layout,offset,''),
+      ? (v2
+        ? numericFilter2_(scopeKey,blockRange(summary,0),'$H$3',blockRange(summary,1),blockRange(summary,offset),1)
+        : numericScalarLookup('$B$3&"|"&$E$3',blockRange(summary,0),blockRange(summary,offset)))
+      : summaryFormula(layout,offset,'',presentation),
   ])});
   const applyFiltered=(block,start,capacity,columns)=>{
     const values=[];
@@ -425,8 +532,8 @@ function profileFormulaRanges(layout) {
   applyFiltered(layout.blocks.audit,sections.auditStart,layout.auditCapacity,6);
   return ranges;
 }
-function applyProfileFormulas(sheet, layout) {
-  applyFormulaRanges(sheet,profileFormulaRanges(layout));
+function applyProfileFormulas(sheet, layout, presentation) {
+  applyFormulaRanges(sheet,profileFormulaRanges(layout,presentation));
 }
 function decodePreviewBase64_(encoded) {
   if (typeof encoded!=='string' || !encoded.length || encoded.length%4!==0) fail('VERIFY');
@@ -489,16 +596,18 @@ function refreshInitialProfileImage(sheet, layout) {
 function applyProfileLayout(sheet, tab, layout) {
   clearOwnedLayout(sheet,tab.presentation);
   sheet.getDeveloperMetadata().filter(item=>item.getKey()===PROFILE_LAYOUT_KEY).forEach(item=>item.remove());
-  sheet.addDeveloperMetadata(PROFILE_LAYOUT_KEY,JSON.stringify({v:1,e:layout.expectedPreviewCount,
+  const triggerLayout={v:tab.presentation==='recruit-profiles-v2'?2:1,e:layout.expectedPreviewCount,
     o:[layout.blocks.profileOptions.startRow,layout.blocks.profileOptions.endRow,layout.blocks.profileOptions.startCol,layout.blocks.profileOptions.endCol],
     d:[layout.blocks.dependentOptions.startRow,layout.blocks.dependentOptions.endRow,layout.blocks.dependentOptions.startCol,layout.blocks.dependentOptions.endCol],
-    p:[layout.blocks.previews.startRow,layout.blocks.previews.endRow,layout.blocks.previews.startCol,layout.blocks.previews.endCol]}));
+    p:[layout.blocks.previews.startRow,layout.blocks.previews.endRow,layout.blocks.previews.startCol,layout.blocks.previews.endCol]};
+  if(tab.presentation==='recruit-profiles-v2') triggerLayout.s=[layout.blocks.scopeOptions.startRow,layout.blocks.scopeOptions.endRow,layout.blocks.scopeOptions.startCol,layout.blocks.scopeOptions.endCol];
+  sheet.addDeveloperMetadata(PROFILE_LAYOUT_KEY,JSON.stringify(triggerLayout));
   styleBase(sheet,tab,layout,12);
   sheet.getRange('A1:L1').breakApart().merge().setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setFontSize(18);
   sheet.getRange('A2:L2').breakApart().merge().setFontColor('#667085').setFontSize(10);
   ['B3','E3'].forEach(cell=>sheet.getRange(cell).setBackground('#FFF5D9').setFontWeight('bold').setFontColor('#223449'));
   setListValidation(sheet,'B3',layout.blocks.scopeOptions); setListValidation(sheet,'E3',layout.blocks.dependentOptions);
-  applyProfileFormulas(sheet,layout);
+  applyProfileFormulas(sheet,layout,tab.presentation);
   const s=layout.sectionRows;
   [s.dimension,s.activity,s.general,s.evaluator,s.criterion,s.audit].forEach(row=>sheet.getRange(row,1,1,12).setBackground('#EAF1F8').setFontColor('#223449').setFontWeight('bold'));
   [s.dimensionHeader,s.activityHeader,s.evaluatorHeader,s.criterionHeader,s.auditHeader].forEach(row=>sheet.getRange(row,1,1,12).setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setWrap(true));
@@ -530,7 +639,7 @@ function applyPresentationLayout(op, state, ss) {
   const tab=state.tabs.find(item=>item.name===op.tab);
   if (!tab || !tab.presentation || tab.written!==tab.rows || tab.verified!==tab.rows) fail('INCOMPLETE');
   const layout=validateLayout(op,tab),sheet=stage(ss,state,tab.name);
-  if (tab.presentation==='results-v1') applyResultsLayout(sheet,tab,layout);
+  if (tab.presentation==='results-v1' || tab.presentation==='results-v2') applyResultsLayout(sheet,tab,layout);
   else applyProfileLayout(sheet,tab,layout);
   tab.layoutDigest=hash(JSON.stringify({presentation:op.presentation,layout}));
   tab.layoutVerified=false;
@@ -553,16 +662,17 @@ function verifyPresentationLayout(op, state, ss) {
   if (!tab || !tab.presentation) fail('TABS');
   const layout=validateLayout(op,tab),digest=hash(JSON.stringify({presentation:op.presentation,layout}));
   if (tab.layoutDigest!==digest) fail('VERIFY');
-  const sheet=stage(ss,state,tab.name), expectedRules=(tab.presentation==='results-v1'?2:8)+layout.bandStyles.length;
+  const isResults=tab.presentation==='results-v1'||tab.presentation==='results-v2';
+  const sheet=stage(ss,state,tab.name), expectedRules=(isResults?2:8)+layout.bandStyles.length;
   if (sheet.getFrozenRows()!==layout.frozenRows || !sheet.isColumnHiddenByUser(layout.helperStartCol) ||
       sheet.getConditionalFormatRules().length!==expectedRules) fail('VERIFY');
-  if (tab.presentation==='results-v1') {
+  if (isResults) {
     verifySelector_(sheet,'B3',layout.blocks.scopeOptions);verifySelector_(sheet,'E3',layout.blocks.viewOptions);
-    verifyFormulaRanges(sheet,resultsFormulaRanges(layout));
+    verifyFormulaRanges(sheet,resultsFormulaRanges(layout,tab.presentation));
     if (sheet.getCharts().length!==0 || sheet.getImages().length!==0) fail('VERIFY');
   } else {
     verifySelector_(sheet,'B3',layout.blocks.scopeOptions);verifySelector_(sheet,'E3',layout.blocks.dependentOptions);
-    verifyFormulaRanges(sheet,profileFormulaRanges(layout));
+    verifyFormulaRanges(sheet,profileFormulaRanges(layout,tab.presentation));
     verifyPreviewStore_(sheet,layout);
     const imageCount=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).length;
     const profileMetadata=sheet.getDeveloperMetadata().filter(item=>item.getKey()===PROFILE_LAYOUT_KEY);
@@ -755,14 +865,16 @@ function profileTriggerLayout_(sheet) {
   if (entries.length!==1) fail('VERIFY');
   let value;
   try { value=JSON.parse(entries[0].getValue()); } catch (_) { fail('VERIFY'); }
-  if (!value || value.v!==1 || !Number.isInteger(value.e) || value.e<0 || value.e>5000) fail('VERIFY');
+  if (!value || ![1,2].includes(value.v) || !Number.isInteger(value.e) || value.e<0 || value.e>5000) fail('VERIFY');
   const parse=(input,width)=>{
     if (!Array.isArray(input)||input.length!==4||input.some(item=>!Number.isInteger(item))) fail('VERIFY');
     const [startRow,endRow,startCol,endCol]=input;
     if(startRow!==1||endRow<startRow||endRow>sheet.getMaxRows()||startCol<1||endCol>sheet.getMaxColumns()||endCol-startCol+1!==width) fail('VERIFY');
     return {startRow,endRow,startCol,endCol};
   };
-  return {expected:value.e,profileOptions:parse(value.o,3),dependentOptions:parse(value.d,2),previews:parse(value.p,5)};
+  const output={version:value.v,expected:value.e,profileOptions:parse(value.o,3),dependentOptions:parse(value.d,2),previews:parse(value.p,5)};
+  if(value.v===2) output.scopeOptions=parse(value.s,2);
+  return output;
 }
 function blockValues_(sheet, block) {
   if (block.endRow<=block.startRow) return [];
@@ -778,7 +890,13 @@ function sheetsCellValue_(sheet, cell) {
 }
 function refreshDependentProfileOptions_(sheet, layout) {
   const scope=String(sheet.getRange('B3').getValue());
-  const options=blockValues_(sheet,layout.profileOptions).filter(row=>String(row[0])===scope).map(row=>[String(row[1]),String(row[2])]);
+  let scopeKey=scope;
+  if(layout.version===2) {
+    const match=blockValues_(sheet,layout.scopeOptions).find(row=>String(row[0])===scope);
+    if(!match || !match[1]) fail('VERIFY');
+    scopeKey=String(match[1]);
+  }
+  const options=blockValues_(sheet,layout.profileOptions).filter(row=>String(row[0])===scopeKey).map(row=>[String(row[1]),String(row[2])]);
   const capacity=layout.dependentOptions.endRow-layout.dependentOptions.startRow;
   if (options.length>capacity) fail('VERIFY');
   if (capacity) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,capacity,2).clearContent();

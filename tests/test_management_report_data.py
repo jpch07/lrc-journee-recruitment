@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from dataclasses import replace
 from datetime import date
 
 from app.db import SessionLocal
@@ -127,3 +129,38 @@ def test_payload_builder_uses_only_the_captured_custom_definition():
     assert payload["profiles"]["dimensionDefinitions"][0]["key"] == "performance"
     assert payload["profiles"]["activityDefinitions"][0]["key"] == "evaluation"
     assert {row["color"] for row in payload["results"]["rows"] if row["view"] == "Overall ranking"} == {"Needs review"}
+
+
+def test_payload_uses_stable_ids_when_scope_and_view_labels_collide():
+    _completed_report_fixture()
+    with SessionLocal() as db:
+        source = load_management_report_source(db)
+
+    journeys = [deepcopy(item) for item in source.journeys]
+    for journey in journeys:
+        journey["name"] = "Same | Journee"
+    definition = deepcopy(source.definition)
+    definition["dimensions"][0]["name"] = "Shared | Result"
+    definition["activities"][0]["name"] = "Shared | Result"
+    source = replace(source, journeys=tuple(journeys), definition=definition)
+
+    payload = build_management_report_payload(source)
+    results = payload["results"]
+    profiles = payload["profiles"]
+
+    assert len({item["label"] for item in results["scopeOptions"]}) == len(results["scopeOptions"])
+    assert {item["key"] for item in results["scopeOptions"][1:]} == {
+        f"journey:{journey['id']}" for journey in journeys
+    }
+    shared_views = [item for item in results["viewOptions"] if item["label"].startswith("Shared | Result")]
+    assert len(shared_views) == 2
+    assert len({item["label"] for item in shared_views}) == 2
+    assert {item["key"].split(":", 1)[0] for item in shared_views} == {"dimension", "activity"}
+    assert all(row["scopeKey"] and row["viewKey"] for row in results["rows"])
+
+    assert len({item["label"] for item in profiles["scopeOptions"]}) == len(profiles["scopeOptions"])
+    assert profiles["defaultScopeKey"] == "completed"
+    assert set(profiles["optionsByScopeKey"]) == {item["key"] for item in profiles["scopeOptions"]}
+    assert all(row["selectionKey"] == f'{row["scopeKey"]}|{row["profileKey"]}' for row in profiles["summaries"])
+    assert all(row["dimensionKey"] for row in profiles["dimensions"])
+    assert all(row["activityKey"] for row in profiles["activities"])

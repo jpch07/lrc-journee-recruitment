@@ -82,7 +82,7 @@ def test_complete_scoped_roundtrip(client):
     import base64
     assert base64.b64decode(export['photos'][0]['data']) == photo
     assert [tab['name'] for tab in export['tabs'][:3]] == ['Results', 'Recruit Profiles', 'Backup summary']
-    assert [tab.get('presentation') for tab in export['tabs'][:2]] == ['results-v1', 'recruit-profiles-v1']
+    assert [tab.get('presentation') for tab in export['tabs'][:2]] == ['results-v2', 'recruit-profiles-v2']
     assert all(tab['name'] != 'Results' for tab in export['tabs'][2:])
     operations = list(encode_operations(export))
     assert operations[-1]['kind'] == 'publish'
@@ -246,7 +246,7 @@ def test_real_export_retries_same_failed_profile_layout_without_replacing_previo
         let failed=false;
         for(let sequence=0;sequence<operations.length;sequence++) {
           const operation=operations[sequence];
-          if(injectFailure && !failed && operation.kind==='layout' && operation.presentation==='recruit-profiles-v1') {
+          if(injectFailure && !failed && operation.kind==='layout' && operation.presentation==='recruit-profiles-v2') {
             const state=JSON.parse(env.props.getProperty('RUN'));
             const tab=state.tabs.find(item=>item.name==='Recruit Profiles');
             const staged=env.ss.getSheetById(tab.id),original=staged.newChart;

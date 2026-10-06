@@ -67,8 +67,8 @@ def _block_rows(tab, block):
 def test_presentations_are_first_rectangular_and_literal(sample_payload, sample_photos):
     tabs = build_presentation_tabs(sample_payload, sample_photos)
     assert [(tab["name"], tab["finalTitle"], tab["presentation"]) for tab in tabs] == [
-        ("Results", "Results", "results-v1"),
-        ("Recruit Profiles", "Recruit Profiles", "recruit-profiles-v1"),
+        ("Results", "Results", "results-v2"),
+        ("Recruit Profiles", "Recruit Profiles", "recruit-profiles-v2"),
     ]
     for tab in tabs:
         assert len(tab["rows"][0]) <= 128
@@ -143,30 +143,28 @@ def test_layout_operation_contains_only_bounded_template_parameters(sample_paylo
         assert "IMPORTDATA" not in encoded
 
 
-def test_formula_like_selector_labels_use_the_same_literal_lookup_key(sample_payload, sample_photos):
+def test_formula_like_and_delimited_labels_use_stable_helper_ids(sample_payload, sample_photos):
     profile_tab = build_presentation_tabs(sample_payload, sample_photos)[1]
     blocks = profile_tab["layout"]["blocks"]
     option_rows = _block_rows(profile_tab, blocks["profileOptions"])[1:]
     summary_rows = _block_rows(profile_tab, blocks["summaries"])[1:]
     formula_option = next(row for row in option_rows if row[1].endswith("=Formula Name"))
-    scope, label, profile_key = formula_option
+    scope_key, _label, profile_key = formula_option
     assert any(
-        row[0] == f"{scope}|{label}" and row[1] == profile_key
+        row[0] == scope_key and row[1] == profile_key
         for row in summary_rows
     )
+    assert blocks["scopeOptions"]["endCol"] - blocks["scopeOptions"]["startCol"] + 1 == 2
 
-    payload = deepcopy(sample_payload)
-    old_scope = payload["results"]["scopes"][0]
-    payload["results"]["scopes"][0] = "=Completed scope"
-    for row in payload["results"]["rows"]:
-        if row["scope"] == old_scope:
-            row["scope"] = "=Completed scope"
-    results_tab = build_presentation_tabs(payload, sample_photos)[0]
-    results_block = _block_rows(results_tab, results_tab["layout"]["blocks"]["results"])[1:]
-    guarded_scope = results_tab["rows"][2][1]
-    selected_view = results_tab["rows"][2][4]
-    assert guarded_scope.endswith("=Completed scope")
-    assert any(row[12] == f"{guarded_scope}|{selected_view}|1" for row in results_block)
+    results_tab = build_presentation_tabs(sample_payload, sample_photos)[0]
+    result_blocks = results_tab["layout"]["blocks"]
+    result_rows = _block_rows(results_tab, result_blocks["results"])[1:]
+    scope_options = _block_rows(results_tab, result_blocks["scopeOptions"])[1:]
+    view_options = _block_rows(results_tab, result_blocks["viewOptions"])[1:]
+    assert all(len(row) == 12 for row in result_rows)
+    assert all(len(row) == 2 for row in scope_options + view_options)
+    assert all(row[0] in {item[1] for item in scope_options} for row in result_rows)
+    assert all(row[1] in {item[1] for item in view_options} for row in result_rows)
 
 
 @pytest.mark.parametrize("factor_count", [0, 2, 3])
@@ -192,3 +190,76 @@ def test_layout_carries_bounded_configured_performance_band_styles(sample_payloa
             {"label": "Needs review", "background": "#DC2626", "font": "#FFFFFF"},
             {"label": "Strong", "background": "#16A34A", "font": "#FFFFFF"},
         ]
+
+
+def _expand_profile_rows(payload, kind, count):
+    profiles = payload["profiles"]
+    definition_key = "dimensionDefinitions" if kind == "dimensions" else "activityDefinitions"
+    key_name = "dimensionKey" if kind == "dimensions" else "activityKey"
+    original_def = deepcopy(profiles[definition_key][0])
+    definitions = []
+    for index in range(count):
+        item = deepcopy(original_def)
+        item["key"] = f"{kind}-{index}"
+        item["name"] = f"{kind.title()} {index}"
+        item["displayName"] = item["name"]
+        definitions.append(item)
+    profiles[definition_key] = definitions
+    by_selection = {}
+    for row in profiles[kind]:
+        by_selection.setdefault(row["selectionKey"], row)
+    rows = []
+    for base in by_selection.values():
+        for definition in definitions:
+            row = deepcopy(base)
+            row[key_name] = definition["key"]
+            row["name"] = definition["name"]
+            rows.append(row)
+    profiles[kind] = rows
+
+
+def test_profile_sections_expand_without_overlap_or_criterion_truncation(sample_payload, sample_photos):
+    payload = deepcopy(sample_payload)
+    _expand_profile_rows(payload, "dimensions", 17)
+    _expand_profile_rows(payload, "activities", 17)
+    profile_key = payload["profiles"]["defaultProfileKey"]
+    payload["profiles"]["criteria"] = [{
+        "profileKey": profile_key,
+        "activity": "Activity",
+        "dimension": "Dimension",
+        "criterion": f"Criterion {index}",
+        "explanation": "",
+        "evaluator": "Evaluator",
+        "grade": "4",
+        "rawResult": "",
+        "status": "Complete",
+    } for index in range(117)]
+
+    tab = build_presentation_tabs(payload, sample_photos)[1]
+    layout = tab["layout"]
+    sections = layout["sectionRows"]
+    assert sections["activity"] == 27
+    assert sections["general"] == 46
+    assert sections["generalStart"] == 47
+    assert layout["charts"][1]["anchor"] == "G27"
+    assert layout["criterionCapacity"] == 117
+    assert sections["criterionStart"] + 116 < sections["audit"]
+    assert sections["auditStart"] + layout["auditCapacity"] - 1 <= len(tab["rows"])
+
+
+def test_profile_detail_capacity_fails_instead_of_silently_truncating(sample_payload, sample_photos):
+    payload = deepcopy(sample_payload)
+    profile_key = payload["profiles"]["defaultProfileKey"]
+    payload["profiles"]["criteria"] = [{
+        "profileKey": profile_key,
+        "activity": "Activity",
+        "dimension": "Dimension",
+        "criterion": f"Criterion {index}",
+        "explanation": "",
+        "evaluator": "Evaluator",
+        "grade": "4",
+        "rawResult": "",
+        "status": "Complete",
+    } for index in range(501)]
+    with pytest.raises(google_sheet_presentations.PresentationError, match="500"):
+        build_presentation_tabs(payload, sample_photos)

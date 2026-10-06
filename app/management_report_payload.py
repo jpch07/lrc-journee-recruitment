@@ -380,6 +380,62 @@ def _band_label(definition: dict[str, object], value: object) -> str:
     return labels.get(text, text.replace("_", " ").title())
 
 
+def _make_unique_labels(values: list[str]) -> list[str]:
+    """Return deterministic, case-insensitively unique display labels."""
+    output: list[str] = []
+    used: set[str] = set()
+    for value in values:
+        label = value
+        ordinal = 2
+        while label.casefold() in used:
+            label = f"{value} · {ordinal}"
+            ordinal += 1
+        used.add(label.casefold())
+        output.append(label)
+    return output
+
+
+def _scope_options(source: ManagementReportSource, all_completed: str) -> list[dict[str, str]]:
+    raw_names = [all_completed, *[str(item["name"]) for item in source.journeys]]
+    counts = Counter(value.casefold() for value in raw_names)
+    candidates = [all_completed]
+    for journey in source.journeys:
+        name = str(journey["name"])
+        candidates.append(
+            f"{name} — {journey['eventDate']}" if counts[name.casefold()] > 1 else name
+        )
+    labels = _make_unique_labels(candidates)
+    return [
+        {"key": "completed", "label": labels[0]},
+        *[
+            {"key": f"journey:{journey['id']}", "label": label}
+            for journey, label in zip(source.journeys, labels[1:], strict=True)
+        ],
+    ]
+
+
+def _view_options(definition: dict[str, object]) -> list[dict[str, str]]:
+    raw: list[tuple[str, str, str]] = [("overall", "Overall ranking", "Overall")]
+    raw.extend(
+        (f"dimension:{item['key']}", str(item["name"]), "Dimension")
+        for item in definition["dimensions"]
+    )
+    raw.extend(
+        (f"activity:{item['key']}", str(item["name"]), "Activity")
+        for item in definition["activities"]
+    )
+    counts = Counter(label.casefold() for _key, label, _kind in raw)
+    candidates = [
+        f"{label} — {kind}" if counts[label.casefold()] > 1 else label
+        for _key, label, kind in raw
+    ]
+    labels = _make_unique_labels(candidates)
+    return [
+        {"key": key, "label": label}
+        for (key, _original, _kind), label in zip(raw, labels, strict=True)
+    ]
+
+
 def _results_payload(source: ManagementReportSource) -> dict[str, object]:
     definition = source.definition
     terms = definition["terminology"]
@@ -387,23 +443,35 @@ def _results_payload(source: ManagementReportSource) -> dict[str, object]:
     dimensions = definition["dimensions"]
     activities = definition["activities"]
     official_maximum = float(definition["officialMaximum"])
-    scopes = [all_completed, *[str(item["name"]) for item in source.journeys]]
-    views = ["Overall ranking", *[item["name"] for item in dimensions], *[item["name"] for item in activities]]
+    scope_options = _scope_options(source, all_completed)
+    view_options = _view_options(definition)
+    scopes = [item["label"] for item in scope_options]
+    views = [item["label"] for item in view_options]
+    scope_labels = {item["key"]: item["label"] for item in scope_options}
+    view_labels = {item["key"]: item["label"] for item in view_options}
+    scope_order = {item["key"]: index for index, item in enumerate(scope_options)}
+    view_order = {item["key"]: index for index, item in enumerate(view_options)}
     rows: list[dict[str, object]] = []
 
     by_journey = {str(item["journeyId"]): item for item in source.result_snapshots}
-    sets: list[tuple[str, list[dict[str, object]]]] = [(all_completed, source.combined_results["rows"])]
+    sets: list[tuple[str, str | None, list[dict[str, object]]]] = [
+        ("completed", None, source.combined_results["rows"]),
+    ]
     for journey in source.journeys:
-        sets.append((str(journey["name"]), by_journey[str(journey["id"])].get("rows", [])))
+        journey_id = str(journey["id"])
+        sets.append((f"journey:{journey_id}", journey_id, by_journey[journey_id].get("rows", [])))
 
     dimension_by_key = {item["key"]: item for item in dimensions}
     activity_by_key = {item["key"]: item for item in activities}
-    for scope, result_rows in sets:
+    for scope_key, journey_id, result_rows in sets:
+        scope = scope_labels[scope_key]
         for item in result_rows:
             journey_name = str(item.get("journeyName") or scope)
-            profile_key = str(item.get("profileKey") or f"{next(j['id'] for j in source.journeys if j['name'] == scope)}:{item['recruitId']}")
+            item_journey_id = str(item.get("journeyId") or journey_id or "")
+            profile_key = str(item.get("profileKey") or f"{item_journey_id}:{item['recruitId']}")
             rows.append({
-                "scope": scope, "view": "Overall ranking", "rank": item.get("overallRank"),
+                "scopeKey": scope_key, "scope": scope, "viewKey": "overall",
+                "view": view_labels["overall"], "rank": item.get("overallRank"),
                 "name": item["name"], "journeyName": journey_name, "profileKey": profile_key,
                 "score": item.get("overallScore", 0), "scale": f"/{official_maximum:g}",
                 "details": f"{item.get('missingCount', 0)} missing",
@@ -416,7 +484,8 @@ def _results_payload(source: ManagementReportSource) -> dict[str, object]:
                 config = dimension_by_key[code]
                 maximum = float(config["displayMaximum"])
                 rows.append({
-                    "scope": scope, "view": config["name"], "rank": value.get("rank"),
+                    "scopeKey": scope_key, "scope": scope, "viewKey": f"dimension:{code}",
+                    "view": view_labels[f"dimension:{code}"], "rank": value.get("rank"),
                     "name": item["name"], "journeyName": journey_name, "profileKey": profile_key,
                     "score": float(value.get("score", 0)) * maximum, "scale": f"/{maximum:g}",
                     "details": f"{round(float(value.get('availableWeight', 0)) * 100)}% coverage",
@@ -426,15 +495,24 @@ def _results_payload(source: ManagementReportSource) -> dict[str, object]:
             for code in activity_by_key:
                 value = item["activities"][code]
                 rows.append({
-                    "scope": scope, "view": activity_by_key[code]["name"], "rank": value.get("rank"),
+                    "scopeKey": scope_key, "scope": scope, "viewKey": f"activity:{code}",
+                    "view": view_labels[f"activity:{code}"], "rank": value.get("rank"),
                     "name": item["name"], "journeyName": journey_name, "profileKey": profile_key,
                     "score": value.get("score", 0), "scale": "/5",
                     "details": f"{value.get('submitted', 0)}/{value.get('expected', 0)} submitted",
                     "status": "Complete" if value.get("complete") else "Incomplete",
                     "color": "", "generalComment": "", "notes": "",
                 })
-    rows.sort(key=lambda row: (scopes.index(row["scope"]), views.index(row["view"]), *_rank_key(row)))
-    return {"scopes": scopes, "views": views, "rows": rows}
+    rows.sort(key=lambda row: (
+        scope_order[str(row["scopeKey"])], view_order[str(row["viewKey"])], *_rank_key(row),
+    ))
+    return {
+        "scopes": scopes,
+        "views": views,
+        "scopeOptions": scope_options,
+        "viewOptions": view_options,
+        "rows": rows,
+    }
 
 
 def _profile_labels(source: ManagementReportSource) -> dict[str, str]:
@@ -462,13 +540,31 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
     definition = source.definition
     terms = definition["terminology"]
     all_completed = f"All completed {terms['sessionPlural']}"
-    scopes = [all_completed, *[str(item["name"]) for item in source.journeys]]
+    scope_options = _scope_options(source, all_completed)
+    scopes = [item["label"] for item in scope_options]
+    scope_labels = {item["key"]: item["label"] for item in scope_options}
+    scope_order = {item["key"]: index for index, item in enumerate(scope_options)}
+    completed_scope = scope_labels["completed"]
     labels = _profile_labels(source)
     combined_by_key = {str(row["profileKey"]): row for row in source.combined_results["rows"]}
     snapshots = {str(item["journeyId"]): item for item in source.result_snapshots}
-    dimension_config = {item["key"]: item for item in definition["dimensions"]}
-    activity_config = {item["key"]: item for item in definition["activities"]}
+    view_labels = {item["key"]: item["label"] for item in _view_options(definition)}
+    dimension_definitions = [
+        {**deepcopy(item), "displayName": view_labels[f"dimension:{item['key']}"]}
+        for item in definition["dimensions"]
+    ]
+    activity_definitions = [
+        {**deepcopy(item), "displayName": view_labels[f"activity:{item['key']}"]}
+        for item in definition["activities"]
+    ]
+    dimension_config = {item["key"]: item for item in dimension_definitions}
+    activity_config = {item["key"]: item for item in activity_definitions}
+    dimension_order = {str(item["key"]): index for index, item in enumerate(dimension_definitions)}
+    activity_order = {str(item["key"]): index for index, item in enumerate(activity_definitions)}
     options_by_scope: dict[str, list[dict[str, object]]] = {scope: [] for scope in scopes}
+    options_by_scope_key: dict[str, list[dict[str, object]]] = {
+        str(item["key"]): [] for item in scope_options
+    }
     summaries: list[dict[str, object]] = []
     dimensions: list[dict[str, object]] = []
     activities: list[dict[str, object]] = []
@@ -478,7 +574,8 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
 
     for journey in source.journeys:
         journey_id = str(journey["id"])
-        journey_name = str(journey["name"])
+        scope_key = f"journey:{journey_id}"
+        journey_name = scope_labels[scope_key]
         result_rows = snapshots[journey_id].get("rows", [])
         journey_results = {str(item["recruitId"]): item for item in result_rows}
         evaluator_by_id = {str(item["id"]): item for item in journey["evaluators"]}
@@ -494,16 +591,22 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                 "profileKey": profile_key, "label": label, "name": recruit["name"],
                 "journeyId": journey_id, "journeyName": journey_name,
             }
-            options_by_scope[all_completed].append(deepcopy(option))
+            options_by_scope[completed_scope].append(deepcopy(option))
             options_by_scope[journey_name].append(deepcopy(option))
+            options_by_scope_key["completed"].append(deepcopy(option))
+            options_by_scope_key[scope_key].append(deepcopy(option))
             journey_result = journey_results.get(recruit_id) or _fallback_result(recruit, definition)
             combined_result = combined_by_key.get(profile_key, journey_result)
             assessment = assessments.get(recruit_id, {"values": {}, "comment": "", "notes": ""})
 
-            for scope, displayed_result in ((all_completed, combined_result), (journey_name, journey_result)):
-                selection_key = f"{scope}|{label}"
+            for selected_scope_key, scope, displayed_result in (
+                ("completed", completed_scope, combined_result),
+                (scope_key, journey_name, journey_result),
+            ):
+                selection_key = f"{selected_scope_key}|{profile_key}"
                 summary = {
                     "selectionKey": selection_key,
+                    "scopeKey": selected_scope_key,
                     "scope": scope,
                     "profileKey": profile_key,
                     "label": label,
@@ -538,8 +641,9 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                     value = displayed_result["dimensions"][code]
                     maximum = float(dimension_config[code]["displayMaximum"])
                     dimensions.append({
-                        "selectionKey": selection_key, "profileKey": profile_key,
-                        "name": dimension_config[code]["name"],
+                        "selectionKey": selection_key, "scopeKey": selected_scope_key,
+                        "profileKey": profile_key, "dimensionKey": code,
+                        "name": dimension_config[code]["displayName"],
                         "score": float(value.get("score", 0)) * maximum,
                         "rank": value.get("rank"),
                         "status": "Complete" if value.get("complete") else "Incomplete",
@@ -548,8 +652,9 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                 for code in activity_config:
                     value = displayed_result["activities"][code]
                     activities.append({
-                        "selectionKey": selection_key, "profileKey": profile_key,
-                        "name": activity_config[code]["name"], "score": value.get("score", 0),
+                        "selectionKey": selection_key, "scopeKey": selected_scope_key,
+                        "profileKey": profile_key, "activityKey": code,
+                        "name": activity_config[code]["displayName"], "score": value.get("score", 0),
                         "rank": value.get("rank"),
                         "submissions": f"{value.get('submitted', 0)}/{value.get('expected', 0)}",
                         "status": "Complete" if value.get("complete") else "Incomplete",
@@ -607,19 +712,30 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
                         })
         audit.extend(deepcopy(journey["audit"]))
 
-    for values in options_by_scope.values():
+    for values in [*options_by_scope.values(), *options_by_scope_key.values()]:
         values.sort(key=lambda item: (str(item["label"]).casefold(), str(item["profileKey"])))
-    summaries.sort(key=lambda row: (scopes.index(str(row["scope"])), str(row["label"]).casefold(), str(row["profileKey"])))
-    dimensions.sort(key=lambda row: (str(row["selectionKey"]), str(row["name"])))
-    activities.sort(key=lambda row: (str(row["selectionKey"]), str(row["name"])))
+    summaries.sort(key=lambda row: (
+        scope_order[str(row["scopeKey"])], str(row["label"]).casefold(), str(row["profileKey"]),
+    ))
+    dimensions.sort(key=lambda row: (
+        scope_order[str(row["scopeKey"])], str(row["profileKey"]),
+        dimension_order[str(row["dimensionKey"])],
+    ))
+    activities.sort(key=lambda row: (
+        scope_order[str(row["scopeKey"])], str(row["profileKey"]),
+        activity_order[str(row["activityKey"])],
+    ))
     evaluators.sort(key=lambda row: (str(row["profileKey"]), str(row["activity"]), str(row["evaluator"])))
     criteria.sort(key=lambda row: (str(row["profileKey"]), str(row["activity"]), str(row["criterion"]), str(row["evaluator"])))
     audit.sort(key=lambda row: (str(row["profileKey"]), str(row["createdAt"])), reverse=True)
-    default_options = options_by_scope[all_completed]
+    default_options = options_by_scope_key["completed"]
     return {
         "scopes": scopes,
+        "scopeOptions": scope_options,
         "optionsByScope": options_by_scope,
-        "defaultScope": all_completed,
+        "optionsByScopeKey": options_by_scope_key,
+        "defaultScope": completed_scope,
+        "defaultScopeKey": "completed",
         "defaultProfileKey": default_options[0]["profileKey"] if default_options else "",
         "defaultLabel": default_options[0]["label"] if default_options else "",
         "summaries": summaries,
@@ -629,8 +745,8 @@ def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:
         "criteria": criteria,
         "audit": audit,
         "generalFactors": deepcopy(definition["generalFactors"]),
-        "dimensionDefinitions": deepcopy(definition["dimensions"]),
-        "activityDefinitions": deepcopy(definition["activities"]),
+        "dimensionDefinitions": dimension_definitions,
+        "activityDefinitions": activity_definitions,
     }
 
 

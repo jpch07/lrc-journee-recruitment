@@ -99,11 +99,6 @@ def _literal(value) -> str:
     return FORMULA_GUARD + text if text.startswith("=") else text
 
 
-def _selection_key(scope: object, label: object) -> str:
-    """Match the exact literal strings written into both selector cells."""
-    return f"{_literal(scope)}|{_literal(label)}"
-
-
 def _band_styles(definition: dict[str, object]) -> list[dict[str, str]]:
     bands = definition.get("bands", [])
     if not isinstance(bands, list) or not 1 <= len(bands) <= 10:
@@ -169,42 +164,42 @@ class _Grid:
 def _result_tab(payload: dict[str, object]) -> dict[str, object]:
     results = payload["results"]
     terms = payload["definition"]["terminology"]
-    groups = Counter((row["scope"], row["view"]) for row in results["rows"])
+    groups = Counter((row["scopeKey"], row["viewKey"]) for row in results["rows"])
     visible_capacity = max(groups.values(), default=1)
     grid = _Grid()
     grid.cell(1, 1, "Results & rankings")
     grid.cell(2, 1, "Completed Journees · overall, dimension, and activity rankings")
     grid.cell(3, 1, f"{terms['session']} view")
-    grid.cell(3, 2, results["scopes"][0] if results["scopes"] else "")
+    grid.cell(3, 2, results["scopeOptions"][0]["label"] if results["scopeOptions"] else "")
     grid.cell(3, 4, "Result view")
-    grid.cell(3, 5, results["views"][0] if results["views"] else "")
+    grid.cell(3, 5, results["viewOptions"][0]["label"] if results["viewOptions"] else "")
     headers = ["Rank", terms["participant"], terms["session"], "Score", "Scale", "Details", "Status", "Color", "General comment", "Notes"]
     for col, value in enumerate(headers, 1):
         grid.cell(5, col, value)
     grid._ensure(5 + visible_capacity, len(headers))
 
-    counters: Counter[tuple[str, str]] = Counter()
     helper_rows: list[list[object]] = [[
-        "Scope", "View", "Rank", terms["participant"], terms["session"], "Score", "Scale",
-        "Details", "Status", "Color", "General comment", "Notes", "Lookup key",
+        "Scope key", "View key", "Rank", terms["participant"], terms["session"], "Score", "Scale",
+        "Details", "Status", "Color", "General comment", "Notes",
     ]]
     for row in results["rows"]:
-        group = (str(row["scope"]), str(row["view"]))
-        counters[group] += 1
-        safe_scope, safe_view = _literal(group[0]), _literal(group[1])
         helper_rows.append([
-            safe_scope, safe_view, row["rank"], row["name"], row["journeyName"], row["score"],
+            row["scopeKey"], row["viewKey"], row["rank"], row["name"], row["journeyName"], row["score"],
             row["scale"], row["details"], row["status"], row["color"], row["generalComment"],
-            row["notes"], f"{safe_scope}|{safe_view}|{counters[group]}",
+            row["notes"],
         ])
     blocks = {"results": grid.block(1, 13, helper_rows)}
-    blocks["scopeOptions"] = grid.block(1, 26, [["Scope options"], *[[value] for value in results["scopes"]]])
-    blocks["viewOptions"] = grid.block(1, 27, [["View options"], *[[value] for value in results["views"]]])
+    blocks["scopeOptions"] = grid.block(1, 25, [["Scope option", "Scope key"], *[
+        [item["label"], item["key"]] for item in results["scopeOptions"]
+    ]])
+    blocks["viewOptions"] = grid.block(1, 27, [["View option", "View key"], *[
+        [item["label"], item["key"]] for item in results["viewOptions"]
+    ]])
     rows = grid.finish()
     return {
         "name": "Results",
         "finalTitle": "Results",
-        "presentation": "results-v1",
+        "presentation": "results-v2",
         "rows": rows,
         "layout": {
             "selectorCells": ["B3", "E3"],
@@ -256,7 +251,7 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
     factors = profiles["generalFactors"]
     dimensions = profiles["dimensionDefinitions"]
     activities = profiles["activityDefinitions"]
-    all_options = profiles["optionsByScope"].get(profiles["defaultScope"], [])
+    all_options = profiles["optionsByScopeKey"].get(profiles["defaultScopeKey"], [])
     photo_by_key = {
         f"{photo.get('journeyId', '')}:{photo.get('recruitId', '')}": photo
         for photo in photos
@@ -266,16 +261,18 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
     criterion_counts = Counter(row["profileKey"] for row in profiles["criteria"])
     audit_counts = Counter(row["profileKey"] for row in profiles["audit"])
     evaluator_capacity = max(evaluator_counts.values(), default=1)
-    criterion_capacity = min(116, max(criterion_counts.values(), default=1))
+    criterion_capacity = max(criterion_counts.values(), default=1)
     audit_capacity = max(audit_counts.values(), default=1)
+    if max(evaluator_capacity, criterion_capacity, audit_capacity) > 500:
+        raise PresentationError("Profile detail sections cannot exceed 500 rows per recruit.")
     dimension_section = 8
     dimension_header = 9
     dimension_start = 10
-    activity_section = 26
-    activity_header = 27
-    activity_start = 28
-    general_section = 44
-    general_start = 45
+    activity_section = max(26, dimension_start + len(dimensions))
+    activity_header = activity_section + 1
+    activity_start = activity_section + 2
+    general_section = max(44, activity_section + 18, activity_start + len(activities))
+    general_start = general_section + 1
     general_count = len(factors) + 4
     evaluator_section = max(55, general_start + general_count + 1)
     evaluator_header = evaluator_section + 1
@@ -304,12 +301,12 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
     for col, value in enumerate(["Dimension", "Score", "Rank", "Status", "Coverage"], 1):
         grid.cell(dimension_header, col, value)
     for offset, item in enumerate(dimensions):
-        grid.cell(dimension_start + offset, 1, item["name"])
+        grid.cell(dimension_start + offset, 1, item.get("displayName", item["name"]))
     grid.cell(activity_section, 1, "Activity performance")
     for col, value in enumerate([terms["stage"], "Score /5", "Rank", "Submissions", "Status"], 1):
         grid.cell(activity_header, col, value)
     for offset, item in enumerate(activities):
-        grid.cell(activity_start + offset, 1, item["name"])
+        grid.cell(activity_start + offset, 1, item.get("displayName", item["name"]))
     grid.cell(general_section, 1, "General assessment and completion")
     general_labels = [
         *[f"{item['name']} /{float(item['maximum']):g}" for item in factors],
@@ -334,14 +331,10 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
         "Overall population", "Journee rank", "Journee population", "Color", "Missing",
         *[item["name"] for item in factors], "General average", "General comment", "Notes",
     ]
-    safe_selection_keys = {
-        str(row["selectionKey"]): _selection_key(row["scope"], row["label"])
-        for row in profiles["summaries"]
-    }
     summary_rows = [summary_headers]
     for row in profiles["summaries"]:
         summary_rows.append([
-            safe_selection_keys[str(row["selectionKey"])], row["profileKey"], row["journeyName"], row["journeyDate"], row["name"],
+            row["scopeKey"], row["profileKey"], row["journeyName"], row["journeyDate"], row["name"],
             row["phoneNumber"], row["dateOfBirth"], row["attendance"], row["arrivalTime"],
             row["attendanceComment"], row["overallScore"], row["displayRank"], row["overallRank"],
             row["overallPopulation"], row["journeyRank"], row["journeyPopulation"], row["color"],
@@ -349,12 +342,12 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
             *[row["generalValues"].get(item["storageKey"]) for item in factors],
             row["generalAverage"], row["generalComment"], row["notes"],
         ])
-    dimension_rows = [["Selection", "Dimension", "Score", "Rank", "Status", "Coverage"], *[
-        [safe_selection_keys[str(row["selectionKey"])], row["name"], row["score"], row["rank"], row["status"], row["coverage"]]
+    dimension_rows = [["Scope key", "Profile key", "Score", "Rank", "Status", "Coverage"], *[
+        [row["scopeKey"], row["profileKey"], row["score"], row["rank"], row["status"], row["coverage"]]
         for row in profiles["dimensions"]
     ]]
-    activity_rows = [["Selection", "Activity", "Score", "Rank", "Submissions", "Status"], *[
-        [safe_selection_keys[str(row["selectionKey"])], row["name"], row["score"], row["rank"], row["submissions"], row["status"]]
+    activity_rows = [["Scope key", "Profile key", "Score", "Rank", "Submissions", "Status"], *[
+        [row["scopeKey"], row["profileKey"], row["score"], row["rank"], row["submissions"], row["status"]]
         for row in profiles["activities"]
     ]]
     evaluator_rows = [["Profile key", terms["stage"], terms["assessor"], "Category", "Score", "Status", "Comment"], *[
@@ -369,10 +362,15 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
         [row["profileKey"], row["createdAt"], row["actorName"], row["action"], row["reason"], row["before"], row["after"]]
         for row in profiles["audit"]
     ]]
-    option_rows = [["Scope", "Label", "Profile key"]]
-    for scope in profiles["scopes"]:
-        option_rows.extend([[scope, option["label"], option["profileKey"]] for option in profiles["optionsByScope"].get(scope, [])])
-    scope_rows = [["Scope options"], *[[scope] for scope in profiles["scopes"]]]
+    option_rows = [["Scope key", "Label", "Profile key"]]
+    for scope in profiles["scopeOptions"]:
+        option_rows.extend([
+            [scope["key"], option["label"], option["profileKey"]]
+            for option in profiles["optionsByScopeKey"].get(scope["key"], [])
+        ])
+    scope_rows = [["Scope option", "Scope key"], *[
+        [scope["label"], scope["key"]] for scope in profiles["scopeOptions"]
+    ]]
     dependent_rows = [["Recruit options", "Profile key"], *[
         [option["label"], option["profileKey"]] for option in all_options
     ]]
@@ -414,7 +412,7 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
     return {
         "name": "Recruit Profiles",
         "finalTitle": "Recruit Profiles",
-        "presentation": "recruit-profiles-v1",
+        "presentation": "recruit-profiles-v2",
         "rows": rows,
         "layout": {
             "selectorCells": ["B3", "E3"],
@@ -441,8 +439,8 @@ def _profile_tab(payload: dict[str, object], photos: list[dict[str, str]]) -> di
                 "audit": audit_section, "auditHeader": audit_header, "auditStart": audit_start,
             },
             "charts": [
-                {"startRow": dimension_start, "endRow": dimension_start + len(dimensions) - 1, "labelCol": 1, "valueCol": 2, "anchor": "G8", "maximum": int(float(dimensions[0]["displayMaximum"])) if dimensions else 5},
-                {"startRow": activity_start, "endRow": activity_start + len(activities) - 1, "labelCol": 1, "valueCol": 2, "anchor": "G26", "maximum": 5},
+                {"startRow": dimension_start, "endRow": dimension_start + len(dimensions) - 1, "labelCol": 1, "valueCol": 2, "anchor": f"G{dimension_section}", "maximum": int(float(dimensions[0]["displayMaximum"])) if dimensions else 5},
+                {"startRow": activity_start, "endRow": activity_start + len(activities) - 1, "labelCol": 1, "valueCol": 2, "anchor": f"G{activity_section}", "maximum": 5},
             ],
             "blocks": blocks,
         },
@@ -464,7 +462,7 @@ def build_presentation_tabs(
 
 
 def layout_operation(tab: dict[str, object]) -> dict[str, object]:
-    if tab.get("presentation") not in {"results-v1", "recruit-profiles-v1"}:
+    if tab.get("presentation") not in {"results-v1", "recruit-profiles-v1", "results-v2", "recruit-profiles-v2"}:
         raise PresentationError("Unknown presentation template.")
     return {
         "kind": "layout",

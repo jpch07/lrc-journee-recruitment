@@ -428,6 +428,92 @@ function profilePresentation() {
   return {rows,layout,secondDigest:digest(secondPng)};
 }
 
+function resultsPresentationV2() {
+  const rows=Array.from({length:6},()=>Array(28).fill(''));
+  rows[2][1]='All completed Journees'; rows[2][4]='Overall ranking';
+  rows[0].splice(12,12,'Scope key','View key','Rank','Recruit','Journee','Score','Scale','Details','Status','Color','General comment','Notes');
+  rows[1].splice(12,12,'completed','overall','1','Alex','Day','10','/20','Complete','Complete','Green','','');
+  rows[0].splice(24,2,'Scope option','Scope key'); rows[1].splice(24,2,'All completed Journees','completed');
+  rows[0].splice(26,2,'View option','View key'); rows[1].splice(26,2,'Overall ranking','overall');
+  const layout={selectorCells:['B3','E3'],headerRow:5,visibleStartRow:6,visibleCapacity:1,frozenRows:5,helperStartCol:13,
+    bandStyles:[{label:'Green',background:'#16834B',font:'#FFFFFF'},{label:'Yellow',background:'#E3AD22',font:'#223449'},{label:'Red',background:'#C8102E',font:'#FFFFFF'}],
+    tabColor:'GREEN',columnWidths:[70,210,185,95,65,155,100,90,265,265],blocks:{
+      results:{startRow:1,endRow:2,startCol:13,endCol:24},scopeOptions:{startRow:1,endRow:2,startCol:25,endCol:26},viewOptions:{startRow:1,endRow:2,startCol:27,endCol:28}}};
+  return {rows,layout};
+}
+
+function profilePresentationV2() {
+  const rows=Array.from({length:203},()=>Array(97).fill(''));
+  rows[2][1]='All completed Journees'; rows[2][4]='Alex';
+  const set=(r,c,values)=>values.forEach((value,index)=>rows[r-1][c-1+index]=String(value));
+  set(1,27,['Scope key','Profile key','Journee','Date','Recruit','Phone','DOB','Attendance','Arrival','Attendance comment','Overall','Display rank','Overall rank','Overall population','Journee rank','Journee population','Color','Missing','Punctuality','Respect','Seriousness','General average','General comment','Notes']);
+  set(2,27,['completed','j:r','Day','2026-10-06','Alex','123','2000-01-01','Present','08:00','','10','1','1','1','1','1','Green','Complete','1','1','1','1','','']);
+  set(3,27,['completed','j2:r2','Other','2026-10-07','Alex','456','2000-01-02','Present','09:00','','9','2','2','2','1','1','Yellow','Complete','1','1','1','1','','']);
+  set(4,27,['journey:j','j:r','Day','2026-10-06','Alex','123','2000-01-01','Present','08:00','','10','1','1','1','1','1','Green','Complete','1','1','1','1','','']);
+  set(1,51,['Scope key','Profile key','Score','Rank','Status','Coverage']);set(2,51,['completed','j:r','4','1','Complete','100%']);
+  set(1,57,['Scope key','Profile key','Score','Rank','Submissions','Status']);set(2,57,['completed','j:r','4','1','1/1','Complete']);
+  set(1,63,['Profile key','Activity','Evaluator','Category','Score','Status','Comment']);set(2,63,['j:r','Activity','Eva','Overall','4','Complete','']);
+  set(1,70,['Profile key','Activity','Dimension','Criterion','Explanation','Evaluator','Grade','Raw result','Status']);set(2,70,['j:r','Activity','Dimension','Criterion','Why','Eva','4','','Complete']);
+  set(1,79,['Profile key','Date','Username','Action','Reason','Before','After']);set(2,79,['j:r','2026-10-06','Admin','Updated','','','']);
+  set(1,86,['Scope option','Scope key']);set(2,86,['All completed Journees','completed']);set(3,86,['Day','journey:j']);set(4,86,['Empty','journey:empty']);
+  set(1,88,['Scope key','Label','Profile key']);set(2,88,['completed','Alex','j:r']);
+  set(3,88,['completed','Alex — Other · 2','j2:r2']);set(4,88,['journey:j','Day Alex','j:r']);
+  set(1,91,['Recruit options','Profile key']);set(2,91,['Alex','j:r']);set(3,91,['Alex — Other · 2','j2:r2']);
+  const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+  const secondPng=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlB8AAAAASUVORK5CYII=','base64');
+  const webSafe=value=>value.toString('base64').replace(/\+/g,'-').replace(/\//g,'_');
+  set(1,93,['Profile key','Part','Parts','SHA-256','PNG chunk']);set(2,93,['j:r','0','1',digest(png),webSafe(png)]);
+  set(3,93,['j2:r2','0','1',digest(secondPng),webSafe(secondPng)]);
+  const block=(start,width)=>({startRow:1,endRow:2,startCol:start,endCol:start+width-1});
+  const layout={selectorCells:['B3','E3'],profileKeyCell:'H3',imageAnchor:'J3',frozenRows:7,helperStartCol:27,tabColor:'YELLOW',
+    columnWidths:[165,125,24,145,125,24,120,125,90,75,75,75],expectedPreviewCount:2,dimensionCount:1,activityCount:1,
+    factorCount:3,evaluatorCapacity:1,criterionCapacity:1,auditCapacity:1,
+    bandStyles:[{label:'Green',background:'#16834B',font:'#FFFFFF'},{label:'Yellow',background:'#E3AD22',font:'#223449'},{label:'Red',background:'#C8102E',font:'#FFFFFF'}],sectionRows:{dimension:8,dimensionHeader:9,dimensionStart:10,
+      activity:26,activityHeader:27,activityStart:28,general:44,generalStart:45,evaluator:55,evaluatorHeader:56,evaluatorStart:57,
+      criterion:79,criterionHeader:80,criterionStart:81,audit:200,auditHeader:201,auditStart:202},
+    charts:[{startRow:10,endRow:10,labelCol:1,valueCol:2,anchor:'G8',maximum:5},{startRow:28,endRow:28,labelCol:1,valueCol:2,anchor:'G26',maximum:5}],
+    blocks:{summaries:{startRow:1,endRow:4,startCol:27,endCol:50},dimensions:block(51,6),activities:block(57,6),evaluators:block(63,7),criteria:block(70,9),
+      audit:block(79,7),scopeOptions:{startRow:1,endRow:4,startCol:86,endCol:87},profileOptions:{startRow:1,endRow:4,startCol:88,endCol:90},
+      dependentOptions:{startRow:1,endRow:3,startCol:91,endCol:92},previews:{startRow:1,endRow:3,startCol:93,endCol:97}}};
+  return {rows,layout};
+}
+
+test('v2 layouts resolve native selectors exclusively through stable helper ids', () => {
+  for (const [name,presentation,fixture] of [
+    ['Results','results-v2',resultsPresentationV2()],['Recruit Profiles','recruit-profiles-v2',profilePresentationV2()],
+  ]) {
+    const env=fakeGoogle();
+    const descriptor={name,finalTitle:name,presentation,version:1,rows:fixture.rows.length,cols:fixture.rows[0].length};
+    const state=presentationState(env,descriptor,fixture.rows,name==='Results'?'6'.repeat(32):'7'.repeat(32));
+    const op={kind:'layout',version:1,tab:name,presentation,layout:fixture.layout};
+    assert.doesNotThrow(()=>receiver.applyPresentationLayout(op,state,env.ss));
+    assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
+    const sheet=env.ss.getSheetById(state.tabs[0].id);
+    const formula=sheet.getRange(name==='Results'?'A6':'B10').getFormulas()[0][0];
+    assert.match(formula,/FILTER\(/);
+    assert.doesNotMatch(formula,/\$B\$3&"\|"&\$E\$3/);
+  }
+});
+
+test('v2 profile geometry expands and exposes more than 116 criterion rows', () => {
+  const fixture=profilePresentationV2(),layout=JSON.parse(JSON.stringify(fixture.layout));
+  layout.dimensionCount=17;
+  layout.criterionCapacity=117;
+  Object.assign(layout.sectionRows,{activity:27,activityHeader:28,activityStart:29,general:45,generalStart:46});
+  layout.charts=[
+    {startRow:10,endRow:26,labelCol:1,valueCol:2,anchor:'G8',maximum:5},
+    {startRow:29,endRow:29,labelCol:1,valueCol:2,anchor:'G27',maximum:5},
+  ];
+  const env=fakeGoogle(),descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation:'recruit-profiles-v2',version:1,rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,'8'.repeat(32));
+  const op={kind:'layout',version:1,tab:'Recruit Profiles',presentation:'recruit-profiles-v2',layout};
+  assert.doesNotThrow(()=>receiver.applyPresentationLayout(op,state,env.ss));
+  assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
+  const invalid=JSON.parse(JSON.stringify(layout));
+  invalid.sectionRows.activity=26;
+  assert.throws(()=>receiver.applyPresentationLayout({...op,layout:invalid},state,env.ss),/TABS/);
+});
+
 test('trusted layouts replay without duplicate owned objects and keep only selectors editable', () => {
   for (const [name,presentation,fixture,expectedCharts,expectedImages] of [
     ['Results','results-v1',resultsPresentation(),0,0],['Recruit Profiles','recruit-profiles-v1',profilePresentation(),2,1],
@@ -538,6 +624,30 @@ function managedProfileEnvironment() {
   env.publish(runId);
   return {env,fixture,sheet,runId};
 }
+
+function managedProfileEnvironmentV2() {
+  const env=fakeGoogle(),fixture=profilePresentationV2(),runId='a'.repeat(32);
+  const descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation:'recruit-profiles-v2',version:1,
+    rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,runId);
+  receiver.applyPresentationLayout({kind:'layout',version:1,tab:'Recruit Profiles',presentation:'recruit-profiles-v2',layout:fixture.layout},state,env.ss);
+  const sheet=env.ss.getSheetById(state.tabs[0].id);
+  sheet.title='Recruit Profiles';
+  env.publish(runId);
+  return {env,fixture,sheet,runId};
+}
+
+test('v2 scope edits map display labels to stable ids before resetting the profile', () => {
+  const {env,sheet}=managedProfileEnvironmentV2();
+  sheet.getRange('B3').setValue('Day');
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  assert.equal(sheet.getRange('E3').getValue(),'Day Alex');
+  assert.ok(sheet.getRange('E3').getDataValidation());
+  sheet.getRange('B3').setValue('Empty');
+  receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
+  assert.equal(sheet.getRange('E3').getValue(),'');
+  assert.equal(sheet.getImages().length,0);
+});
 
 test('profile selector trigger ignores every unowned or out-of-scope edit', () => {
   const {env,sheet}=managedProfileEnvironment();
