@@ -177,15 +177,21 @@ function columnLetter(column) {
   while (column > 0) { column--; value = String.fromCharCode(65 + column % 26) + value; column = Math.floor(column / 26); }
   return value;
 }
-function valueRange(sheet, start, rows, cols) {
+function gridValueRange_(sheet, startRow, startCol, rows, cols) {
   const title=sheet.getName().replace(/'/g,"''");
-  return `'${title}'!A${start}:${columnLetter(cols)}${start+rows-1}`;
+  return `'${title}'!${columnLetter(startCol)}${startRow}:${columnLetter(startCol+cols-1)}${startRow+rows-1}`;
+}
+function valueRange(sheet, start, rows, cols) {
+  return gridValueRange_(sheet,start,1,rows,cols);
 }
 function readValueRows(range, rows, cols) {
   const response=Sheets.Spreadsheets.Values.get(BACKUP_SHEET,range,{valueRenderOption:'UNFORMATTED_VALUE',dateTimeRenderOption:'SERIAL_NUMBER'});
   const values=Array.isArray(response.values) ? response.values : [];
   return Array.from({length:rows},(_,r)=>Array.from({length:cols},(_,c)=>
     Array.isArray(values[r]) && values[r][c] != null ? values[r][c] : ''));
+}
+function readGridValueRows_(sheet, startRow, startCol, rows, cols) {
+  return readValueRows(gridValueRange_(sheet,startRow,startCol,rows,cols),rows,cols);
 }
 function exactKeys(value, allowed) {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
@@ -432,15 +438,16 @@ function decodePreviewRows(rows) {
   if (!bytes.length || bytes.length>524288 || signature.some((value,index)=>((bytes[index]+256)%256)!==value) || hashBytes(bytes)!==rows[0][3]) fail('VERIFY');
   return bytes;
 }
-function selectedPreviewBytes_(sheet, layout, selected) {
-  const options=blockValues_(sheet,layout.blocks.dependentOptions);
+function selectedPreviewBytes_(sheet, layout, selected, blockReader) {
+  const read=blockReader || blockValues_;
+  const options=read(sheet,layout.blocks.dependentOptions);
   const match=options.find(row=>String(row[0])===selected);
   if (!match || !match[1]) fail('VERIFY');
   const key=String(match[1]);
-  return decodePreviewRows(blockValues_(sheet,layout.blocks.previews).filter(row=>String(row[0])===key));
+  return decodePreviewRows(read(sheet,layout.blocks.previews).filter(row=>String(row[0])===key));
 }
 function verifyPreviewStore_(sheet, layout) {
-  const options=blockValues_(sheet,layout.blocks.dependentOptions);
+  const options=sheetsBlockValues_(sheet,layout.blocks.dependentOptions);
   if(options.length!==layout.expectedPreviewCount) fail('VERIFY');
   const optionLabels=new Set(),optionKeys=new Set();
   options.forEach(row=>{
@@ -448,10 +455,10 @@ function verifyPreviewStore_(sheet, layout) {
     if(!label||!key||optionLabels.has(label)||optionKeys.has(key)) fail('VERIFY');
     optionLabels.add(label);optionKeys.add(key);
   });
-  const profileKeys=new Set(blockValues_(sheet,layout.blocks.profileOptions).map(row=>String(row[2])).filter(Boolean));
+  const profileKeys=new Set(sheetsBlockValues_(sheet,layout.blocks.profileOptions).map(row=>String(row[2])).filter(Boolean));
   if(profileKeys.size!==layout.expectedPreviewCount || [...profileKeys].some(key=>!optionKeys.has(key))) fail('VERIFY');
   const groups=new Map();
-  blockValues_(sheet,layout.blocks.previews).forEach(row=>{
+  sheetsBlockValues_(sheet,layout.blocks.previews).forEach(row=>{
     const key=String(row[0]);
     if(!optionKeys.has(key)) fail('VERIFY');
     if(!groups.has(key)) groups.set(key,[]);
@@ -462,8 +469,8 @@ function verifyPreviewStore_(sheet, layout) {
 }
 function refreshInitialProfileImage(sheet, layout) {
   if (!layout.expectedPreviewCount) return;
-  const selected=String(sheet.getRange('E3').getValue());
-  const bytes=selectedPreviewBytes_(sheet,layout,selected);
+  const selected=String(sheetsCellValue_(sheet,'E3'));
+  const bytes=selectedPreviewBytes_(sheet,layout,selected,sheetsBlockValues_);
   sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
   const image=sheet.insertImage(Utilities.newBlob(bytes,'image/png','profile-preview.png'),10,3);
   if (image.setWidth) image.setWidth(150).setHeight(150);
@@ -518,8 +525,8 @@ function applyPresentationLayout(op, state, ss) {
   tab.layoutVerified=false;
 }
 function verifySelector_(sheet, cell, block) {
-  const values=blockValues_(sheet,block).map(row=>String(row[0]));
-  const selected=String(sheet.getRange(cell).getValue()),rule=sheet.getRange(cell).getDataValidation();
+  const values=sheetsBlockValues_(sheet,block).map(row=>String(row[0]));
+  const selected=String(sheetsCellValue_(sheet,cell)),rule=sheet.getRange(cell).getDataValidation();
   if(!values.length) {
     if(rule || selected) fail('VERIFY');
     return;
@@ -749,6 +756,14 @@ function profileTriggerLayout_(sheet) {
 function blockValues_(sheet, block) {
   if (block.endRow<=block.startRow) return [];
   return sheet.getRange(block.startRow+1,block.startCol,block.endRow-block.startRow,block.endCol-block.startCol+1).getValues();
+}
+function sheetsBlockValues_(sheet, block) {
+  if (block.endRow<=block.startRow) return [];
+  return readGridValueRows_(sheet,block.startRow+1,block.startCol,block.endRow-block.startRow,block.endCol-block.startCol+1);
+}
+function sheetsCellValue_(sheet, cell) {
+  const range=sheet.getRange(cell);
+  return readGridValueRows_(sheet,range.getRow(),range.getColumn(),1,1)[0][0];
 }
 function refreshDependentProfileOptions_(sheet, layout) {
   const scope=String(sheet.getRange('B3').getValue());

@@ -120,7 +120,7 @@ function fakeGoogle() {
           getA1Notation:()=>bounds.a1||`${bounds.row}:${bounds.col}:${bounds.rows}:${bounds.cols}`,
           getValues:()=>Array.from({length:bounds.rows},(_,i)=>Array.from({length:bounds.cols},(_,j)=>
             staleSpreadsheetReads ? '' : this.data[bounds.row+i-1]?.[bounds.col+j-1]??'')),
-          getValue:()=>this.data[bounds.row-1]?.[bounds.col-1]??'',
+          getValue:()=>staleSpreadsheetReads ? '' : this.data[bounds.row-1]?.[bounds.col-1]??'',
           setValues:values=>{values.forEach((row,i)=>row.forEach((value,j)=>{this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]=value;this.formulas.delete(key(bounds.row+i,bounds.col+j));}));return range},
           setValue:value=>range.setValues([[value]]),
           getFormula:()=>this.formulas.get(key(bounds.row,bounds.col))||'',
@@ -182,9 +182,9 @@ function fakeGoogle() {
       get:(id,range,options)=>{
         assert.equal(options.valueRenderOption,'UNFORMATTED_VALUE');
         assert.equal(options.dateTimeRenderOption,'SERIAL_NUMBER');
-        const [,name,startRow,endCol,endRow] = range.match(/^'(.+)'!A(\d+):([A-Z]+)(\d+)$/);
-        const s=ss.getSheetByName(name.replace(/''/g,"'")), width=colNumber(endCol);
-        const values=Array.from({length:Number(endRow)-Number(startRow)+1},(_,i)=>(s.data[Number(startRow)-1+i]||[]).slice(0,width));
+        const [,name,startCol,startRow,endCol,endRow] = range.match(/^'(.+)'!([A-Z]+)(\d+):([A-Z]+)(\d+)$/);
+        const s=ss.getSheetByName(name.replace(/''/g,"'")), first=colNumber(startCol)-1,width=colNumber(endCol)-first;
+        const values=Array.from({length:Number(endRow)-Number(startRow)+1},(_,i)=>(s.data[Number(startRow)-1+i]||[]).slice(first,first+width));
         values.forEach(row=>{while(row.length && (row.at(-1)===null || row.at(-1)===''))row.pop()});
         while(values.length && !values.at(-1).length)values.pop();
         return {values};
@@ -412,6 +412,18 @@ test('trusted layouts replay without duplicate owned objects and keep only selec
     assert.equal(sheet.effectiveEditable('A1'),false);
     assert.doesNotThrow(()=>receiver.verifyPresentationLayout({kind:'verifyLayout',version:1,tab:name,presentation,layout:fixture.layout},state,env.ss));
   }
+});
+
+test('profile layout and verification bypass a stale SpreadsheetApp value cache', () => {
+  const env=fakeGoogle(),fixture=profilePresentation();
+  const descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation:'recruit-profiles-v1',version:1,
+    rows:fixture.rows.length,cols:fixture.rows[0].length};
+  const state=presentationState(env,descriptor,fixture.rows,'9'.repeat(32));
+  const op={kind:'layout',version:1,tab:'Recruit Profiles',presentation:'recruit-profiles-v1',layout:fixture.layout};
+  env.staleSpreadsheetReads(true);
+  assert.doesNotThrow(()=>receiver.applyPresentationLayout(op,state,env.ss));
+  assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
+  assert.equal(env.ss.getSheetById(state.tabs[0].id).getImages().length,1);
 });
 
 test('layout verification rejects changed or missing prescribed formulas', () => {
