@@ -16,6 +16,7 @@ from app.db import SessionLocal
 from app.google_sheet_presentations import build_presentation_tabs, layout_operation
 from app.management_report_payload import build_management_report_payload, load_management_report_source
 from app.models import GeneralAssessment, Recruit
+from app.report_exports import build_management_report_workbook_from_payload
 from app.services import create_journey
 
 
@@ -263,3 +264,32 @@ def test_profile_detail_capacity_fails_instead_of_silently_truncating(sample_pay
     } for index in range(501)]
     with pytest.raises(google_sheet_presentations.PresentationError, match="500"):
         build_presentation_tabs(payload, sample_photos)
+
+
+def test_excel_profile_sections_match_dynamic_google_geometry(sample_payload):
+    payload = deepcopy(sample_payload)
+    _expand_profile_rows(payload, "dimensions", 17)
+    _expand_profile_rows(payload, "activities", 17)
+    profile_key = payload["profiles"]["defaultProfileKey"]
+    payload["profiles"]["criteria"] = [{
+        "profileKey": profile_key,
+        "activity": "Activity",
+        "dimension": "Dimension",
+        "criterion": f"Criterion {index}",
+        "explanation": "",
+        "evaluator": "Evaluator",
+        "grade": "4",
+        "rawResult": "",
+        "status": "Complete",
+    } for index in range(117)]
+
+    workbook = build_management_report_workbook_from_payload(payload)
+    sheet = workbook["Recruit Profiles"]
+    assert sheet["A26"].value == "Dimensions 16"
+    assert sheet["A27"].value == "Activity performance"
+    assert sheet["A45"].value == "Activities 16"
+    assert sheet["A46"].value == "General assessment and completion"
+    assert isinstance(sheet["H197"].value, str) and sheet["H197"].value.startswith("=")
+    assert sheet["A200"].value == "Profile audit history"
+    assert len(sheet._charts) == 2
+    workbook.close()

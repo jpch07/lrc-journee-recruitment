@@ -164,3 +164,27 @@ def test_payload_uses_stable_ids_when_scope_and_view_labels_collide():
     assert all(row["selectionKey"] == f'{row["scopeKey"]}|{row["profileKey"]}' for row in profiles["summaries"])
     assert all(row["dimensionKey"] for row in profiles["dimensions"])
     assert all(row["activityKey"] for row in profiles["activities"])
+
+    workbook = build_management_report_workbook_from_payload(payload)
+    profile_sheet = workbook["Recruit Profiles"]
+    assert profile_sheet["A10"].value == profiles["dimensionDefinitions"][0]["displayName"]
+    assert profile_sheet["A28"].value == profiles["activityDefinitions"][0]["displayName"]
+    workbook.close()
+
+
+def test_generated_profile_labels_cannot_collide_with_real_recruit_names():
+    with SessionLocal() as db:
+        journey = create_journey(db, "Day", date(2026, 8, 5), 1, "Test")
+        journey.status = "completed"
+        db.add_all([
+            Recruit(journey_id=journey.id, name="Alex", present=True),
+            Recruit(journey_id=journey.id, name="Alex", present=True),
+            Recruit(journey_id=journey.id, name="Alex — Day · 1", present=True),
+        ])
+        db.commit()
+        payload = build_management_report_payload(load_management_report_source(db))
+
+    options = payload["profiles"]["optionsByScopeKey"]["completed"]
+    labels = [option["label"] for option in options]
+    assert len(labels) == len(set(label.casefold() for label in labels)) == 3
+    assert len({option["profileKey"] for option in options}) == 3

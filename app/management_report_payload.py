@@ -526,14 +526,16 @@ def _profile_labels(source: ManagementReportSource) -> dict[str, str]:
     items.sort(key=lambda item: (item[0].casefold(), item[1], item[2].casefold(), item[3], item[4]))
     totals = Counter(item[0].casefold() for item in items)
     seen: defaultdict[str, int] = defaultdict(int)
-    labels: dict[str, str] = {}
+    keys: list[str] = []
+    candidates: list[str] = []
     for name, _event_date, journey_name, journey_id, recruit_id in items:
         key = name.casefold()
         seen[key] += 1
-        labels[f"{journey_id}:{recruit_id}"] = (
+        keys.append(f"{journey_id}:{recruit_id}")
+        candidates.append(
             name if totals[key] == 1 else f"{name} — {journey_name} · {seen[key]}"
         )
-    return labels
+    return dict(zip(keys, _make_unique_labels(candidates), strict=True))
 
 
 def _profiles_payload(source: ManagementReportSource) -> dict[str, object]:

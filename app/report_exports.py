@@ -1463,14 +1463,16 @@ def _payload_profile_sheet(
             "initial_image_index": initial_index,
         }
 
-    row = _section(sheet, 8, "Dimension performance", 12)
+    dimension_section = 8
+    row = _section(sheet, dimension_section, "Dimension performance", 12)
+    dimension_start = row + 1
     dimension_maximum = float(dimension_defs[0]["displayMaximum"]) if dimension_defs else 5.0
     for col, header in enumerate(["Dimension", f"Score /{dimension_maximum:g}", "Rank", "Status", "Coverage"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY)
         sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     for offset, dimension in enumerate(dimension_defs, 1):
         target = row + offset
-        sheet.cell(target, 1, dimension["name"])
+        sheet.cell(target, 1, dimension.get("displayName", dimension["name"]))
         for col, source_offset in enumerate(range(2, 6), 2):
             sheet.cell(target, col, _scalar_lookup_formula(
                 f'{selection}&"|"&$A{target}',
@@ -1479,15 +1481,17 @@ def _payload_profile_sheet(
             ))
     _style_formula_rows(sheet, row + 1, len(dimension_defs), 5)
     _add_text_color_rules(sheet, f"D{row + 1}:D{row + len(dimension_defs)}", f"D{row + 1}")
-    _add_radar(sheet, row + 1, row + len(dimension_defs), 1, 2, "G8", f"Dimension performance /{dimension_maximum:g}", dimension_maximum)
+    _add_radar(sheet, dimension_start, dimension_start + len(dimension_defs) - 1, 1, 2, f"G{dimension_section}", f"Dimension performance /{dimension_maximum:g}", dimension_maximum)
 
-    row = _section(sheet, 26, "Activity performance", 12)
+    activity_section = max(26, dimension_start + len(dimension_defs))
+    row = _section(sheet, activity_section, "Activity performance", 12)
+    activity_start = row + 1
     for col, header in enumerate([terms["stage"], "Score /5", "Rank", "Submissions", "Status"], 1):
         sheet.cell(row, col, header).fill = PatternFill("solid", fgColor=NAVY)
         sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     for offset, activity in enumerate(activity_defs, 1):
         target = row + offset
-        sheet.cell(target, 1, activity["name"])
+        sheet.cell(target, 1, activity.get("displayName", activity["name"]))
         for col, source_offset in enumerate(range(2, 6), 2):
             sheet.cell(target, col, _scalar_lookup_formula(
                 f'{selection}&"|"&$A{target}',
@@ -1496,9 +1500,10 @@ def _payload_profile_sheet(
             ))
     _style_formula_rows(sheet, row + 1, len(activity_defs), 5)
     _add_text_color_rules(sheet, f"E{row + 1}:E{row + len(activity_defs)}", f"E{row + 1}")
-    _add_radar(sheet, row + 1, row + len(activity_defs), 1, 2, "G26", "Activity performance", 5)
+    _add_radar(sheet, activity_start, activity_start + len(activity_defs) - 1, 1, 2, f"G{activity_section}", "Activity performance", 5)
 
-    row = _section(sheet, 44, "General assessment and completion", 12)
+    general_section = max(44, activity_section + 18, activity_start + len(activity_defs))
+    row = _section(sheet, general_section, "General assessment and completion", 12)
     general_labels = [
         *[(f"{factor['name']} /{float(factor['maximum']):g}", hidden_column(summary_column, 14 + index)) for index, factor in enumerate(factors)],
         ("General average /1", hidden_column(summary_column, 14 + len(factors))),
@@ -1522,7 +1527,7 @@ def _payload_profile_sheet(
         sheet.row_dimensions[target].height = 38 if label in {"General comment", "Notes"} else 24
 
     evaluator_maximum = max(Counter(item[0] for item in evaluator_rows).values(), default=1)
-    evaluator_section = max(55, row + len(general_labels) + 2)
+    evaluator_section = max(55, row + len(general_labels) + 1)
     row = _section(sheet, evaluator_section, f"{terms['assessor']} breakdown", 12)
     visible_evaluator_headers = [terms["stage"], terms["assessor"], "Category", "Score /5", "Status", "Comment"]
     for col, header in enumerate(visible_evaluator_headers, 1):
@@ -1540,7 +1545,7 @@ def _payload_profile_sheet(
     _style_formula_rows(sheet, evaluator_visible_start, evaluator_maximum, len(visible_evaluator_headers))
     _add_text_color_rules(sheet, f"E{evaluator_visible_start}:E{evaluator_visible_start + evaluator_maximum - 1}", f"E{evaluator_visible_start}")
 
-    criterion_section = max(79, evaluator_visible_start + evaluator_maximum + 2)
+    criterion_section = max(79, evaluator_visible_start + evaluator_maximum + 1)
     row = _section(sheet, criterion_section, "Criterion-level grading", 12)
     visible_criterion_headers = [terms["stage"], "Dimension", "Criterion", "Explanation", terms["assessor"], "Grade /5", "Raw result", "Status"]
     for col, header in enumerate(visible_criterion_headers, 1):
@@ -1548,7 +1553,7 @@ def _payload_profile_sheet(
         sheet.cell(row, col).font = Font(name="Aptos", size=9, bold=True, color=WHITE)
     criterion_end = max(2, len(criterion_rows) + 1)
     criterion_visible_start = row + 1
-    criterion_maximum = min(116, max(Counter(item[0] for item in criterion_rows).values(), default=1))
+    criterion_maximum = max(Counter(item[0] for item in criterion_rows).values(), default=1)
     for visible_row in range(criterion_visible_start, criterion_visible_start + criterion_maximum):
         for column, source_offset in enumerate(range(1, 9), 1):
             sheet.cell(visible_row, column, _lookup_value_formula(
@@ -1559,7 +1564,7 @@ def _payload_profile_sheet(
     _style_formula_rows(sheet, criterion_visible_start, criterion_maximum, len(visible_criterion_headers))
     _add_text_color_rules(sheet, f"H{criterion_visible_start}:H{criterion_visible_start + criterion_maximum - 1}", f"H{criterion_visible_start}")
 
-    audit_section = max(200, criterion_visible_start + criterion_maximum + 2)
+    audit_section = max(200, criterion_visible_start + criterion_maximum + 1)
     row = _section(sheet, audit_section, "Profile audit history", 12)
     visible_audit_headers = ["Date and time", "Username", "Action", "Reason", "Before", "After"]
     for col, header in enumerate(visible_audit_headers, 1):
