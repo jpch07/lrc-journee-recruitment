@@ -608,6 +608,7 @@ function applyProfileLayout(sheet, tab, layout) {
   ['B3','E3'].forEach(cell=>sheet.getRange(cell).setBackground('#FFF5D9').setFontWeight('bold').setFontColor('#223449'));
   setListValidation(sheet,'B3',layout.blocks.scopeOptions); setListValidation(sheet,'E3',layout.blocks.dependentOptions);
   applyProfileFormulas(sheet,layout,tab.presentation);
+  sheet.getRange(layout.profileKeyCell).setNumberFormat(';;;');
   const s=layout.sectionRows;
   [s.dimension,s.activity,s.general,s.evaluator,s.criterion,s.audit].forEach(row=>sheet.getRange(row,1,1,12).setBackground('#EAF1F8').setFontColor('#223449').setFontWeight('bold'));
   [s.dimensionHeader,s.activityHeader,s.evaluatorHeader,s.criterionHeader,s.auditHeader].forEach(row=>sheet.getRange(row,1,1,12).setBackground('#223449').setFontColor('#FFFFFF').setFontWeight('bold').setWrap(true));
@@ -899,16 +900,17 @@ function refreshDependentProfileOptions_(sheet, layout) {
   const options=blockValues_(sheet,layout.profileOptions).filter(row=>String(row[0])===scopeKey).map(row=>[String(row[1]),String(row[2])]);
   const capacity=layout.dependentOptions.endRow-layout.dependentOptions.startRow;
   if (options.length>capacity) fail('VERIFY');
-  if (capacity) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,capacity,2).clearContent();
-  if (options.length) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,options.length,2).setValues(options);
   const selector=sheet.getRange('E3');
   selector.clearDataValidations();
+  SpreadsheetApp.flush();
+  if (capacity) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,capacity,2).clearContent();
+  if (options.length) sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,options.length,2).setValues(options);
+  selector.setValue(options.length?options[0][0]:'');
   if (options.length) {
     const source=sheet.getRange(layout.dependentOptions.startRow+1,layout.dependentOptions.startCol,options.length,1);
     selector.setDataValidation(SpreadsheetApp.newDataValidation().requireValueInRange(source,true).setAllowInvalid(false)
       .setHelpText('Choose a recruit from the selected completed Journee.').build());
   }
-  selector.setValue(options.length?options[0][0]:'');
 }
 function refreshProfilePhoto_(spreadsheet, profileSheet) {
   if (!spreadsheet || spreadsheet.getId()!==BACKUP_SHEET || !profileSheet || profileSheet.getName()!=='Recruit Profiles') return;

@@ -14,6 +14,8 @@ import httpx
 
 from .sheet_backup_export import BackupError, json_text
 
+# Image, layout, and publication steps can legitimately run for about a minute.
+GOOGLE_TIMEOUT = httpx.Timeout(120.0, connect=10.0)
 SPREADSHEET_ID = '11YSIJSpXWZZg00HlldQg3NLwKWQ-tGfrmQPPQF8Gbk0'
 SPREADSHEET_URL = f'https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit'
 ERRORS = {
@@ -59,7 +61,7 @@ class Receiver:
         envelope = {'timestamp': timestamp, 'nonce': nonce, 'payload': body,
             'signature': hmac.new(self.secret.encode(), signed.encode(), hashlib.sha256).hexdigest()}
         try:
-            with httpx.Client(timeout=25, follow_redirects=False, transport=self.transport) as client:
+            with httpx.Client(timeout=GOOGLE_TIMEOUT, follow_redirects=False, transport=self.transport) as client:
                 response = client.post(self.url, json=envelope)
                 if response.status_code in (301, 302, 303):
                     location = response.headers.get('location', '')

@@ -63,3 +63,49 @@ def test_temporary_google_failure_retries_with_backoff_and_fresh_nonce(monkeypat
     assert receiver.call('status', {})['state'] == 'ready'
     assert delays == [1, 2]
     assert len({item['nonce'] for item in seen}) == 3
+
+
+def test_google_request_timeout_allows_slow_operations_but_bounds_connects():
+    timeouts = []
+    def handler(request):
+        timeouts.append(request.extensions['timeout'])
+        return httpx.Response(200, json={'ok': True, 'result': {'state': 'ready'}})
+    receiver = Receiver('https://script.google.com/macros/s/example/exec', 's' * 40,
+                        transport=httpx.MockTransport(handler))
+
+    assert receiver.call('status', {})['state'] == 'ready'
+    assert timeouts == [{'connect': 10.0, 'read': 120.0, 'write': 120.0, 'pool': 120.0}]
+
+
+def test_read_timeout_retries_the_same_operation_with_a_fresh_nonce(monkeypatch):
+    seen, delays = [], []
+    monkeypatch.setattr('app.sheet_backup_transport.time.sleep', delays.append)
+    def handler(request):
+        seen.append(json.loads(request.content))
+        if len(seen) == 1:
+            raise httpx.ReadTimeout('response acknowledgement was lost', request=request)
+        return httpx.Response(200, json={'ok': True, 'result': {'next': 8}})
+    receiver = Receiver('https://script.google.com/macros/s/example/exec', 's' * 40,
+                        transport=httpx.MockTransport(handler))
+    payload = {'runId': 'a' * 32, 'sequence': 7, 'operation': {'kind': 'image', 'row': 2}}
+
+    assert receiver.call('apply', payload) == {'next': 8}
+    assert delays == [1]
+    assert len(seen) == 2
+    assert seen[0]['payload'] == seen[1]['payload']
+    assert seen[0]['nonce'] != seen[1]['nonce']
+
+
+def test_busy_response_is_not_retried(monkeypatch):
+    attempts, delays = [], []
+    monkeypatch.setattr('app.sheet_backup_transport.time.sleep', delays.append)
+    def handler(request):
+        attempts.append(request)
+        return httpx.Response(200, json={'ok': False, 'code': 'BUSY'})
+    receiver = Receiver('https://script.google.com/macros/s/example/exec', 's' * 40,
+                        transport=httpx.MockTransport(handler))
+
+    with pytest.raises(BackupError, match='Another backup is running'):
+        receiver.call('status', {})
+    assert len(attempts) == 1
+    assert delays == []

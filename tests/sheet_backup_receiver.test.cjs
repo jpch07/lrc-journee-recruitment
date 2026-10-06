@@ -125,6 +125,7 @@ function fakeGoogle() {
   let rejectSheetList = false;
   let omitDefaultSheetId = false;
   let staleSpreadsheetReads = false;
+  let rejectTransientInvalid = false;
   const tag = (key,value,id=1,onRemove=()=>{}) => ({getKey:()=>key,getValue:()=>value,getId:()=>id,remove:onRemove});
   const colNumber=value=>[...value.toUpperCase()].reduce((n,c)=>n*26+c.charCodeAt(0)-64,0);
   const parseA1=value=>{
@@ -134,7 +135,7 @@ function fakeGoogle() {
     return {row,col,rows:(match[4]?Number(match[4]):row)-row+1,cols:(match[3]?colNumber(match[3]):col)-col+1,a1:String(value).toUpperCase()};
   };
   const add = (id,title,rows=1,cols=2,owner=null) => {
-    const s = {id,title,rows,cols,data:[],formulas:new Map(),validations:new Map(),metadata:owner?[tag('evalday_backup_run',owner)]:[],hidden:false,images:[],
+    const s = {id,title,rows,cols,data:[],formulas:new Map(),numberFormats:new Map(),validations:new Map(),metadata:owner?[tag('evalday_backup_run',owner)]:[],hidden:false,images:[],
       charts:[],conditionalRules:[],protections:[],merges:[],hiddenColumns:new Set(),frozenRows:0,hiddenGridlines:false,tabColor:null,
       getSheetId(){return this.id}, getName(){return this.title}, getMaxRows(){return this.rows}, getMaxColumns(){return this.cols},
       getDeveloperMetadata(){if(rejectPerSheetMetadata)throw new Error('per-sheet metadata lookup rejected');return this.metadata},
@@ -149,22 +150,33 @@ function fakeGoogle() {
           getValues:()=>Array.from({length:bounds.rows},(_,i)=>Array.from({length:bounds.cols},(_,j)=>
             staleSpreadsheetReads ? '' : this.data[bounds.row+i-1]?.[bounds.col+j-1]??'')),
           getValue:()=>staleSpreadsheetReads ? '' : this.data[bounds.row-1]?.[bounds.col-1]??'',
-          setValues:values=>{values.forEach((row,i)=>row.forEach((value,j)=>{this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]=value;this.formulas.delete(key(bounds.row+i,bounds.col+j));}));return range},
+          setValues:values=>{values.forEach((row,i)=>row.forEach((value,j)=>{this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]=value;this.formulas.delete(key(bounds.row+i,bounds.col+j));}));this.assertValidations();return range},
           setValue:value=>range.setValues([[value]]),
           getFormula:()=>this.formulas.get(key(bounds.row,bounds.col))||'',
           getFormulas:()=>Array.from({length:bounds.rows},(_,i)=>Array.from({length:bounds.cols},(_,j)=>this.formulas.get(key(bounds.row+i,bounds.col+j))||'')),
           setFormula:formula=>{this.formulas.set(key(bounds.row,bounds.col),formula);this.data[bounds.row-1]??=[];this.data[bounds.row-1][bounds.col-1]='';return range},
           setFormulas:values=>{values.forEach((row,i)=>row.forEach((formula,j)=>{this.formulas.set(key(bounds.row+i,bounds.col+j),formula);this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]='';}));return range},
-          clearContent:()=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++){this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]='';this.formulas.delete(key(bounds.row+i,bounds.col+j));}return range},
+          clearContent:()=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++){this.data[bounds.row+i-1]??=[];this.data[bounds.row+i-1][bounds.col+j-1]='';this.formulas.delete(key(bounds.row+i,bounds.col+j));}this.assertValidations();return range},
+          getNumberFormat:()=>this.numberFormats.get(key(bounds.row,bounds.col))||'',
+          setNumberFormat:value=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++)this.numberFormats.set(key(bounds.row+i,bounds.col+j),value);return range},
           getDataValidation:()=>this.validations.get(key(bounds.row,bounds.col))||null,
-          setDataValidation:rule=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++)this.validations.set(key(bounds.row+i,bounds.col+j),rule);return range},
-          clearDataValidations:()=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++)this.validations.delete(key(bounds.row+i,bounds.col+j));return range},
+          setDataValidation:rule=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++)this.validations.set(key(bounds.row+i,bounds.col+j),rule);this.assertValidations();return range},
+          clearDataValidations:()=>{for(let i=0;i<bounds.rows;i++)for(let j=0;j<bounds.cols;j++)this.validations.delete(key(bounds.row+i,bounds.col+j));this.assertValidations();return range},
           merge:()=>{this.merges.push(range.getA1Notation());return range},
           breakApart:()=>{this.merges=this.merges.filter(value=>value!==range.getA1Notation());return range},
         };
         ['setBackground','setFontColor','setFontWeight','setFontFamily','setFontSize','setWrap','setWrapStrategy',
-          'setVerticalAlignment','setHorizontalAlignment','setNumberFormat','setBorder'].forEach(name=>range[name]=()=>range);
+          'setVerticalAlignment','setHorizontalAlignment','setBorder'].forEach(name=>range[name]=()=>range);
         return range;
+      },
+      assertValidations(){
+        if(!rejectTransientInvalid)return;
+        this.validations.forEach((rule,target)=>{
+          if(rule.allowInvalid || !rule.rangeObject)return;
+          const [row,col]=target.split(':').map(Number),value=String(this.data[row-1]?.[col-1]??'');
+          if(!value)return;
+          assert.ok(rule.rangeObject.getValues().flat().map(String).includes(value),`transient invalid validation at ${target}`);
+        });
       },
       getDataRange(){return {getValues:()=>this.data}}, getImages(){return this.images},
       insertImage(blob,col,row){const image={blob,getAnchorCell:()=>({getRow:()=>row,getColumn:()=>col}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
@@ -245,7 +257,8 @@ function fakeGoogle() {
   const props = {getProperty:key=>values[key]||null,setProperty:(key,value)=>{values[key]=value},deleteProperty:key=>{delete values[key]}};
   return {ss,props,add,publish:runId=>{documentMetadata=[tag('evalday_backup_published',JSON.stringify({runId}),99)]},triggers:()=>[...triggers],
     failPublish:value=>{failPublish=value},rejectPerSheetMetadata:value=>{rejectPerSheetMetadata=value},rejectSheetList:value=>{rejectSheetList=value},
-    omitDefaultSheetId:value=>{omitDefaultSheetId=value},staleSpreadsheetReads:value=>{staleSpreadsheetReads=value},remove:id=>sheets.delete(id)};
+    omitDefaultSheetId:value=>{omitDefaultSheetId=value},staleSpreadsheetReads:value=>{staleSpreadsheetReads=value},
+    rejectTransientInvalid:value=>{rejectTransientInvalid=value},remove:id=>sheets.delete(id)};
 }
 
 const digest = value=>crypto.createHash('sha256').update(value).digest('hex');
@@ -478,6 +491,24 @@ function profilePresentationV2() {
   return {rows,layout};
 }
 
+test('profile stable keys stay formula-backed while their rendered value is hidden', () => {
+  for (const [presentation,fixture,runId] of [
+    ['recruit-profiles-v1',profilePresentation(),'4'.repeat(32)],
+    ['recruit-profiles-v2',profilePresentationV2(),'5'.repeat(32)],
+  ]) {
+    const env=fakeGoogle();
+    const descriptor={name:'Recruit Profiles',finalTitle:'Recruit Profiles',presentation,version:1,
+      rows:fixture.rows.length,cols:fixture.rows[0].length};
+    const state=presentationState(env,descriptor,fixture.rows,runId);
+    const op={kind:'layout',version:1,tab:'Recruit Profiles',presentation,layout:fixture.layout};
+    receiver.applyPresentationLayout(op,state,env.ss);
+    const profileKey=env.ss.getSheetById(state.tabs[0].id).getRange(fixture.layout.profileKeyCell);
+    assert.match(profileKey.getFormula(),/^=/);
+    assert.equal(profileKey.getNumberFormat(),';;;');
+    assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
+  }
+});
+
 test('v2 layouts resolve native selectors exclusively through stable helper ids', () => {
   for (const [name,presentation,fixture] of [
     ['Results','results-v2',resultsPresentationV2()],['Recruit Profiles','recruit-profiles-v2',profilePresentationV2()],
@@ -639,6 +670,7 @@ function managedProfileEnvironmentV2() {
 
 test('v2 scope edits map display labels to stable ids before resetting the profile', () => {
   const {env,sheet}=managedProfileEnvironmentV2();
+  env.rejectTransientInvalid(true);
   sheet.getRange('B3').setValue('Day');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   assert.equal(sheet.getRange('E3').getValue(),'Day Alex');
