@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import io
+import os
 import re
+import shutil
+import tempfile
 from copy import deepcopy
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
+from pathlib import Path
+from threading import Lock
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
@@ -16,7 +22,7 @@ from openpyxl.drawing.image import Image as ExcelImage
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from PIL import Image as PillowImage, ImageDraw, ImageOps
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.orm import Session
 
 from .models import (
@@ -33,14 +39,14 @@ from .models import (
     RoomPlanEvaluator,
     RoomPlanRecruit,
 )
-from .excel_cell_images import embed_lookup_images
+from .excel_cell_images import write_lookup_images
 from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 from .scoring import configured_ranks
 from .services import latest_room_plan, result_snapshot
 from .utils import loads
 from .assessment_runtime import active_assessment_definition
 from .general_assessment import configured_general_assessment_values
-from .object_storage import has_photo, read_recruit_photo
+from .object_storage import get_photo, has_photo, read_recruit_photo
 
 
 BEIRUT = ZoneInfo("Asia/Beirut")
@@ -57,6 +63,24 @@ GRAY_LIGHT = "F3F5F7"
 LINE = "D6DBE1"
 WHITE = "FFFFFF"
 THIN_LINE = Side(style="thin", color=LINE)
+_MANAGEMENT_REPORT_EXPORT_LOCK = Lock()
+
+
+class ManagementReportExportBusyError(RuntimeError):
+    """Raised when another management workbook is already being generated."""
+
+
+@dataclass(frozen=True)
+class ManagementReportPhotoSource:
+    profile_key: str
+    object_key: str | None
+    fallback_data: bytes | None
+
+
+@dataclass(frozen=True)
+class ManagementReportExport:
+    payload: dict[str, object]
+    photos: tuple[ManagementReportPhotoSource, ...]
 
 
 def _dimension_maximum(code: str | None = None) -> float:
@@ -1144,14 +1168,19 @@ def _management_profile_sheet(workbook: Workbook, db: Session, journeys: list[Jo
     sheet.row_dimensions[5].height = 24; sheet.row_dimensions[6].height = 30
 
 
-def save_management_report(workbook: Workbook, output: io.BytesIO) -> None:
-    base = io.BytesIO()
-    workbook.save(base)
-    image_config = getattr(workbook, "_journee_profile_images", None)
-    content = base.getvalue()
-    if image_config:
-        content = embed_lookup_images(content, **image_config)
-    output.write(content)
+def save_management_report(workbook: Workbook, output) -> None:
+    """Write a workbook without retaining duplicate XLSX archives in memory."""
+    output.seek(0)
+    output.truncate(0)
+    with tempfile.TemporaryFile(suffix=".xlsx") as base:
+        workbook.save(base)
+        base.seek(0)
+        image_config = getattr(workbook, "_journee_profile_images", None)
+        if image_config:
+            write_lookup_images(base, output, **image_config)
+        else:
+            shutil.copyfileobj(base, output)
+    output.flush()
 
 
 def _payload_date(value: object) -> object:
@@ -1614,15 +1643,81 @@ def build_management_report_workbook_from_payload(
     return workbook
 
 
-def build_management_report_workbook(db: Session) -> Workbook:
+def prepare_management_report_export(db: Session) -> ManagementReportExport:
+    """Copy all database-backed inputs before the request releases its session."""
     from .management_report_payload import build_management_report_payload, load_management_report_source
 
     source = load_management_report_source(db)
     payload = build_management_report_payload(source)
+    profile_keys = {
+        str(recruit["id"]): f"{journey['id']}:{recruit['id']}"
+        for journey in source.journeys
+        for recruit in journey["recruits"]
+    }
+    if not profile_keys:
+        return ManagementReportExport(payload=payload, photos=())
+    photo_rows = db.execute(
+        select(
+            Recruit.id,
+            Recruit.photo_object_key,
+            case(
+                (Recruit.photo_object_key.is_(None), Recruit.photo_data),
+                else_=None,
+            ),
+        ).where(Recruit.id.in_(profile_keys))
+    ).all()
+    photos = tuple(
+        ManagementReportPhotoSource(
+            profile_key=profile_keys[str(recruit_id)],
+            object_key=object_key,
+            fallback_data=fallback_data,
+        )
+        for recruit_id, object_key, fallback_data in photo_rows
+    )
+    return ManagementReportExport(payload=payload, photos=photos)
+
+
+def build_management_report_workbook_from_export(export: ManagementReportExport) -> Workbook:
+    """Perform remote photo I/O and workbook rendering without a database lease."""
     photos: dict[str, bytes] = {}
-    for journey in source.journeys:
-        for recruit in journey["recruits"]:
-            orm_recruit = db.get(Recruit, recruit["id"])
-            raw = read_recruit_photo(orm_recruit) if orm_recruit is not None and has_photo(orm_recruit) else None
-            photos[f"{journey['id']}:{recruit['id']}"] = _profile_photo_png(raw)
-    return build_management_report_workbook_from_payload(payload, photo_png_by_profile_key=photos)
+    for source in export.photos:
+        raw = get_photo(source.object_key) if source.object_key else None
+        photos[source.profile_key] = _profile_photo_png(raw if raw is not None else source.fallback_data)
+    return build_management_report_workbook_from_payload(
+        export.payload,
+        photo_png_by_profile_key=photos,
+    )
+
+
+def create_management_report_file(db: Session, *, directory: str | os.PathLike | None = None) -> Path:
+    """Create one report at a time, releasing the database before heavy rendering."""
+    if not _MANAGEMENT_REPORT_EXPORT_LOCK.acquire(blocking=False):
+        raise ManagementReportExportBusyError("A management report is already being prepared.")
+    path: Path | None = None
+    workbook: Workbook | None = None
+    try:
+        export = prepare_management_report_export(db)
+        db.close()
+        workbook = build_management_report_workbook_from_export(export)
+        file_descriptor, filename = tempfile.mkstemp(suffix=".xlsx", dir=directory)
+        os.close(file_descriptor)
+        path = Path(filename)
+        with path.open("w+b") as output:
+            save_management_report(workbook, output)
+        return path
+    except Exception:
+        if path is not None:
+            path.unlink(missing_ok=True)
+        raise
+    finally:
+        try:
+            close = getattr(workbook, "close", None)
+            if close is not None:
+                close()
+        finally:
+            _MANAGEMENT_REPORT_EXPORT_LOCK.release()
+
+
+def build_management_report_workbook(db: Session) -> Workbook:
+    """Compatibility entry point for non-HTTP callers and focused workbook tests."""
+    return build_management_report_workbook_from_export(prepare_management_report_export(db))

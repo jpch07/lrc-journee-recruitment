@@ -76,6 +76,7 @@ textarea { min-height: 105px; resize: vertical; }
 .button.small { min-height: 32px; padding: 5px 10px; font-size: .82rem; }
 .button.wide { width: 100%; }
 .button:disabled { opacity: .48; cursor: not-allowed; transform: none; }
+.button[aria-disabled="true"] { opacity: .58; cursor: wait; pointer-events: none; transform: none; }
 .icon-button { width: 40px; height: 40px; border: 0; border-radius: 9px; background: transparent; font-size: 1.2rem; }
 .checkbox-inline { display: flex; align-items: center; gap: 8px; }
 

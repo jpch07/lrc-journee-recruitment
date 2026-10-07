@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from decimal import Decimal
-import io
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -16,9 +16,9 @@ from .rubric import ACTIVITY_ORDER, DIMENSION_NAMES, DIMENSION_ORDER, RUBRICS
 from .scoring import configured_ranks
 from .assessment_runtime import active_assessment_definition
 from .report_exports import (
-    build_management_report_workbook,
+    ManagementReportExportBusyError,
+    create_management_report_file,
     management_report_filename,
-    save_management_report,
 )
 from .routes_admin import (
     _activity_states,
@@ -364,14 +364,14 @@ def management_report(
     db: Session = Depends(get_db),
 ):
     del context
-    workbook = build_management_report_workbook(db)
-    output = io.BytesIO()
-    save_management_report(workbook, output)
-    return StreamingResponse(
-        io.BytesIO(output.getvalue()),
+    try:
+        path = create_management_report_file(db)
+    except ManagementReportExportBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileResponse(
+        path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{management_report_filename()}"',
-            "Cache-Control": "no-store",
-        },
+        filename=management_report_filename(),
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(path.unlink, missing_ok=True),
     )

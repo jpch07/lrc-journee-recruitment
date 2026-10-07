@@ -27,6 +27,7 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const host = $("#viewerHost");
 const modal = $("#viewerModal");
 const photoViewer = $("#photoViewer");
+const reportDownload = $(".viewer-report-download");
 const dimensionOrder = systemConfiguration?.dimensions?.map(item => item.key) || ["willingness", "adaptability", "respect", "intelligence", "application", "physical_ability"];
 const dimensionNames = Object.fromEntries((systemConfiguration?.dimensions || [
   { key: "willingness", name: "Willingness" }, { key: "adaptability", name: "Adaptability" },
@@ -44,6 +45,43 @@ const categoryName = role => systemConfiguration?.assessorCategories?.find(item 
 // LRC compatibility expression retained by the generic display: dimensionGrade(item.score)
 const COMPLETED_SCOPE = "completed";
 const state = { session: null, accounts: [], journeys: [], journeyId: COMPLETED_SCOPE, data: null, tab: "results", attendanceTab: "recruits", resultsActivity: "overall", profileKey: "" };
+
+reportDownload.onclick = async event => {
+  event.preventDefault();
+  if (reportDownload.getAttribute("aria-disabled") === "true") return;
+  const originalLabel = reportDownload.textContent;
+  reportDownload.setAttribute("aria-disabled", "true");
+  reportDownload.setAttribute("aria-busy", "true");
+  reportDownload.textContent = "Preparing Excel…";
+  try {
+    const response = await fetch(reportDownload.href, { credentials: "same-origin" });
+    if (!response.ok) {
+      let message = "The Excel report could not be prepared.";
+      try {
+        const payload = await response.json();
+        if (payload.detail) message = payload.detail;
+      } catch {}
+      throw new Error(message);
+    }
+    const disposition = response.headers.get("Content-Disposition") || "";
+    const filename = disposition.match(/filename="?([^";]+)"?/i)?.[1] || "management-report.xlsx";
+    const url = URL.createObjectURL(await response.blob());
+    const download = document.createElement("a");
+    download.href = url;
+    download.download = filename;
+    document.body.appendChild(download);
+    download.click();
+    download.remove();
+    URL.revokeObjectURL(url);
+    toast("Excel report downloaded.", "success");
+  } catch (error) {
+    toast(error.message || "The Excel report could not be prepared.", "error");
+  } finally {
+    reportDownload.removeAttribute("aria-disabled");
+    reportDownload.removeAttribute("aria-busy");
+    reportDownload.textContent = originalLabel;
+  }
+};
 
 function sectionHeading(eyebrow, title, description, actions = "") {
   return `<div class="section-heading"><div><p class="eyebrow">${h(eyebrow)}</p><h1>${h(title)}</h1>${description ? `<p class="muted">${h(description)}</p>` : ""}</div><div class="heading-actions">${actions}</div></div>`;

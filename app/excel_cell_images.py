@@ -65,21 +65,27 @@ def _mark_rich_value_cell(sheet_xml: str, cell_reference: str, metadata_index: i
     return sheet_xml[:match.start()] + opening + body + match.group(3) + sheet_xml[match.end():]
 
 
-def embed_lookup_images(
-    workbook_bytes: bytes,
+def write_lookup_images(
+    workbook_source,
+    output,
     *,
     sheet_name: str,
     image_cells: list[tuple[str, bytes]],
     formula_cell: str,
     initial_image_index: int,
-) -> bytes:
-    """Embed PNGs as Excel rich values so XLOOKUP can return a selected image."""
+) -> None:
+    """Embed PNG rich values while writing the finished workbook to ``output``."""
     if not image_cells:
-        return workbook_bytes
+        with zipfile.ZipFile(workbook_source, "r") as source, zipfile.ZipFile(
+            output, "w", compression=zipfile.ZIP_DEFLATED
+        ) as destination:
+            for item in source.infolist():
+                destination.writestr(item, source.read(item.filename))
+        return
     if initial_image_index < 0 or initial_image_index >= len(image_cells):
         raise ValueError("Initial image index is outside the embedded image list.")
 
-    with zipfile.ZipFile(io.BytesIO(workbook_bytes), "r") as source:
+    with zipfile.ZipFile(workbook_source, "r") as source:
         parts = {item.filename: source.read(item.filename) for item in source.infolist()}
 
     sheet_path = _sheet_path(parts, sheet_name)
@@ -174,8 +180,27 @@ def embed_lookup_images(
         f'<Relationships xmlns="{PACKAGE_RELS_NS}">{"".join(rel_items)}</Relationships>'
     ).encode("utf-8")
 
-    output = io.BytesIO()
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as destination:
         for name, data in parts.items():
             destination.writestr(name, data)
+
+
+def embed_lookup_images(
+    workbook_bytes: bytes,
+    *,
+    sheet_name: str,
+    image_cells: list[tuple[str, bytes]],
+    formula_cell: str,
+    initial_image_index: int,
+) -> bytes:
+    """Compatibility wrapper returning workbook bytes for existing callers."""
+    output = io.BytesIO()
+    write_lookup_images(
+        io.BytesIO(workbook_bytes),
+        output,
+        sheet_name=sheet_name,
+        image_cells=image_cells,
+        formula_cell=formula_cell,
+        initial_image_index=initial_image_index,
+    )
     return output.getvalue()

@@ -79,8 +79,10 @@ def test_frontend_assets_contain_the_application_workspaces():
     assert 'dimensionGrade(' in viewer_js
     assert "Download interactive Excel report" not in viewer_js
     assert "Download Excel Report" in viewer
+    assert "Preparing Excel" in viewer_js
+    assert "fetch(reportDownload.href" in viewer_js
     assert "All completed Journees" in viewer_js
-    assert "viewer.js?v=20260928.5" in viewer
+    assert "viewer.js?v=20261007.1" in viewer
     assert "platformLoginForm" in home
     assert "platformSignupForm" in home
     assert "workspaceList" in home

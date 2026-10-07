@@ -12,7 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 import qrcode
 from sqlalchemy import delete, func, select, update
@@ -85,7 +85,13 @@ from .general_assessment import (
     set_general_assessment_values,
     stored_general_assessment_values,
 )
-from .report_exports import build_report_workbook, format_criterion_target, save_management_report
+from starlette.background import BackgroundTask
+
+from .report_exports import (
+    ManagementReportExportBusyError,
+    create_management_report_file,
+    format_criterion_target,
+)
 from .schemas import (
     ActivityAvailabilityRequest,
     ActivityOperationRequest,
@@ -791,17 +797,17 @@ def export_xlsx(
 ):
     del context
     journey = get_journey_or_404(db, journey_id)
-    workbook = build_report_workbook(db, journey, full=True)
-    output = io.BytesIO()
-    save_management_report(workbook, output)
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "journee"
-    return StreamingResponse(
-        io.BytesIO(output.getvalue()),
+    try:
+        path = create_management_report_file(db)
+    except ManagementReportExportBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileResponse(
+        path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}-management-report.xlsx"',
-            "Cache-Control": "no-store",
-        },
+        filename=f"{safe_name}-management-report.xlsx",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(path.unlink, missing_ok=True),
     )
 
 
@@ -813,17 +819,17 @@ def export_results_xlsx(
 ):
     del context
     journey = get_journey_or_404(db, journey_id)
-    workbook = build_report_workbook(db, journey, full=False)
-    output = io.BytesIO()
-    save_management_report(workbook, output)
     safe_name = re.sub(r"[^A-Za-z0-9_-]+", "-", journey.name).strip("-") or "journee"
-    return StreamingResponse(
-        io.BytesIO(output.getvalue()),
+    try:
+        path = create_management_report_file(db)
+    except ManagementReportExportBusyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return FileResponse(
+        path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe_name}-management-report.xlsx"',
-            "Cache-Control": "no-store",
-        },
+        filename=f"{safe_name}-management-report.xlsx",
+        headers={"Cache-Control": "no-store"},
+        background=BackgroundTask(path.unlink, missing_ok=True),
     )
 
 
