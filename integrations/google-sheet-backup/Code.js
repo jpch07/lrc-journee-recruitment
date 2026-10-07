@@ -588,9 +588,19 @@ function verifyPreviewStore_(sheet, layout) {
 function upsertProfileImage_(sheet, bytes) {
   const images=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10);
   const blob=Utilities.newBlob(bytes,'image/png','profile-preview.png');
-  const image=images.length ? images[0].replace(blob) : sheet.insertImage(blob,10,3);
+  const replacing=images.length>0;
+  const image=replacing ? images[0].replace(blob) : sheet.insertImage(blob,10,3);
   images.slice(1).forEach(extra=>extra.remove());
+  // Flush the new image data, then nudge its offset so an already-open Sheet
+  // repaints the over-grid object instead of retaining the old cached element.
+  if (replacing && image.setAnchorCellXOffset) {
+    SpreadsheetApp.flush();
+    image.setAnchorCellXOffset(1);
+    SpreadsheetApp.flush();
+    image.setAnchorCellXOffset(0);
+  }
   if (image.setWidth) image.setWidth(150).setHeight(150);
+  SpreadsheetApp.flush();
   return image;
 }
 function refreshInitialProfileImage(sheet, layout) {
