@@ -733,6 +733,18 @@ test('switching to an empty profile scope clears validation, selection, and the 
   assert.equal(sheet.getImages().filter(image=>image.getAnchorCell().getColumn()===10).length,0);
 });
 
+test('published legacy profile images can be rebuilt into the complete keyed gallery', () => {
+  const {env,fixture,sheet}=managedProfileEnvironment();
+  const legacyBytes=sheet.getImages()[0].blob.getBytes();
+  sheet.getImages().forEach(image=>image.remove());
+  sheet.insertImage(global.Utilities.newBlob(legacyBytes,'image/png','legacy.png'),10,3);
+  receiver.rebuildPublishedProfileGallery();
+  assert.equal(sheet.getImages().length,fixture.layout.expectedPreviewCount);
+  assert.equal(sheet.getImages().filter(image=>image.getAnchorCell().getColumn()===10).length,1);
+  assert.equal(new Set(sheet.getImages().map(image=>image.getAltTextTitle())).size,fixture.layout.expectedPreviewCount);
+  assert.doesNotThrow(()=>receiver.refreshProfilePhoto_(env.ss,sheet));
+});
+
 test('interactive profile trigger installation is idempotent and scoped to the fixed spreadsheet', () => {
   const env=fakeGoogle();
   receiver.installInteractiveProfileTrigger();

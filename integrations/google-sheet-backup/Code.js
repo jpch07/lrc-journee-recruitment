@@ -986,6 +986,17 @@ function installInteractiveProfileTrigger() {
   ScriptApp.newTrigger('profileSelectionChanged').forSpreadsheet(BACKUP_SHEET).onEdit().create();
 }
 
+// One-time migration for a previously published profile sheet. It reuses the
+// verified preview store, so no source workspace login or new backup is needed.
+function rebuildPublishedProfileGallery() {
+  const spreadsheet=SpreadsheetApp.openById(BACKUP_SHEET),sheet=spreadsheet.getSheetByName('Recruit Profiles');
+  const complete=published(spreadsheet),owner=sheet&&meta(sheet,OWNED_KEY);
+  if(!complete||!owner||owner.getValue()!==complete.runId) fail('VERIFY');
+  const layout=profileTriggerLayout_(sheet);
+  sheet.getImages().forEach(image=>image.remove());
+  if(layout.expected) buildProfileImageGallery_(sheet,{blocks:{dependentOptions:layout.dependentOptions,previews:layout.previews}});
+}
+
 // Runs once in the owner account to show Google's consent screen, verify access,
 // and install exactly one private selector trigger.
 function authorizeBackup() {
@@ -994,4 +1005,4 @@ function authorizeBackup() {
   installInteractiveProfileTrigger();
 }
 
-if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,decodePreviewBase64_,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout,profileSelectionChanged,refreshProfilePhoto_,installInteractiveProfileTrigger};
+if (typeof module !== 'undefined') module.exports = {validateEnvelope,validateDestination,checkLease,checkSequence,validateTabs,finalTitle,verifyRows,decodePreviewBase64_,dispatch,applyOperation,applyPresentationLayout,verifyPresentationLayout,profileSelectionChanged,refreshProfilePhoto_,installInteractiveProfileTrigger,rebuildPublishedProfileGallery};
