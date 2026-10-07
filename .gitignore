@@ -15,4 +15,5 @@ tests/*.db*
 playwright-report/
 test-results/
 outputs/
+tmp/
 .impeccable/review/
