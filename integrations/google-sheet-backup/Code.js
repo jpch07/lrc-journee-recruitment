@@ -8,6 +8,7 @@ const OWNED_KEY = 'evalday_backup_run';
 const PUBLISHED_KEY = 'evalday_backup_published';
 const LAYOUT_PROTECTION = 'Evalday interactive presentation selectors';
 const PROFILE_LAYOUT_KEY = 'evalday_profile_layout_v1';
+const PROFILE_IMAGE_PREFIX = 'evalday-profile-preview:';
 const PRESENTATIONS = {
   'results-v1': {name:'Results', finalTitle:'Results'},
   'recruit-profiles-v1': {name:'Recruit Profiles', finalTitle:'Recruit Profiles'},
@@ -417,7 +418,7 @@ function clearOwnedLayout(sheet, presentation) {
   sheet.setConditionalFormatRules([]);
   sheet.getCharts().forEach(chart=>sheet.removeChart(chart));
   if (presentation==='recruit-profiles-v1' || presentation==='recruit-profiles-v2') {
-    sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3 && image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
+    sheet.getImages().forEach(image=>image.remove());
   }
 }
 function applyResultsLayout(sheet, tab, layout) {
@@ -585,34 +586,43 @@ function verifyPreviewStore_(sheet, layout) {
   if(groups.size!==layout.expectedPreviewCount) fail('VERIFY');
   groups.forEach(rows=>decodePreviewRows(rows));
 }
-function upsertProfileImage_(sheet, bytes) {
-  const images=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&[10,96].includes(image.getAnchorCell().getColumn()));
-  const blob=Utilities.newBlob(bytes,'image/png','profile-preview.png');
-  if (!images.length) {
-    const image=sheet.insertImage(blob,10,3);
-    if (image.setWidth) image.setWidth(150).setHeight(150);
-    SpreadsheetApp.flush();
-    return image;
-  }
-  // Stage the replacement in a hidden helper column, flush its uploaded data,
-  // then move it into view before retiring the old object. This sequence makes
-  // an already-open Sheet render every selection instead of caching one image.
-  const image=sheet.insertImage(blob,96,3);
-  if (image.setWidth) image.setWidth(150).setHeight(150);
-  SpreadsheetApp.flush();
-  image.setAnchorCell(sheet.getRange(3,10));
-  if (image.setAnchorCellXOffset) image.setAnchorCellXOffset(1);
-  SpreadsheetApp.flush();
-  images.forEach(previous=>previous.remove());
+function profilePreviewKey_(sheet, layout, selected, blockReader) {
+  const read=blockReader || blockValues_;
+  const match=read(sheet,layout.blocks.dependentOptions).find(row=>String(row[0])===selected);
+  if (!match || !match[1]) fail('VERIFY');
+  return String(match[1]);
+}
+function profileImageKey_(image) {
+  if (!image.getAltTextTitle) return '';
+  const title=String(image.getAltTextTitle()||'');
+  return title.startsWith(PROFILE_IMAGE_PREFIX)?title.slice(PROFILE_IMAGE_PREFIX.length):'';
+}
+function moveProfileImage_(image, sheet, visible) {
+  image.setAnchorCell(sheet.getRange(3,visible?10:96));
   if (image.setAnchorCellXOffset) image.setAnchorCellXOffset(0);
-  SpreadsheetApp.flush();
+  if (image.setAnchorCellYOffset) image.setAnchorCellYOffset(0);
+  if (visible && image.setWidth) image.setWidth(150).setHeight(150);
   return image;
+}
+function buildProfileImageGallery_(sheet, layout) {
+  const options=sheetsBlockValues_(sheet,layout.blocks.dependentOptions);
+  const previewRows=sheetsBlockValues_(sheet,layout.blocks.previews);
+  const selectedKey=profilePreviewKey_(sheet,layout,String(sheetsCellValue_(sheet,'E3')),sheetsBlockValues_);
+  const ordered=[...options].sort((left,right)=>String(left[1])===selectedKey?-1:String(right[1])===selectedKey?1:0);
+  ordered.forEach((row,index)=>{
+    const label=String(row[0]),key=String(row[1]);
+    const bytes=decodePreviewRows(previewRows.filter(preview=>String(preview[0])===key));
+    const visible=key===selectedKey;
+    const image=sheet.insertImage(Utilities.newBlob(bytes,'image/png','profile-preview.png'),visible?10:96,visible?3:3+index);
+    if(image.setAltTextTitle) image.setAltTextTitle(PROFILE_IMAGE_PREFIX+key);
+    if(image.setAltTextDescription) image.setAltTextDescription(label);
+    if(image.setWidth) image.setWidth(150).setHeight(150);
+  });
+  SpreadsheetApp.flush();
 }
 function refreshInitialProfileImage(sheet, layout) {
   if (!layout.expectedPreviewCount) return;
-  const selected=String(sheetsCellValue_(sheet,'E3'));
-  const bytes=selectedPreviewBytes_(sheet,layout,selected,sheetsBlockValues_);
-  upsertProfileImage_(sheet,bytes);
+  buildProfileImageGallery_(sheet,layout);
 }
 function applyProfileLayout(sheet, tab, layout) {
   clearOwnedLayout(sheet,tab.presentation);
@@ -696,9 +706,12 @@ function verifyPresentationLayout(op, state, ss) {
     verifySelector_(sheet,'B3',layout.blocks.scopeOptions);verifySelector_(sheet,'E3',layout.blocks.dependentOptions);
     verifyFormulaRanges(sheet,profileFormulaRanges(layout,tab.presentation));
     verifyPreviewStore_(sheet,layout);
-    const imageCount=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).length;
+    const images=sheet.getImages(),visibleImages=images.filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10);
+    const imageKeys=new Set(images.map(profileImageKey_).filter(Boolean));
+    const expectedImageKeys=new Set(sheetsBlockValues_(sheet,layout.blocks.dependentOptions).map(row=>String(row[1])).filter(Boolean));
     const profileMetadata=sheet.getDeveloperMetadata().filter(item=>item.getKey()===PROFILE_LAYOUT_KEY);
-    if (sheet.getCharts().length!==2 || imageCount!==(layout.expectedPreviewCount?1:0) || profileMetadata.length!==1) fail('VERIFY');
+    if (sheet.getCharts().length!==2 || images.length!==layout.expectedPreviewCount || visibleImages.length!==(layout.expectedPreviewCount?1:0) ||
+        imageKeys.size!==expectedImageKeys.size || [...expectedImageKeys].some(key=>!imageKeys.has(key)) || profileMetadata.length!==1) fail('VERIFY');
   }
   const owned=sheet.getProtections(SpreadsheetApp.ProtectionType.SHEET).filter(item=>item.getDescription()===LAYOUT_PROTECTION);
   if (owned.length!==1 || JSON.stringify(owned[0].getUnprotectedRanges().map(range=>range.getA1Notation()).sort())!==JSON.stringify(['B3','E3'])) fail('VERIFY');
@@ -938,13 +951,22 @@ function refreshProfilePhoto_(spreadsheet, profileSheet) {
   const complete=published(spreadsheet),owner=meta(profileSheet,OWNED_KEY);
   if (!complete || !owner || owner.getValue()!==complete.runId) return;
   const layout=profileTriggerLayout_(profileSheet),selected=String(profileSheet.getRange('E3').getValue());
+  const images=profileSheet.getImages(),gallery=images.filter(image=>profileImageKey_(image));
+  if (gallery.length!==layout.expected) fail('VERIFY');
   if (!selected) {
-    profileSheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
+    gallery.filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10)
+      .forEach(image=>moveProfileImage_(image,profileSheet,false));
+    SpreadsheetApp.flush();
     return;
   }
-  const bytes=selectedPreviewBytes_(profileSheet,{blocks:{dependentOptions:layout.dependentOptions,previews:layout.previews}},selected);
-  // Validate fully before changing the last good image.
-  upsertProfileImage_(profileSheet,bytes);
+  const imageKey=profilePreviewKey_(profileSheet,{blocks:{dependentOptions:layout.dependentOptions}},selected);
+  const target=gallery.find(image=>profileImageKey_(image)===imageKey);
+  if (!target) fail('VERIFY');
+  gallery.filter(image=>image!==target&&image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10)
+    .forEach(image=>moveProfileImage_(image,profileSheet,false));
+  SpreadsheetApp.flush();
+  moveProfileImage_(target,profileSheet,true);
+  SpreadsheetApp.flush();
 }
 function profileSelectionChanged(event) {
   if (!event || !event.source || event.source.getId()!==BACKUP_SHEET || !event.range ||

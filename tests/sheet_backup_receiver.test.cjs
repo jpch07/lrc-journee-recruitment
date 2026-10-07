@@ -179,7 +179,7 @@ function fakeGoogle() {
         });
       },
       getDataRange(){return {getValues:()=>this.data}}, getImages(){return this.images},
-      insertImage(blob,col,row){let anchorCol=col,anchorRow=row;const image={blob,offsetHistory:[],replace(nextBlob){image.blob=nextBlob;image.replaceCalls+=1;return image},replaceCalls:0,getAnchorCell:()=>({getRow:()=>anchorRow,getColumn:()=>anchorCol}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setAnchorCell(range){anchorRow=range.getRow();anchorCol=range.getColumn();return image},setAnchorCellXOffset(value){image.offsetHistory.push(value);return image},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
+      insertImage(blob,col,row){let anchorCol=col,anchorRow=row,altTitle='',altDescription='';const image={blob,offsetHistory:[],replace(nextBlob){image.blob=nextBlob;image.replaceCalls+=1;return image},replaceCalls:0,getAltTextTitle:()=>altTitle,setAltTextTitle(value){altTitle=value;return image},getAltTextDescription:()=>altDescription,setAltTextDescription(value){altDescription=value;return image},getAnchorCell:()=>({getRow:()=>anchorRow,getColumn:()=>anchorCol}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setAnchorCell(range){anchorRow=range.getRow();anchorCol=range.getColumn();return image},setAnchorCellXOffset(value){image.offsetHistory.push(value);return image},setAnchorCellYOffset(){return image},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
       setRowHeight(){},setColumnWidth(){},setFrozenRows(value){this.frozenRows=value},getFrozenRows(){return this.frozenRows},
       setHiddenGridlines(value){this.hiddenGridlines=value},hideColumns(start,count){for(let i=0;i<count;i++)this.hiddenColumns.add(start+i)},
       isColumnHiddenByUser(col){return this.hiddenColumns.has(col)},setTabColor(value){this.tabColor=value},
@@ -547,7 +547,7 @@ test('v2 profile geometry expands and exposes more than 116 criterion rows', () 
 
 test('trusted layouts replay without duplicate owned objects and keep only selectors editable', () => {
   for (const [name,presentation,fixture,expectedCharts,expectedImages] of [
-    ['Results','results-v1',resultsPresentation(),0,0],['Recruit Profiles','recruit-profiles-v1',profilePresentation(),2,1],
+    ['Results','results-v1',resultsPresentation(),0,0],['Recruit Profiles','recruit-profiles-v1',profilePresentation(),2,2],
   ]) {
     const env=fakeGoogle();
     const descriptor={name,finalTitle:name,presentation,version:1,rows:fixture.rows.length,cols:fixture.rows[0].length};
@@ -576,7 +576,7 @@ test('profile layout and verification bypass a stale SpreadsheetApp value cache'
   env.staleSpreadsheetReads(true);
   assert.doesNotThrow(()=>receiver.applyPresentationLayout(op,state,env.ss));
   assert.doesNotThrow(()=>receiver.verifyPresentationLayout({...op,kind:'verifyLayout'},state,env.ss));
-  assert.equal(env.ss.getSheetById(state.tabs[0].id).getImages().length,1);
+  assert.equal(env.ss.getSheetById(state.tabs[0].id).getImages().length,fixture.layout.expectedPreviewCount);
 });
 
 test('legacy standard-base64 profile stores survive layout publication and selector refresh', () => {
@@ -599,7 +599,8 @@ test('legacy standard-base64 profile stores survive layout publication and selec
   env.publish(runId);
   sheet.getRange('E3').setValue('Alex — Other · 2');
   assert.doesNotThrow(()=>receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')}));
-  assert.equal(digest(Buffer.from(sheet.getImages()[0].blob.getBytes())),fixture.secondDigest);
+  const visible=sheet.getImages().find(image=>image.getAnchorCell().getColumn()===10);
+  assert.equal(digest(Buffer.from(visible.blob.getBytes())),fixture.secondDigest);
 });
 
 test('layout verification rejects changed or missing prescribed formulas', () => {
@@ -678,7 +679,8 @@ test('v2 scope edits map display labels to stable ids before resetting the profi
   sheet.getRange('B3').setValue('Empty');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   assert.equal(sheet.getRange('E3').getValue(),'');
-  assert.equal(sheet.getImages().length,0);
+  assert.equal(sheet.getImages().length,2);
+  assert.equal(sheet.getImages().filter(image=>image.getAnchorCell().getColumn()===10).length,0);
 });
 
 test('profile selector trigger ignores every unowned or out-of-scope edit', () => {
@@ -698,7 +700,8 @@ test('profile selector trigger ignores every unowned or out-of-scope edit', () =
 
 test('scope edits reset the recruit before refreshing and stable keys select duplicate-name photos', () => {
   const {env,fixture,sheet,runId}=managedProfileEnvironment();
-  const originalImage=sheet.getImages()[0];
+  const originalImage=sheet.getImages().find(image=>image.getAnchorCell().getColumn()===10);
+  const secondImage=sheet.getImages().find(image=>digest(Buffer.from(image.blob.getBytes()))===fixture.secondDigest);
   sheet.getRange('B3').setValue('Day');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   assert.equal(sheet.getRange('E3').getValue(),'Day Alex');
@@ -707,27 +710,27 @@ test('scope edits reset the recruit before refreshing and stable keys select dup
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   sheet.getRange('E3').setValue('Alex — Other · 2');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')});
-  assert.notEqual(sheet.getImages()[0],originalImage);
-  assert.equal(sheet.getImages().length,1);
-  assert.equal(sheet.getImages()[0].getAnchorCell().getColumn(),10);
-  assert.deepEqual(sheet.getImages()[0].offsetHistory,[1,0]);
-  assert.equal(digest(Buffer.from(sheet.getImages()[0].blob.getBytes())),fixture.secondDigest);
+  const visible=sheet.getImages().find(image=>image.getAnchorCell().getColumn()===10);
+  assert.equal(visible,secondImage);
+  assert.notEqual(visible,originalImage);
+  assert.equal(sheet.getImages().length,2);
+  assert.equal(digest(Buffer.from(visible.blob.getBytes())),fixture.secondDigest);
 
-  const lastGood=sheet.getImages()[0];
-  sheet.getRange(3,96).setValue('corrupt-base64');
+  secondImage.remove();
   assert.throws(()=>receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')}),/VERIFY/);
-  assert.equal(sheet.getImages()[0],lastGood);
+  assert.equal(sheet.getImages().find(image=>image.getAnchorCell().getColumn()===10),undefined);
   env.publish(runId);
 });
 
 test('switching to an empty profile scope clears validation, selection, and the previous image', () => {
   const {env,sheet}=managedProfileEnvironment();
-  assert.equal(sheet.getImages().length,1);
+  assert.equal(sheet.getImages().length,2);
   sheet.getRange('B3').setValue('Empty');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   assert.equal(sheet.getRange('E3').getValue(),'');
   assert.equal(sheet.getRange('E3').getDataValidation(),null);
-  assert.equal(sheet.getImages().length,0);
+  assert.equal(sheet.getImages().length,2);
+  assert.equal(sheet.getImages().filter(image=>image.getAnchorCell().getColumn()===10).length,0);
 });
 
 test('interactive profile trigger installation is idempotent and scoped to the fixed spreadsheet', () => {
