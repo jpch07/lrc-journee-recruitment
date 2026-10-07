@@ -586,20 +586,25 @@ function verifyPreviewStore_(sheet, layout) {
   groups.forEach(rows=>decodePreviewRows(rows));
 }
 function upsertProfileImage_(sheet, bytes) {
-  const images=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10);
+  const images=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&[10,96].includes(image.getAnchorCell().getColumn()));
   const blob=Utilities.newBlob(bytes,'image/png','profile-preview.png');
-  const replacing=images.length>0;
-  const image=replacing ? images[0].replace(blob) : sheet.insertImage(blob,10,3);
-  images.slice(1).forEach(extra=>extra.remove());
-  // Flush the new image data, then nudge its offset so an already-open Sheet
-  // repaints the over-grid object instead of retaining the old cached element.
-  if (replacing && image.setAnchorCellXOffset) {
+  if (!images.length) {
+    const image=sheet.insertImage(blob,10,3);
+    if (image.setWidth) image.setWidth(150).setHeight(150);
     SpreadsheetApp.flush();
-    image.setAnchorCellXOffset(1);
-    SpreadsheetApp.flush();
-    image.setAnchorCellXOffset(0);
+    return image;
   }
+  // Stage the replacement in a hidden helper column, flush its uploaded data,
+  // then move it into view before retiring the old object. This sequence makes
+  // an already-open Sheet render every selection instead of caching one image.
+  const image=sheet.insertImage(blob,96,3);
   if (image.setWidth) image.setWidth(150).setHeight(150);
+  SpreadsheetApp.flush();
+  image.setAnchorCell(sheet.getRange(3,10));
+  if (image.setAnchorCellXOffset) image.setAnchorCellXOffset(1);
+  SpreadsheetApp.flush();
+  images.forEach(previous=>previous.remove());
+  if (image.setAnchorCellXOffset) image.setAnchorCellXOffset(0);
   SpreadsheetApp.flush();
   return image;
 }
