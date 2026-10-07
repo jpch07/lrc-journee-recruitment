@@ -585,13 +585,19 @@ function verifyPreviewStore_(sheet, layout) {
   if(groups.size!==layout.expectedPreviewCount) fail('VERIFY');
   groups.forEach(rows=>decodePreviewRows(rows));
 }
+function upsertProfileImage_(sheet, bytes) {
+  const images=sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10);
+  const blob=Utilities.newBlob(bytes,'image/png','profile-preview.png');
+  const image=images.length ? images[0].replace(blob) : sheet.insertImage(blob,10,3);
+  images.slice(1).forEach(extra=>extra.remove());
+  if (image.setWidth) image.setWidth(150).setHeight(150);
+  return image;
+}
 function refreshInitialProfileImage(sheet, layout) {
   if (!layout.expectedPreviewCount) return;
   const selected=String(sheetsCellValue_(sheet,'E3'));
   const bytes=selectedPreviewBytes_(sheet,layout,selected,sheetsBlockValues_);
-  sheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
-  const image=sheet.insertImage(Utilities.newBlob(bytes,'image/png','profile-preview.png'),10,3);
-  if (image.setWidth) image.setWidth(150).setHeight(150);
+  upsertProfileImage_(sheet,bytes);
 }
 function applyProfileLayout(sheet, tab, layout) {
   clearOwnedLayout(sheet,tab.presentation);
@@ -923,9 +929,7 @@ function refreshProfilePhoto_(spreadsheet, profileSheet) {
   }
   const bytes=selectedPreviewBytes_(profileSheet,{blocks:{dependentOptions:layout.dependentOptions,previews:layout.previews}},selected);
   // Validate fully before changing the last good image.
-  profileSheet.getImages().filter(image=>image.getAnchorCell().getRow()===3&&image.getAnchorCell().getColumn()===10).forEach(image=>image.remove());
-  const image=profileSheet.insertImage(Utilities.newBlob(bytes,'image/png','profile-preview.png'),10,3);
-  if (image.setWidth) image.setWidth(150).setHeight(150);
+  upsertProfileImage_(profileSheet,bytes);
 }
 function profileSelectionChanged(event) {
   if (!event || !event.source || event.source.getId()!==BACKUP_SHEET || !event.range ||

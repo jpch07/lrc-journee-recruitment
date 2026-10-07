@@ -179,7 +179,7 @@ function fakeGoogle() {
         });
       },
       getDataRange(){return {getValues:()=>this.data}}, getImages(){return this.images},
-      insertImage(blob,col,row){const image={blob,getAnchorCell:()=>({getRow:()=>row,getColumn:()=>col}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
+      insertImage(blob,col,row){const image={blob,replace(nextBlob){image.blob=nextBlob;image.replaceCalls+=1;return image},replaceCalls:0,getAnchorCell:()=>({getRow:()=>row,getColumn:()=>col}),remove:()=>{this.images=this.images.filter(i=>i!==image)},setWidth(){return image},setHeight(){return image}};this.images.push(image);return image},
       setRowHeight(){},setColumnWidth(){},setFrozenRows(value){this.frozenRows=value},getFrozenRows(){return this.frozenRows},
       setHiddenGridlines(value){this.hiddenGridlines=value},hideColumns(start,count){for(let i=0;i<count;i++)this.hiddenColumns.add(start+i)},
       isColumnHiddenByUser(col){return this.hiddenColumns.has(col)},setTabColor(value){this.tabColor=value},
@@ -698,6 +698,7 @@ test('profile selector trigger ignores every unowned or out-of-scope edit', () =
 
 test('scope edits reset the recruit before refreshing and stable keys select duplicate-name photos', () => {
   const {env,fixture,sheet,runId}=managedProfileEnvironment();
+  const originalImage=sheet.getImages()[0];
   sheet.getRange('B3').setValue('Day');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   assert.equal(sheet.getRange('E3').getValue(),'Day Alex');
@@ -706,6 +707,8 @@ test('scope edits reset the recruit before refreshing and stable keys select dup
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('B3')});
   sheet.getRange('E3').setValue('Alex — Other · 2');
   receiver.profileSelectionChanged({source:env.ss,range:sheet.getRange('E3')});
+  assert.equal(sheet.getImages()[0],originalImage);
+  assert.equal(originalImage.replaceCalls,3);
   assert.equal(digest(Buffer.from(sheet.getImages()[0].blob.getBytes())),fixture.secondDigest);
 
   const lastGood=sheet.getImages()[0];
